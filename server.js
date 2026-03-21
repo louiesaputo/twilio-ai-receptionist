@@ -7,7 +7,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V10.2-RETRY-FIX";
+const APP_VERSION = "VOICE-FLOW-V10.3-SMART-DETAILS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -70,7 +70,7 @@ function buildSpeechGather(twiml, actionUrl, prompt) {
     action: actionUrl,
     method: "POST",
     speechTimeout: "auto",
-    timeout: 5,
+    timeout: 7,
     actionOnEmptyResult: true,
   });
 
@@ -129,8 +129,105 @@ function detectUrgency(text) {
   return isEmergencyPhrase(text) ? "emergency" : "non-emergency";
 }
 
+function issueAlreadyHasDetail(issue) {
+  const text = (issue || "").toLowerCase();
+
+  if (text.includes("faucet")) {
+    return (
+      text.includes("leak") ||
+      text.includes("leaking") ||
+      text.includes("drip") ||
+      text.includes("dripping") ||
+      text.includes("not turning on") ||
+      text.includes("not working") ||
+      text.includes("no water")
+    );
+  }
+
+  if (text.includes("toilet")) {
+    return (
+      text.includes("clogged") ||
+      text.includes("leak") ||
+      text.includes("leaking") ||
+      text.includes("running") ||
+      text.includes("overflow")
+    );
+  }
+
+  if (text.includes("water heater")) {
+    return (
+      text.includes("no hot water") ||
+      text.includes("not getting hot water") ||
+      text.includes("leak") ||
+      text.includes("leaking")
+    );
+  }
+
+  if (text.includes("drain")) {
+    return (
+      text.includes("clogged") ||
+      text.includes("slow") ||
+      text.includes("slowly")
+    );
+  }
+
+  if (text.includes("sewer")) {
+    return (
+      text.includes("backup") ||
+      text.includes("backing up") ||
+      text.includes("sewage")
+    );
+  }
+
+  if (text.includes("water main")) {
+    return (
+      text.includes("leak") ||
+      text.includes("leaking") ||
+      text.includes("no water")
+    );
+  }
+
+  if (text.includes("ac") || text.includes("air conditioner")) {
+    return (
+      text.includes("not cooling") ||
+      text.includes("not turning on") ||
+      text.includes("not working")
+    );
+  }
+
+  if (text.includes("heat")) {
+    return (
+      text.includes("not working") ||
+      text.includes("no heat") ||
+      text.includes("noise") ||
+      text.includes("making noise")
+    );
+  }
+
+  if (text.includes("furnace")) {
+    return (
+      text.includes("not turning on") ||
+      text.includes("blowing cold air") ||
+      text.includes("cold air")
+    );
+  }
+
+  if (text.includes("thermostat")) {
+    return (
+      text.includes("not responding") ||
+      text.includes("error")
+    );
+  }
+
+  return false;
+}
+
 function getFollowUpQuestion(issue) {
   const text = (issue || "").toLowerCase();
+
+  if (issueAlreadyHasDetail(text)) {
+    return null;
+  }
 
   if (text.includes("faucet")) {
     return "Is the faucet leaking or not turning on?";
@@ -350,12 +447,7 @@ app.post("/handle-input", async (req, res) => {
     caller.firstName = getFirstName(speech);
     caller.lastStep = "after_hours_ask_issue";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -392,12 +484,7 @@ app.post("/handle-input", async (req, res) => {
 
     caller.lastStep = "after_hours_emergency_check";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -420,23 +507,13 @@ app.post("/handle-input", async (req, res) => {
       caller.lastStep = "issue_followup_after_hours";
       caller.followUpAsked = true;
 
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        followUp
-      );
-
+      buildSpeechGather(twiml, `${baseUrl}/handle-input`, followUp);
       return res.type("text/xml").send(twiml.toString());
     }
 
     caller.lastStep = "confirm_callback_after_hours";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -444,12 +521,7 @@ app.post("/handle-input", async (req, res) => {
     caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
     caller.lastStep = "confirm_callback_after_hours";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -463,23 +535,13 @@ app.post("/handle-input", async (req, res) => {
       caller.lastStep = "issue_followup";
       caller.followUpAsked = true;
 
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        followUp
-      );
-
+      buildSpeechGather(twiml, `${baseUrl}/handle-input`, followUp);
       return res.type("text/xml").send(twiml.toString());
     }
 
     caller.lastStep = "ask_name";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -487,12 +549,7 @@ app.post("/handle-input", async (req, res) => {
     caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
     caller.lastStep = "ask_name";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -501,12 +558,7 @@ app.post("/handle-input", async (req, res) => {
     caller.firstName = getFirstName(speech);
     caller.lastStep = "confirm_callback";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -515,12 +567,7 @@ app.post("/handle-input", async (req, res) => {
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
 
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        getPromptForStep(caller)
-      );
-
+      buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
       return res.type("text/xml").send(twiml.toString());
     }
 
@@ -528,21 +575,11 @@ app.post("/handle-input", async (req, res) => {
       caller.callbackConfirmed = false;
       caller.lastStep = "ask_callback";
 
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        getPromptForStep(caller)
-      );
-
+      buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
       return res.type("text/xml").send(twiml.toString());
     }
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -550,12 +587,7 @@ app.post("/handle-input", async (req, res) => {
     caller.callbackNumber = cleanForSpeech(speech);
     caller.lastStep = "ask_address";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -563,12 +595,7 @@ app.post("/handle-input", async (req, res) => {
     caller.address = cleanForSpeech(speech);
     caller.lastStep = "ask_appt_date";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -576,12 +603,7 @@ app.post("/handle-input", async (req, res) => {
     caller.appointmentDate = cleanForSpeech(speech);
     caller.lastStep = "ask_appt_time";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getPromptForStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, getPromptForStep(caller));
     return res.type("text/xml").send(twiml.toString());
   }
 
