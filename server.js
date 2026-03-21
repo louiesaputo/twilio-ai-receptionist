@@ -1,4 +1,4 @@
-console.log("🔥 RUNNING NEW SERVER FILE 🔥");
+console.log("🔥 NEW DEPLOY LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -7,7 +7,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V10.1-AFTER-HOURS";
+const APP_VERSION = "VOICE-FLOW-V10.2-RETRY-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -33,6 +33,7 @@ function getOrCreateCaller(phone) {
       lastStep: null,
       followUpAsked: false,
       afterHours: false,
+      retryCount: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -69,6 +70,7 @@ function buildSpeechGather(twiml, actionUrl, prompt) {
     action: actionUrl,
     method: "POST",
     speechTimeout: "auto",
+    timeout: 5,
     actionOnEmptyResult: true,
   });
 
@@ -133,39 +135,30 @@ function getFollowUpQuestion(issue) {
   if (text.includes("faucet")) {
     return "Is the faucet leaking or not turning on?";
   }
-
   if (text.includes("toilet")) {
     return "Is the toilet clogged, leaking, or running constantly?";
   }
-
   if (text.includes("water heater")) {
     return "Are you not getting hot water, or is the water heater leaking?";
   }
-
   if (text.includes("drain")) {
     return "Is the drain completely clogged or draining slowly?";
   }
-
   if (text.includes("sewer")) {
     return "Is sewage backing up into the house?";
   }
-
   if (text.includes("water main")) {
     return "Is the water main leaking, or do you have no water at the house?";
   }
-
   if (text.includes("ac") || text.includes("air conditioner")) {
     return "Is the AC not cooling, or is it not turning on?";
   }
-
   if (text.includes("heat")) {
     return "Is the heat not working, or is it making noise?";
   }
-
   if (text.includes("furnace")) {
     return "Is the furnace not turning on, or is it blowing cold air?";
   }
-
   if (text.includes("thermostat")) {
     return "Is the thermostat not responding, or is it showing an error?";
   }
@@ -197,6 +190,40 @@ function isWithinBusinessHoursEastern() {
   const isBusinessHour = hour >= 8 && hour < 17;
 
   return isWeekday && isBusinessHour;
+}
+
+function getPromptForStep(caller) {
+  const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+  switch (caller.lastStep) {
+    case "after_hours_ask_name":
+      return "Thank you for calling Blue Caller Automation, this is Alex. Who am I speaking with?";
+    case "after_hours_ask_issue":
+      return `Hi, ${caller.firstName || "there"}. What can I help you with today?`;
+    case "after_hours_emergency_check":
+      return "Let me ask, is this an emergency, or is this something that can wait until normal business hours? Our normal business hours are Monday through Friday, 8 AM to 5 PM.";
+    case "issue_followup_after_hours":
+    case "issue_followup_after_hours_urgent":
+    case "issue_followup":
+      return getFollowUpQuestion(caller.issue) || "Can you tell me a little more about the problem?";
+    case "ask_issue":
+      return "Thanks for calling Blue Caller Automation. What is going on today?";
+    case "ask_name":
+      return "Got it. What is your full name?";
+    case "confirm_callback":
+    case "confirm_callback_after_hours":
+      return `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
+    case "ask_callback":
+      return "No problem. What is the best callback number to reach you?";
+    case "ask_address":
+      return "What is the address for the job?";
+    case "ask_appt_date":
+      return "Do you have a preferred day for the appointment?";
+    case "ask_appt_time":
+      return "What time of day works best? Morning, afternoon, or a specific time?";
+    default:
+      return "Sorry, I missed that. Please tell me again.";
+  }
 }
 
 async function sendLeadToMake(caller) {
@@ -270,29 +297,24 @@ app.post("/incoming-call", (req, res) => {
   caller.appointmentTime = null;
   caller.status = "in_progress";
   caller.followUpAsked = false;
+  caller.retryCount = 0;
   caller.afterHours = !isWithinBusinessHoursEastern();
 
   if (caller.afterHours) {
     caller.lastStep = "after_hours_ask_name";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "Thank you for calling Blue Caller Automation, this is Alex. Who am I speaking with?"
-    );
   } else {
     caller.lastStep = "ask_issue";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "Thanks for calling Blue Caller Automation. What is going on today?"
-    );
   }
 
   console.log(`[${APP_VERSION}] incoming-call from ${phone} afterHours=${caller.afterHours}`);
 
-  res.type("text/xml").send(twiml.toString());
+  buildSpeechGather(
+    twiml,
+    `${baseUrl}/handle-input`,
+    getPromptForStep(caller)
+  );
+
+  return res.type("text/xml").send(twiml.toString());
 });
 
 app.post("/handle-input", async (req, res) => {
@@ -305,10 +327,23 @@ app.post("/handle-input", async (req, res) => {
   console.log(`[${APP_VERSION}] step=${caller.lastStep} speech="${speech}"`);
 
   if (!speech) {
-    twiml.say({ voice: "alice" }, "Sorry, I missed that. Please call back.");
-    twiml.hangup();
+    caller.retryCount = (caller.retryCount || 0) + 1;
+
+    if (caller.retryCount <= 1) {
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        `Sorry, I missed that. ${getPromptForStep(caller)}`
+      );
+    } else {
+      twiml.say({ voice: "alice" }, "I am sorry, I still could not hear you. Please call back.");
+      twiml.hangup();
+    }
+
     return res.type("text/xml").send(twiml.toString());
   }
+
+  caller.retryCount = 0;
 
   if (caller.lastStep === "after_hours_ask_name") {
     caller.name = cleanForSpeech(speech);
@@ -318,7 +353,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `Hi, ${caller.firstName}. What can I help you with today?`
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -345,12 +380,11 @@ app.post("/handle-input", async (req, res) => {
       }
 
       caller.lastStep = "confirm_callback_after_hours";
-      const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
 
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `Got it. I am marking this as urgent. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+        `Got it. I am marking this as urgent. ${getPromptForStep(caller)}`
       );
 
       return res.type("text/xml").send(twiml.toString());
@@ -361,7 +395,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Let me ask, is this an emergency, or is this something that can wait until normal business hours? Our normal business hours are Monday through Friday, 8 AM to 5 PM."
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -396,42 +430,24 @@ app.post("/handle-input", async (req, res) => {
     }
 
     caller.lastStep = "confirm_callback_after_hours";
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
 
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "issue_followup_after_hours") {
+  if (caller.lastStep === "issue_followup_after_hours" || caller.lastStep === "issue_followup_after_hours_urgent") {
     caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
     caller.lastStep = "confirm_callback_after_hours";
-
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
 
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
-    );
-
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "issue_followup_after_hours_urgent") {
-    caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
-    caller.lastStep = "confirm_callback_after_hours";
-
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -461,7 +477,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Got it. What is your full name?"
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -474,7 +490,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Got it. What is your full name?"
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -485,12 +501,10 @@ app.post("/handle-input", async (req, res) => {
     caller.firstName = getFirstName(speech);
     caller.lastStep = "confirm_callback";
 
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `Thanks, ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -504,7 +518,7 @@ app.post("/handle-input", async (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "What is the address for the job?"
+        getPromptForStep(caller)
       );
 
       return res.type("text/xml").send(twiml.toString());
@@ -517,18 +531,16 @@ app.post("/handle-input", async (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "No problem. What is the best callback number to reach you?"
+        getPromptForStep(caller)
       );
 
       return res.type("text/xml").send(twiml.toString());
     }
 
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -541,7 +553,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Got it. What is the address for the job?"
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -554,7 +566,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Do you have a preferred day for the appointment?"
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -567,7 +579,7 @@ app.post("/handle-input", async (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "What time of day works best? Morning, afternoon, or a specific time?"
+      getPromptForStep(caller)
     );
 
     return res.type("text/xml").send(twiml.toString());
