@@ -7,7 +7,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V10.3-SMART-DETAILS";
+const APP_VERSION = "VOICE-FLOW-V10.5-RETRY-TUNED";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -70,7 +70,7 @@ function buildSpeechGather(twiml, actionUrl, prompt) {
     action: actionUrl,
     method: "POST",
     speechTimeout: "auto",
-    timeout: 7,
+    timeout: 8,
     actionOnEmptyResult: true,
   });
 
@@ -129,136 +129,61 @@ function detectUrgency(text) {
   return isEmergencyPhrase(text) ? "emergency" : "non-emergency";
 }
 
-function issueAlreadyHasDetail(issue) {
+function issueHasSpecificDetail(issue) {
   const text = (issue || "").toLowerCase();
 
-  if (text.includes("faucet")) {
-    return (
-      text.includes("leak") ||
-      text.includes("leaking") ||
-      text.includes("drip") ||
-      text.includes("dripping") ||
-      text.includes("not turning on") ||
-      text.includes("not working") ||
-      text.includes("no water")
-    );
-  }
+  const detailKeywords = [
+    "leak",
+    "leaking",
+    "drip",
+    "dripping",
+    "clogged",
+    "running",
+    "overflow",
+    "overflowing",
+    "backing up",
+    "backup",
+    "slow drain",
+    "draining slowly",
+    "no hot water",
+    "not getting hot water",
+    "not cooling",
+    "not turning on",
+    "not working",
+    "blowing cold air",
+    "cold air",
+    "no power",
+    "sparking",
+    "making noise",
+    "noise",
+    "error",
+    "not responding",
+    "no water",
+    "flood",
+    "flooding",
+    "smell gas"
+  ];
 
-  if (text.includes("toilet")) {
-    return (
-      text.includes("clogged") ||
-      text.includes("leak") ||
-      text.includes("leaking") ||
-      text.includes("running") ||
-      text.includes("overflow")
-    );
-  }
-
-  if (text.includes("water heater")) {
-    return (
-      text.includes("no hot water") ||
-      text.includes("not getting hot water") ||
-      text.includes("leak") ||
-      text.includes("leaking")
-    );
-  }
-
-  if (text.includes("drain")) {
-    return (
-      text.includes("clogged") ||
-      text.includes("slow") ||
-      text.includes("slowly")
-    );
-  }
-
-  if (text.includes("sewer")) {
-    return (
-      text.includes("backup") ||
-      text.includes("backing up") ||
-      text.includes("sewage")
-    );
-  }
-
-  if (text.includes("water main")) {
-    return (
-      text.includes("leak") ||
-      text.includes("leaking") ||
-      text.includes("no water")
-    );
-  }
-
-  if (text.includes("ac") || text.includes("air conditioner")) {
-    return (
-      text.includes("not cooling") ||
-      text.includes("not turning on") ||
-      text.includes("not working")
-    );
-  }
-
-  if (text.includes("heat")) {
-    return (
-      text.includes("not working") ||
-      text.includes("no heat") ||
-      text.includes("noise") ||
-      text.includes("making noise")
-    );
-  }
-
-  if (text.includes("furnace")) {
-    return (
-      text.includes("not turning on") ||
-      text.includes("blowing cold air") ||
-      text.includes("cold air")
-    );
-  }
-
-  if (text.includes("thermostat")) {
-    return (
-      text.includes("not responding") ||
-      text.includes("error")
-    );
-  }
-
-  return false;
+  return detailKeywords.some((keyword) => text.includes(keyword));
 }
 
 function getFollowUpQuestion(issue) {
   const text = (issue || "").toLowerCase();
 
-  if (issueAlreadyHasDetail(text)) {
+  if (issueHasSpecificDetail(text)) {
     return null;
   }
 
-  if (text.includes("faucet")) {
-    return "Is the faucet leaking or not turning on?";
-  }
-  if (text.includes("toilet")) {
-    return "Is the toilet clogged, leaking, or running constantly?";
-  }
-  if (text.includes("water heater")) {
-    return "Are you not getting hot water, or is the water heater leaking?";
-  }
-  if (text.includes("drain")) {
-    return "Is the drain completely clogged or draining slowly?";
-  }
-  if (text.includes("sewer")) {
-    return "Is sewage backing up into the house?";
-  }
-  if (text.includes("water main")) {
-    return "Is the water main leaking, or do you have no water at the house?";
-  }
-  if (text.includes("ac") || text.includes("air conditioner")) {
-    return "Is the AC not cooling, or is it not turning on?";
-  }
-  if (text.includes("heat")) {
-    return "Is the heat not working, or is it making noise?";
-  }
-  if (text.includes("furnace")) {
-    return "Is the furnace not turning on, or is it blowing cold air?";
-  }
-  if (text.includes("thermostat")) {
-    return "Is the thermostat not responding, or is it showing an error?";
-  }
+  if (text.includes("faucet")) return "Is the faucet leaking or not turning on?";
+  if (text.includes("toilet")) return "Is the toilet clogged, leaking, or running constantly?";
+  if (text.includes("water heater")) return "Are you not getting hot water, or is the water heater leaking?";
+  if (text.includes("drain")) return "Is the drain completely clogged or draining slowly?";
+  if (text.includes("sewer")) return "Is sewage backing up into the house?";
+  if (text.includes("water main")) return "Is the water main leaking, or do you have no water at the house?";
+  if (text.includes("ac") || text.includes("air conditioner")) return "Is the AC not cooling, or is it not turning on?";
+  if (text.includes("heat")) return "Is the heat not working, or is it making noise?";
+  if (text.includes("furnace")) return "Is the furnace not turning on, or is it blowing cold air?";
+  if (text.includes("thermostat")) return "Is the thermostat not responding, or is it showing an error?";
 
   return null;
 }
@@ -319,7 +244,31 @@ function getPromptForStep(caller) {
     case "ask_appt_time":
       return "What time of day works best? Morning, afternoon, or a specific time?";
     default:
-      return "Sorry, I missed that. Please tell me again.";
+      return "Please tell me again.";
+  }
+}
+
+function getRetryPromptForStep(caller) {
+  switch (caller.lastStep) {
+    case "ask_name":
+    case "after_hours_ask_name":
+      return "Sorry, I missed your name. What is your full name?";
+    case "after_hours_ask_issue":
+    case "ask_issue":
+      return "Sorry, I missed that. What is going on today?";
+    case "confirm_callback":
+    case "confirm_callback_after_hours":
+      return `Sorry, I missed that. ${getPromptForStep(caller)}`;
+    case "ask_callback":
+      return "Sorry, I missed that. What is the best callback number to reach you?";
+    case "ask_address":
+      return "Sorry, I missed that. What is the address for the job?";
+    case "ask_appt_date":
+      return "Sorry, I missed that. Do you have a preferred day for the appointment?";
+    case "ask_appt_time":
+      return "Sorry, I missed that. What time of day works best?";
+    default:
+      return `Sorry, I missed that. ${getPromptForStep(caller)}`;
   }
 }
 
@@ -430,7 +379,7 @@ app.post("/handle-input", async (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `Sorry, I missed that. ${getPromptForStep(caller)}`
+        getRetryPromptForStep(caller)
       );
     } else {
       twiml.say({ voice: "alice" }, "I am sorry, I still could not hear you. Please call back.");
