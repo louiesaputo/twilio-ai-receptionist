@@ -7,7 +7,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V10-AFTER-HOURS";
+const APP_VERSION = "VOICE-FLOW-V10.1-AFTER-HOURS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -104,6 +104,10 @@ function isEmergencyPhrase(text) {
   return (
     t.includes("emergency") ||
     t.includes("urgent") ||
+    t.includes("urgent service") ||
+    t.includes("asap") ||
+    t.includes("right away") ||
+    t.includes("immediately") ||
     t.includes("burst pipe") ||
     t.includes("flood") ||
     t.includes("flooding") ||
@@ -113,7 +117,9 @@ function isEmergencyPhrase(text) {
     t.includes("no water") ||
     t.includes("water main") ||
     t.includes("sewage") ||
-    t.includes("overflow")
+    t.includes("overflow") ||
+    t.includes("sparking") ||
+    t.includes("smoke")
   );
 }
 
@@ -280,7 +286,7 @@ app.post("/incoming-call", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Thank you for calling Blue Caller Automation, this is Alex. Who am I speaking with?"
+      "Thanks for calling Blue Caller Automation. What is going on today?"
     );
   }
 
@@ -321,6 +327,35 @@ app.post("/handle-input", async (req, res) => {
   if (caller.lastStep === "after_hours_ask_issue") {
     caller.issue = cleanForSpeech(speech);
     caller.urgency = detectUrgency(speech);
+
+    const followUp = getFollowUpQuestion(caller.issue);
+
+    if (caller.urgency === "emergency") {
+      if (followUp && !caller.followUpAsked) {
+        caller.lastStep = "issue_followup_after_hours_urgent";
+        caller.followUpAsked = true;
+
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          `Got it. I am marking this as urgent. ${followUp}`
+        );
+
+        return res.type("text/xml").send(twiml.toString());
+      }
+
+      caller.lastStep = "confirm_callback_after_hours";
+      const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        `Got it. I am marking this as urgent. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+      );
+
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     caller.lastStep = "after_hours_emergency_check";
 
     buildSpeechGather(
@@ -373,6 +408,21 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "issue_followup_after_hours") {
+    caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
+    caller.lastStep = "confirm_callback_after_hours";
+
+    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+    );
+
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "issue_followup_after_hours_urgent") {
     caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
     caller.lastStep = "confirm_callback_after_hours";
 
