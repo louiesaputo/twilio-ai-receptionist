@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V17-FULLNAME-ANYTHING-ELSE";
+const APP_VERSION = "VOICE-FLOW-V18-ISSUE-CONFIRM";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -66,7 +66,7 @@ function cleanName(input) {
 
 function getFirstName(fullName) {
   if (!fullName) return "";
-  return fullName.split(" ")[0];
+  return cleanForSpeech(fullName).split(/\s+/)[0] || "";
 }
 
 function getBaseUrl(req) {
@@ -97,17 +97,19 @@ function formatPhoneNumberForSpeech(phone) {
     digits = digits.substring(1);
   }
 
+  if (!digits) return "unknown";
+
   return digits.split("").join(" ");
 }
 
 function isYes(text) {
-  return /yes|yeah|yep|correct|right|sure|that is correct/.test(
+  return /yes|yeah|yep|correct|right|sure|that is correct|that's correct/.test(
     (text || "").toLowerCase()
   );
 }
 
 function isNo(text) {
-  return /no|nope|wrong|different/.test(
+  return /no|nope|wrong|different|not correct|that's wrong|that is wrong/.test(
     (text || "").toLowerCase()
   );
 }
@@ -119,12 +121,17 @@ function isEmergencyPhrase(text) {
     t.includes("urgent") ||
     t.includes("asap") ||
     t.includes("right away") ||
+    t.includes("immediately") ||
     t.includes("burst pipe") ||
     t.includes("flood") ||
+    t.includes("flooding") ||
     t.includes("gas leak") ||
+    t.includes("smell gas") ||
     t.includes("no heat") ||
     t.includes("no water") ||
     t.includes("sewage") ||
+    t.includes("overflow") ||
+    t.includes("sparking") ||
     t.includes("smoke") ||
     t.includes("leak") ||
     t.includes("leaking") ||
@@ -141,14 +148,88 @@ function isPricingQuestion(text) {
   return (
     t.includes("how much") ||
     t.includes("price") ||
+    t.includes("pricing") ||
     t.includes("cost") ||
     t.includes("estimate") ||
-    t.includes("quote")
+    t.includes("quote") ||
+    t.includes("what do you charge") ||
+    t.includes("what will it cost") ||
+    t.includes("what does it cost")
   );
 }
 
 function pricingResponse() {
   return "Each job is different, so pricing depends on the details of the work. One of our team members will go over pricing with you when they call to review your request.";
+}
+
+function summarizeIssue(issue) {
+  const text = (issue || "").toLowerCase().trim();
+
+  if (!text) return "the issue you described";
+
+  if (
+    text.includes("kitchen faucet") &&
+    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
+  ) {
+    return "a leaking kitchen faucet";
+  }
+
+  if (
+    text.includes("bathroom faucet") &&
+    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
+  ) {
+    return "a leaking bathroom faucet";
+  }
+
+  if (
+    text.includes("faucet") &&
+    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
+  ) {
+    return "a leaking faucet";
+  }
+
+  if (text.includes("toilet") && text.includes("clog")) {
+    return "a clogged toilet";
+  }
+
+  if (text.includes("toilet") && (text.includes("leak") || text.includes("running"))) {
+    return "a toilet issue";
+  }
+
+  if (text.includes("drain") && text.includes("clog")) {
+    return "a clogged drain";
+  }
+
+  if (
+    text.includes("water heater") &&
+    (text.includes("no hot water") || text.includes("not getting hot water"))
+  ) {
+    return "a water heater issue with no hot water";
+  }
+
+  if (
+    text.includes("water heater") &&
+    (text.includes("leak") || text.includes("leaking"))
+  ) {
+    return "a leaking water heater";
+  }
+
+  if (
+    (text.includes("ac") || text.includes("air conditioner")) &&
+    (text.includes("not cooling") || text.includes("no cooling"))
+  ) {
+    return "an air conditioning issue";
+  }
+
+  if (text.includes("heat") && (text.includes("not working") || text.includes("no heat"))) {
+    return "a heating issue";
+  }
+
+  if (text.includes("leak") || text.includes("leaky") || text.includes("leaking")) {
+    return "a leak";
+  }
+
+  return "the issue you described";
 }
 
 function parseAppointmentResponse(text) {
@@ -163,11 +244,13 @@ function parseAppointmentResponse(text) {
   else if (lowered.includes("wednesday")) date = "wednesday";
   else if (lowered.includes("thursday")) date = "thursday";
   else if (lowered.includes("friday")) date = "friday";
+  else if (lowered.includes("saturday")) date = "saturday";
+  else if (lowered.includes("sunday")) date = "sunday";
 
-  if (lowered.includes("morning")) time = "morning";
+  if (lowered.includes("first thing")) time = "first thing in the morning";
+  else if (lowered.includes("morning")) time = "morning";
   else if (lowered.includes("afternoon")) time = "afternoon";
   else if (lowered.includes("evening")) time = "evening";
-  else if (lowered.includes("first thing")) time = "first thing in the morning";
 
   return { date, time };
 }
@@ -272,10 +355,30 @@ app.post("/handle-input", (req, res) => {
   if (isPricingQuestion(speech)) {
     twiml.say(pricingResponse());
 
+    let reprompt = "Now, please continue.";
+
+    if (caller.lastStep === "confirm_issue") {
+      const issueSummary = summarizeIssue(caller.issue);
+      reprompt = `Now, just to confirm, you are calling about ${issueSummary}. Is that correct?`;
+    } else if (caller.lastStep === "ask_name") {
+      reprompt = "Now, can I have your full name?";
+    } else if (caller.lastStep === "confirm_callback") {
+      const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+      reprompt = `Now, I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
+    } else if (caller.lastStep === "ask_callback") {
+      reprompt = "Now, what is the best callback number to reach you?";
+    } else if (caller.lastStep === "ask_address") {
+      reprompt = "Now, what is the address for the job?";
+    } else if (caller.lastStep === "ask_appt") {
+      reprompt = "Now, do you have a preferred day or time for the appointment?";
+    } else if (caller.lastStep === "anything_else") {
+      reprompt = "Other than that, is there anything else you would like to add before we finish up?";
+    }
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Now, please continue."
+      reprompt
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -284,18 +387,72 @@ app.post("/handle-input", (req, res) => {
   if (caller.lastStep === "ask_issue") {
     caller.issue = cleanForSpeech(speech);
     caller.urgency = detectUrgency(speech);
-    caller.lastStep = "ask_name";
+    caller.lastStep = "confirm_issue";
+
+    const issueSummary = summarizeIssue(caller.issue);
 
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Can I have your full name?"
+      `Just to confirm, you are calling about ${issueSummary}. Is that correct?`
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "confirm_issue") {
+    if (isYes(speech)) {
+      caller.lastStep = "ask_name";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Can I have your full name?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    if (isNo(speech)) {
+      caller.lastStep = "ask_issue";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Okay. Please tell me briefly what is going on."
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    const issueSummary = summarizeIssue(caller.issue);
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      `Sorry, I missed that. You are calling about ${issueSummary}. Is that correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_name") {
-    caller.name = cleanName(speech);
+    const cleanedName = cleanName(speech);
+
+    if (!cleanedName) {
+      caller.retryCount++;
+
+      if (caller.retryCount <= 1) {
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          "Sorry, I missed that. Can I have your full name?"
+        );
+      } else {
+        twiml.say("I am sorry, I still could not get your name. Please call back.");
+        twiml.hangup();
+      }
+
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    caller.name = cleanedName;
     caller.firstName = getFirstName(caller.name);
     caller.lastStep = "confirm_callback";
 
@@ -333,6 +490,15 @@ app.post("/handle-input", (req, res) => {
       );
       return res.type("text/xml").send(twiml.toString());
     }
+
+    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      `Sorry, I missed that. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+    );
+    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_callback") {
