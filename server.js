@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V14-CONFIRMATIONS";
+const APP_VERSION = "VOICE-FLOW-V15-ISSUE-SUMMARY";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -154,6 +154,76 @@ function isEmergencyPhrase(text) {
 
 function detectUrgency(text) {
   return isEmergencyPhrase(text) ? "emergency" : "non-emergency";
+}
+
+function summarizeIssue(issue) {
+  const text = (issue || "").toLowerCase().trim();
+
+  if (!text) return "the issue you described";
+
+  if (
+    text.includes("kitchen faucet") &&
+    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
+  ) {
+    return "a leaking kitchen faucet";
+  }
+
+  if (
+    text.includes("bathroom faucet") &&
+    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
+  ) {
+    return "a leaking bathroom faucet";
+  }
+
+  if (
+    text.includes("faucet") &&
+    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
+  ) {
+    return "a leaking faucet";
+  }
+
+  if (text.includes("toilet") && text.includes("clog")) {
+    return "a clogged toilet";
+  }
+
+  if (text.includes("toilet") && (text.includes("leak") || text.includes("running"))) {
+    return "a toilet issue";
+  }
+
+  if (text.includes("drain") && text.includes("clog")) {
+    return "a clogged drain";
+  }
+
+  if (
+    text.includes("water heater") &&
+    (text.includes("no hot water") || text.includes("not getting hot water"))
+  ) {
+    return "a water heater issue with no hot water";
+  }
+
+  if (
+    text.includes("water heater") &&
+    (text.includes("leak") || text.includes("leaking"))
+  ) {
+    return "a leaking water heater";
+  }
+
+  if (
+    (text.includes("ac") || text.includes("air conditioner")) &&
+    (text.includes("not cooling") || text.includes("no cooling"))
+  ) {
+    return "an air conditioning issue";
+  }
+
+  if (text.includes("heat") && (text.includes("not working") || text.includes("no heat"))) {
+    return "a heating issue";
+  }
+
+  if (text.includes("leak") || text.includes("leaky") || text.includes("leaking")) {
+    return "a leak";
+  }
+
+  return "the issue you described";
 }
 
 function parseAppointmentResponse(text) {
@@ -329,10 +399,12 @@ app.post("/handle-input", (req, res) => {
     caller.urgency = detectUrgency(speech);
     caller.lastStep = "confirm_issue";
 
+    const issueSummary = summarizeIssue(caller.issue);
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `Just to confirm, you are calling about ${caller.issue}. Is that correct?`
+      `Just to confirm, you are calling about ${issueSummary}. Is that correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -360,10 +432,12 @@ app.post("/handle-input", (req, res) => {
       return res.type("text/xml").send(twiml.toString());
     }
 
+    const issueSummary = summarizeIssue(caller.issue);
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `Sorry, I missed that. You are calling about ${caller.issue}. Is that correct?`
+      `Sorry, I missed that. You are calling about ${issueSummary}. Is that correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
