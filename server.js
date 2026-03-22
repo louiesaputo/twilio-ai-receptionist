@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V25-EMERGENCY-SUMMARY-FIX";
+const APP_VERSION = "VOICE-FLOW-V26-PLUMBING-SCENARIOS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -23,6 +23,7 @@ function getOrCreateCaller(phone) {
       phone,
       issue: null,
       issueSummary: null,
+      issueCategory: null,
       name: null,
       firstName: null,
       callbackNumber: null,
@@ -114,7 +115,7 @@ function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: options.speechTimeout || "auto",
+    speechTimeout: options.speechTimeout || 2,
     timeout: options.timeout || 8,
     actionOnEmptyResult: true,
     language: "en-US",
@@ -149,35 +150,6 @@ function isNo(text) {
   );
 }
 
-function isEmergencyPhrase(text) {
-  const t = (text || "").toLowerCase();
-  return (
-    t.includes("emergency") ||
-    t.includes("urgent") ||
-    t.includes("asap") ||
-    t.includes("right away") ||
-    t.includes("immediately") ||
-    t.includes("burst pipe") ||
-    t.includes("flood") ||
-    t.includes("flooding") ||
-    t.includes("gas leak") ||
-    t.includes("smell gas") ||
-    t.includes("no heat") ||
-    t.includes("no water") ||
-    t.includes("sewage") ||
-    t.includes("overflow") ||
-    t.includes("sparking") ||
-    t.includes("smoke") ||
-    t.includes("leak") ||
-    t.includes("leaking") ||
-    t.includes("leaky")
-  );
-}
-
-function detectUrgency(text) {
-  return isEmergencyPhrase(text) ? "emergency" : "non-emergency";
-}
-
 function isPricingQuestion(text) {
   const t = (text || "").toLowerCase();
   return (
@@ -189,7 +161,11 @@ function isPricingQuestion(text) {
     t.includes("quote") ||
     t.includes("what do you charge") ||
     t.includes("what will it cost") ||
-    t.includes("what does it cost")
+    t.includes("what does it cost") ||
+    t.includes("service fee") ||
+    t.includes("trip charge") ||
+    t.includes("diagnostic fee") ||
+    t.includes("ballpark")
   );
 }
 
@@ -197,135 +173,290 @@ function pricingResponse() {
   return "Each job is different, so pricing depends on the details of the work. One of our team members will go over pricing with you when they call to review your request.";
 }
 
-function summarizeIssue(issue) {
-  const text = (issue || "").toLowerCase().trim();
-
-  if (!text) return "the issue you described";
-
-  const mentionsLeak =
-    text.includes("leak") || text.includes("leaky") || text.includes("leaking");
-
-  const mentionsFrontYard =
-    text.includes("front yard") ||
-    text.includes("yard") ||
-    text.includes("lawn") ||
-    text.includes("outside") ||
-    text.includes("out front") ||
-    text.includes("by the street") ||
-    text.includes("near the curb") ||
-    text.includes("in the grass");
-
-  const mentionsWaterMain =
-    text.includes("water main") ||
-    text.includes("main line") ||
-    text.includes("main water line") ||
-    text.includes("service line") ||
-    text.includes("water line");
-
-  if ((mentionsFrontYard && mentionsLeak) || (mentionsWaterMain && mentionsLeak)) {
-    return "a possible water main leak in your front yard";
-  }
-
-  if (
-    text.includes("bathroom faucet") &&
-    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
-  ) {
-    return "a leak in your bathroom faucet";
-  }
-
-  if (
-    text.includes("kitchen faucet") &&
-    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
-  ) {
-    return "a leak in your kitchen faucet";
-  }
-
-  if (
-    text.includes("faucet") &&
-    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
-  ) {
-    return "a leak in your faucet";
-  }
-
-  if (text.includes("toilet") && text.includes("clog")) {
-    return "a clog in your toilet";
-  }
-
-  if (text.includes("toilet") && text.includes("running")) {
-    return "a toilet that is running constantly";
-  }
-
-  if (text.includes("toilet") && (text.includes("leak") || text.includes("leaking"))) {
-    return "a leak in or around your toilet";
-  }
-
-  if (text.includes("drain") && text.includes("clog")) {
-    return "a clogged drain";
-  }
-
-  if (
-    text.includes("water heater") &&
-    (text.includes("no hot water") || text.includes("not getting hot water"))
-  ) {
-    return "a water heater issue with no hot water";
-  }
-
-  if (
-    text.includes("water heater") &&
-    (text.includes("leak") || text.includes("leaking"))
-  ) {
-    return "a leak in your water heater";
-  }
-
-  if (
-    (text.includes("ac") || text.includes("air conditioner")) &&
-    (text.includes("not cooling") || text.includes("no cooling"))
-  ) {
-    return "an air conditioner that is not cooling";
-  }
-
-  if (
-    text.includes("heat") &&
-    (text.includes("not working") || text.includes("no heat"))
-  ) {
-    return "a heating system that is not working";
-  }
-
-  if (
-    text.includes("water main") &&
-    (text.includes("leak") || text.includes("leaking"))
-  ) {
-    return "a leak in your water main";
-  }
-
-  if (text.includes("leak") || text.includes("leaky") || text.includes("leaking")) {
-    return "a leak";
-  }
-
-  return "the issue you described";
+function containsAny(text, phrases) {
+  return phrases.some((phrase) => text.includes(phrase));
 }
 
-function parseAppointmentResponse(text) {
-  const lowered = (text || "").toLowerCase();
-  let date = null;
-  let time = null;
+function classifyIssue(issue) {
+  const text = (issue || "").toLowerCase().trim();
 
-  if (lowered.includes("today")) date = "today";
-  else if (lowered.includes("tomorrow")) date = "tomorrow";
-  else if (lowered.includes("monday")) date = "monday";
-  else if (lowered.includes("tuesday")) date = "tuesday";
-  else if (lowered.includes("wednesday")) date = "wednesday";
-  else if (lowered.includes("thursday")) date = "thursday";
-  else if (lowered.includes("friday")) date = "friday";
-  else if (lowered.includes("saturday")) date = "saturday";
-  else if (lowered.includes("sunday")) date = "sunday";
+  if (!text) {
+    return {
+      category: "generic",
+      summary: "the issue you described",
+      urgency: "non-emergency",
+    };
+  }
 
-  if (lowered.includes("first thing")) time = "first thing in the morning";
-  else if (lowered.includes("morning")) time = "morning";
-  else if (lowered.includes("afternoon")) time = "afternoon";
-  else if (lowered.includes("evening")) time = "evening";
+  const hasLeak = containsAny(text, ["leak", "leaking", "leaky"]);
+  const hasFlood = containsAny(text, ["flood", "flooding", "pooling water", "water everywhere"]);
+  const hasNoWater = containsAny(text, ["no water", "lost water", "water is off", "no running water"]);
+  const hasUrgentWords = containsAny(text, ["emergency", "urgent", "asap", "immediately", "right away"]);
 
-  return { date, time };
+  if (containsAny(text, ["gas leak", "smell gas", "gas odor", "gas smell", "hissing gas", "gas line"])) {
+    return {
+      category: "gas_leak",
+      summary: "a possible gas leak",
+      urgency: "emergency",
+    };
+  }
+
+  if (
+    (containsAny(text, ["front yard", "yard", "lawn", "outside", "out front", "by the street", "near the curb", "in the grass"]) && (hasLeak || hasFlood || hasNoWater)) ||
+    containsAny(text, ["water main", "main line", "main water line", "service line", "water line break"])
+  ) {
+    return {
+      category: "water_main",
+      summary: "a possible water main leak in your front yard",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["burst pipe", "pipe burst", "broken pipe", "frozen pipe"]) || (hasLeak && hasFlood && containsAny(text, ["pipe", "ceiling", "wall"]))) {
+    return {
+      category: "burst_pipe",
+      summary: "a burst or broken pipe",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["sewer backup", "backing up", "sewage backup", "raw sewage", "sewer line", "main drain backup"])) {
+    return {
+      category: "sewer_backup",
+      summary: "a sewer backup",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["toilet overflow", "overflowing toilet"])) {
+    return {
+      category: "toilet_overflow",
+      summary: "an overflowing toilet",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["slab leak", "foundation leak", "hot spot on floor", "wet slab"])) {
+    return {
+      category: "slab_leak",
+      summary: "a possible slab leak",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["water heater"]) && containsAny(text, ["leak", "leaking"])) {
+    return {
+      category: "water_heater_leak",
+      summary: "a leak in your water heater",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["water heater"]) && containsAny(text, ["no hot water", "not getting hot water", "cold water only"])) {
+    return {
+      category: "water_heater_no_hot_water",
+      summary: "a water heater issue with no hot water",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["water heater"]) && containsAny(text, ["pilot", "won't light", "not turning on"])) {
+    return {
+      category: "water_heater_not_working",
+      summary: "a water heater that is not working",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["kitchen faucet"]) && hasLeak) {
+    return {
+      category: "kitchen_faucet_leak",
+      summary: "a leak in your kitchen faucet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["bathroom faucet"]) && hasLeak) {
+    return {
+      category: "bathroom_faucet_leak",
+      summary: "a leak in your bathroom faucet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["faucet", "tap", "spigot"]) && hasLeak) {
+    return {
+      category: "faucet_leak",
+      summary: "a leak in your faucet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["under the sink", "under my sink", "under sink", "cabinet"]) && hasLeak) {
+    return {
+      category: "under_sink_leak",
+      summary: "a leak under your sink",
+      urgency: hasFlood ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["dishwasher"]) && hasLeak) {
+    return {
+      category: "dishwasher_leak",
+      summary: "a leaking dishwasher",
+      urgency: hasFlood ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["washing machine", "washer", "laundry room"]) && hasLeak) {
+    return {
+      category: "washer_leak",
+      summary: "a leaking washing machine",
+      urgency: hasFlood ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["refrigerator", "fridge", "ice maker", "icemaker"]) && hasLeak) {
+    return {
+      category: "fridge_line_leak",
+      summary: "a leak from your refrigerator water line",
+      urgency: hasFlood ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["garbage disposal", "disposal"]) && hasLeak) {
+    return {
+      category: "garbage_disposal_leak",
+      summary: "a leaking garbage disposal",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["garbage disposal", "disposal"]) && containsAny(text, ["jam", "stuck", "not working", "humming"])) {
+    return {
+      category: "garbage_disposal_jam",
+      summary: "a garbage disposal that is jammed or not working",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["toilet"]) && containsAny(text, ["clog", "clogged"])) {
+    return {
+      category: "toilet_clog",
+      summary: "a clogged toilet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["toilet"]) && containsAny(text, ["running"])) {
+    return {
+      category: "toilet_running",
+      summary: "a toilet that is running constantly",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["toilet"]) && hasLeak) {
+    return {
+      category: "toilet_leak",
+      summary: "a leak in or around your toilet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["drain", "sink drain", "shower drain", "tub drain", "floor drain"]) && containsAny(text, ["clog", "clogged", "slow", "backed up"])) {
+    return {
+      category: "drain_clog",
+      summary: "a clogged or backed-up drain",
+      urgency: containsAny(text, ["backed up", "overflow", "overflowing"]) ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["sewer smell", "smell sewage", "drain smell"])) {
+    return {
+      category: "drain_odor",
+      summary: "a sewer or drain odor issue",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["hose bib", "hose bibb", "spigot", "outside faucet", "outdoor faucet"]) && hasLeak) {
+    return {
+      category: "outdoor_spigot_leak",
+      summary: "a leak in your outdoor faucet or spigot",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["low water pressure", "weak pressure", "pressure is low"])) {
+    return {
+      category: "low_pressure",
+      summary: "a low water pressure issue",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (hasNoWater) {
+    return {
+      category: "no_water",
+      summary: "a loss of water service",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["flood", "flooding", "water everywhere", "pooling water", "kitchen is flooding"])) {
+    return {
+      category: "flooding",
+      summary: "flooding or pooling water",
+      urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["boiler"]) && containsAny(text, ["no heat", "not working", "leak"])) {
+    return {
+      category: "boiler_issue",
+      summary: "a boiler issue",
+      urgency: containsAny(text, ["no heat", "leak"]) ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["heat"]) && containsAny(text, ["not working", "no heat"])) {
+    return {
+      category: "heating_issue",
+      summary: "a heating system that is not working",
+      urgency: "emergency",
+    };
+  }
+
+  if ((hasLeak || hasFlood || hasUrgentWords) && containsAny(text, ["pipe"])) {
+    return {
+      category: "pipe_leak",
+      summary: "a leaking pipe",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (hasLeak) {
+    return {
+      category: "generic_leak",
+      summary: "a leak",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["not working", "broken"])) {
+    return {
+      category: "generic_not_working",
+      summary: "something that is not working properly",
+      urgency: "non-emergency",
+    };
+  }
+
+  return {
+    category: "generic",
+    summary: "the issue you described",
+    urgency: hasUrgentWords ? "emergency" : "non-emergency",
+  };
 }
 
 function sendLeadToMake(caller) {
@@ -340,6 +471,7 @@ function sendLeadToMake(caller) {
       address: caller.address || "",
       issue: caller.issue || "",
       issueSummary: caller.issueSummary || "",
+      issueCategory: caller.issueCategory || "",
       urgency: caller.urgency || "",
       emergencyAlert: caller.emergencyAlert === true,
       appointmentDate: caller.appointmentDate || "",
@@ -434,6 +566,7 @@ app.post("/incoming-call", (req, res) => {
 
   caller.issue = null;
   caller.issueSummary = null;
+  caller.issueCategory = null;
   caller.name = null;
   caller.firstName = null;
   caller.callbackNumber = phone;
@@ -504,8 +637,11 @@ app.post("/handle-input", (req, res) => {
     }
 
     caller.issue = cleanForSpeech(parsedOpening.issueText || speech);
-    caller.issueSummary = summarizeIssue(caller.issue);
-    caller.urgency = detectUrgency(caller.issue);
+
+    const classification = classifyIssue(caller.issue);
+    caller.issueSummary = classification.summary;
+    caller.issueCategory = classification.category;
+    caller.urgency = classification.urgency;
     caller.emergencyAlert = caller.urgency === "emergency";
     caller.lastStep = "confirm_issue";
 
