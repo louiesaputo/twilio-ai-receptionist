@@ -7,7 +7,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V10.8-APPOINTMENT-FIX";
+const APP_VERSION = "VOICE-FLOW-V10.9-FIRST-LAST-NAME";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -21,8 +21,9 @@ function getOrCreateCaller(phone) {
     callerStore[phone] = {
       phone,
       issue: null,
-      name: null,
       firstName: null,
+      lastName: null,
+      name: null,
       callbackNumber: null,
       callbackConfirmed: null,
       address: null,
@@ -53,25 +54,22 @@ function cleanForSpeech(input) {
   return input.replace(/[.,]+$/g, "").trim();
 }
 
-function getFirstName(fullName) {
-  if (!fullName) return "";
-
-  let cleaned = cleanForSpeech(fullName).toLowerCase();
-
-  cleaned = cleaned
-    .replace("my name is", "")
-    .replace("this is", "")
-    .replace("i am", "")
-    .replace("i'm", "")
-    .replace("mr ", "")
-    .replace("mrs ", "")
-    .replace("ms ", "")
+function cleanNamePart(input) {
+  return cleanForSpeech(input)
+    .replace(/^my first name is\s+/i, "")
+    .replace(/^my last name is\s+/i, "")
+    .replace(/^my name is\s+/i, "")
+    .replace(/^this is\s+/i, "")
+    .replace(/^i am\s+/i, "")
+    .replace(/^i'm\s+/i, "")
+    .replace(/^mr\.?\s+/i, "")
+    .replace(/^mrs\.?\s+/i, "")
+    .replace(/^ms\.?\s+/i, "")
     .trim();
+}
 
-  const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "";
-
-  return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+function rebuildFullName(caller) {
+  caller.name = [caller.firstName, caller.lastName].filter(Boolean).join(" ").trim();
 }
 
 function getBaseUrl(req) {
@@ -87,7 +85,6 @@ function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
     speechTimeout: options.speechTimeout || "auto",
     timeout: options.timeout || 8,
     actionOnEmptyResult: true,
-    speechModel: options.speechModel || "telephony",
     language: options.language || "en-US",
   });
 
@@ -284,8 +281,10 @@ function getPromptForStep(caller) {
   const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
 
   switch (caller.lastStep) {
-    case "after_hours_ask_name":
-      return "Thank you for calling Blue Caller Automation, this is Alex. Who am I speaking with?";
+    case "after_hours_ask_first_name":
+      return "Thank you for calling Blue Caller Automation, this is Alex. What is your first name?";
+    case "after_hours_ask_last_name":
+      return "And your last name?";
     case "after_hours_ask_issue":
       return `Hi, ${caller.firstName || "there"}. What can I help you with today?`;
     case "after_hours_emergency_check":
@@ -296,8 +295,10 @@ function getPromptForStep(caller) {
       return getFollowUpQuestion(caller.issue) || "Can you tell me a little more about the problem?";
     case "ask_issue":
       return "Thanks for calling Blue Caller Automation. What is going on today?";
-    case "ask_name":
-      return "What is your full name?";
+    case "ask_first_name":
+      return "What is your first name?";
+    case "ask_last_name":
+      return "And your last name?";
     case "confirm_callback":
     case "confirm_callback_after_hours":
       return `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
@@ -316,9 +317,12 @@ function getPromptForStep(caller) {
 
 function getRetryPromptForStep(caller) {
   switch (caller.lastStep) {
-    case "ask_name":
-    case "after_hours_ask_name":
-      return "Sorry, I missed your name. What is your full name?";
+    case "ask_first_name":
+    case "after_hours_ask_first_name":
+      return "Sorry, I missed that. What is your first name?";
+    case "ask_last_name":
+    case "after_hours_ask_last_name":
+      return "Sorry, I missed that. What is your last name?";
     case "after_hours_ask_issue":
     case "ask_issue":
       return "Sorry, I missed that. What is going on today?";
@@ -339,11 +343,15 @@ function getRetryPromptForStep(caller) {
 }
 
 function getGatherOptionsForStep(step) {
-  if (step === "ask_name" || step === "after_hours_ask_name") {
+  if (
+    step === "ask_first_name" ||
+    step === "after_hours_ask_first_name" ||
+    step === "ask_last_name" ||
+    step === "after_hours_ask_last_name"
+  ) {
     return {
       timeout: 10,
       speechTimeout: "auto",
-      speechModel: "telephony",
       language: "en-US",
     };
   }
@@ -351,7 +359,6 @@ function getGatherOptionsForStep(step) {
   return {
     timeout: 8,
     speechTimeout: "auto",
-    speechModel: "telephony",
     language: "en-US",
   };
 }
@@ -367,6 +374,7 @@ async function sendLeadToMake(caller) {
     phone: caller.phone || "",
     fullName: caller.name || "",
     firstName: caller.firstName || "",
+    lastName: caller.lastName || "",
     callbackNumber: caller.callbackNumber || "",
     callbackConfirmed: caller.callbackConfirmed ?? "",
     address: caller.address || "",
@@ -417,8 +425,9 @@ app.post("/incoming-call", (req, res) => {
   const caller = getOrCreateCaller(phone);
 
   caller.issue = null;
-  caller.name = null;
   caller.firstName = null;
+  caller.lastName = null;
+  caller.name = null;
   caller.callbackNumber = phone;
   caller.callbackConfirmed = null;
   caller.address = null;
@@ -431,7 +440,7 @@ app.post("/incoming-call", (req, res) => {
   caller.afterHours = !isWithinBusinessHoursEastern();
 
   if (caller.afterHours) {
-    caller.lastStep = "after_hours_ask_name";
+    caller.lastStep = "after_hours_ask_first_name";
   } else {
     caller.lastStep = "ask_issue";
   }
@@ -477,9 +486,22 @@ app.post("/handle-input", async (req, res) => {
 
   caller.retryCount = 0;
 
-  if (caller.lastStep === "after_hours_ask_name") {
-    caller.name = cleanForSpeech(speech);
-    caller.firstName = getFirstName(speech);
+  if (caller.lastStep === "after_hours_ask_first_name") {
+    caller.firstName = cleanNamePart(speech);
+    caller.lastStep = "after_hours_ask_last_name";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      getPromptForStep(caller),
+      getGatherOptionsForStep(caller.lastStep)
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "after_hours_ask_last_name") {
+    caller.lastName = cleanNamePart(speech);
+    rebuildFullName(caller);
     caller.lastStep = "after_hours_ask_issue";
 
     buildSpeechGather(
@@ -505,7 +527,7 @@ app.post("/handle-input", async (req, res) => {
         buildSpeechGather(
           twiml,
           `${baseUrl}/handle-input`,
-          `Got it. I am marking this as urgent. ${followUp}`,
+          `Got it. I have marked this as urgent. ${followUp}`,
           getGatherOptionsForStep(caller.lastStep)
         );
 
@@ -606,7 +628,7 @@ app.post("/handle-input", async (req, res) => {
       return res.type("text/xml").send(twiml.toString());
     }
 
-    caller.lastStep = "ask_name";
+    caller.lastStep = "ask_first_name";
 
     buildSpeechGather(
       twiml,
@@ -619,7 +641,7 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "issue_followup") {
     caller.issue = `${cleanForSpeech(caller.issue)} - ${cleanForSpeech(speech)}`;
-    caller.lastStep = "ask_name";
+    caller.lastStep = "ask_first_name";
 
     buildSpeechGather(
       twiml,
@@ -630,9 +652,22 @@ app.post("/handle-input", async (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "ask_name") {
-    caller.name = cleanForSpeech(speech);
-    caller.firstName = getFirstName(speech);
+  if (caller.lastStep === "ask_first_name") {
+    caller.firstName = cleanNamePart(speech);
+    caller.lastStep = "ask_last_name";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      getPromptForStep(caller),
+      getGatherOptionsForStep(caller.lastStep)
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "ask_last_name") {
+    caller.lastName = cleanNamePart(speech);
+    rebuildFullName(caller);
     caller.lastStep = "confirm_callback";
 
     buildSpeechGather(
