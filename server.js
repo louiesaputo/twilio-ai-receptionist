@@ -7,7 +7,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V10.9-FIRST-LAST-NAME";
+const APP_VERSION = "VOICE-FLOW-V11-STABLE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -68,7 +68,18 @@ function cleanNamePart(input) {
     .trim();
 }
 
+function toTitleCase(value) {
+  if (!value) return "";
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
 function rebuildFullName(caller) {
+  caller.firstName = toTitleCase(caller.firstName);
+  caller.lastName = toTitleCase(caller.lastName);
   caller.name = [caller.firstName, caller.lastName].filter(Boolean).join(" ").trim();
 }
 
