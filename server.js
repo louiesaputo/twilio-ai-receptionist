@@ -2,13 +2,13 @@ console.log("🔥 NEW DEPLOY LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
-const fetch = require("node-fetch");
+const https = require("https");
 
 const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V12-STABLE";
+const APP_VERSION = "VOICE-FLOW-V13-STABLE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -33,8 +33,6 @@ function getOrCreateCaller(phone) {
       appointmentTime: null,
       status: null,
       lastStep: null,
-      followUpAsked: false,
-      afterHours: false,
       retryCount: 0,
       createdAt: now,
       updatedAt: now,
@@ -52,7 +50,7 @@ function cleanSpeechText(input) {
 
 function cleanForSpeech(input) {
   if (!input) return "";
-  return input.replace(/[.,]+$/g, "").trim();
+  return input.replace(/[.,!?]+$/g, "").trim();
 }
 
 function cleanNamePart(input) {
@@ -103,23 +101,6 @@ function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
   gather.say({ voice: "alice" }, prompt);
 }
 
-function formatPhoneNumberForSpeech(phone) {
-  if (!phone) return "unknown";
-  let digits = String(phone).replace(/\D/g, "");
-  if (digits.length === 11 && digits.startsWith("1")) {
-    digits = digits.substring(1);
-  }
-  return digits.split("").join(" ");
-}
-
-function isYes(text) {
-  return /yes|yeah|yep|correct|right|it is|that is right/.test((text || "").toLowerCase());
-}
-
-function isNo(text) {
-  return /no|nope|wrong|different/.test((text || "").toLowerCase());
-}
-
 function isEmergencyPhrase(text) {
   const t = (text || "").toLowerCase();
   return (
@@ -130,12 +111,18 @@ function isEmergencyPhrase(text) {
     t.includes("immediately") ||
     t.includes("burst pipe") ||
     t.includes("flood") ||
+    t.includes("flooding") ||
     t.includes("gas leak") ||
+    t.includes("smell gas") ||
     t.includes("no heat") ||
     t.includes("no water") ||
     t.includes("sewage") ||
+    t.includes("overflow") ||
     t.includes("sparking") ||
-    t.includes("smoke")
+    t.includes("smoke") ||
+    t.includes("leak") ||
+    t.includes("leaking") ||
+    t.includes("leaky")
   );
 }
 
@@ -143,74 +130,114 @@ function detectUrgency(text) {
   return isEmergencyPhrase(text) ? "emergency" : "non-emergency";
 }
 
-function isWithinBusinessHoursEastern() {
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    hour: "numeric",
-    hour12: false,
-  });
-
-  const parts = formatter.formatToParts(now);
-  const weekday = parts.find((p) => p.type === "weekday")?.value || "";
-  const hour = Number(parts.find((p) => p.type === "hour")?.value || "0");
-
-  const isWeekday =
-    weekday === "Mon" ||
-    weekday === "Tue" ||
-    weekday === "Wed" ||
-    weekday === "Thu" ||
-    weekday === "Fri";
-
-  return isWeekday && hour >= 8 && hour < 17;
-}
-
 function parseAppointmentResponse(text) {
   const lowered = (text || "").toLowerCase();
   let date = null;
   let time = null;
 
-  if (lowered.includes("today")) date = "today";
-  else if (lowered.includes("tomorrow")) date = "tomorrow";
-  else if (lowered.includes("next week")) date = "next week";
+  if (lowered.includes("today")) {
+    date = "today";
+  } else if (lowered.includes("tomorrow")) {
+    date = "tomorrow";
+  } else if (lowered.includes("next week")) {
+    date = "next week";
+  } else {
+    const weekdays = [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+      "sunday",
+    ];
 
-  if (lowered.includes("first thing")) time = "first thing in the morning";
-  else if (lowered.includes("morning")) time = "morning";
-  else if (lowered.includes("afternoon")) time = "afternoon";
+    for (const day of weekdays) {
+      if (lowered.includes(day)) {
+        date = day;
+        break;
+      }
+    }
+  }
+
+  if (lowered.includes("first thing")) {
+    time = "first thing in the morning";
+  } else if (lowered.includes("morning")) {
+    time = "morning";
+  } else if (lowered.includes("afternoon")) {
+    time = "afternoon";
+  } else if (lowered.includes("evening")) {
+    time = "evening";
+  } else {
+    const timeMatch = lowered.match(
+      /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b|\b\d{1,2}(?::\d{2})\b/
+    );
+    if (timeMatch) {
+      time = timeMatch[0];
+    }
+  }
 
   return { date, time };
 }
 
-async function sendLeadToMake(caller) {
+function sendLeadToMake(caller) {
   try {
-    await fetch(MAKE_WEBHOOK_URL, {
+    const data = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      phone: caller.phone || "",
+      fullName: caller.name || "",
+      firstName: caller.firstName || "",
+      lastName: caller.lastName || "",
+      callbackNumber: caller.callbackNumber || "",
+      callbackConfirmed: caller.callbackConfirmed ?? "",
+      address: caller.address || "",
+      issue: caller.issue || "",
+      urgency: caller.urgency || "",
+      appointmentDate: caller.appointmentDate || "",
+      appointmentTime: caller.appointmentTime || "",
+      status: caller.status || "",
+    });
+
+    const url = new URL(MAKE_WEBHOOK_URL);
+
+    const options = {
+      hostname: url.hostname,
+      path: `${url.pathname}${url.search || ""}`,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(data),
       },
-      body: JSON.stringify({
-        phone: caller.phone,
-        fullName: caller.name,
-        firstName: caller.firstName,
-        lastName: caller.lastName,
-        callbackNumber: caller.callbackNumber,
-        address: caller.address,
-        issue: caller.issue,
-        urgency: caller.urgency,
-        appointmentDate: caller.appointmentDate,
-        appointmentTime: caller.appointmentTime,
-        afterHours: caller.afterHours,
-        status: caller.status,
-      }),
+    };
+
+    const makeReq = https.request(options, (makeRes) => {
+      let body = "";
+
+      makeRes.on("data", (chunk) => {
+        body += chunk;
+      });
+
+      makeRes.on("end", () => {
+        console.log(`[MAKE] Status: ${makeRes.statusCode} Body: ${body}`);
+      });
     });
-    console.log("[MAKE] Lead sent");
+
+    makeReq.on("error", (err) => {
+      console.error("[MAKE ERROR]", err.message);
+    });
+
+    makeReq.write(data);
+    makeReq.end();
+
+    console.log("[MAKE] Lead send initiated");
   } catch (err) {
     console.error("[MAKE ERROR]", err.message);
   }
 }
 
-/* ===================== ROUTES ===================== */
+app.get("/", (req, res) => {
+  res.send(`Server is running - ${APP_VERSION}`);
+});
 
 app.post("/incoming-call", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
@@ -218,65 +245,184 @@ app.post("/incoming-call", (req, res) => {
   const phone = req.body.From || "unknown";
   const caller = getOrCreateCaller(phone);
 
+  caller.issue = null;
+  caller.firstName = null;
+  caller.lastName = null;
+  caller.name = null;
   caller.callbackNumber = phone;
-  caller.afterHours = !isWithinBusinessHoursEastern();
-  caller.lastStep = caller.afterHours ? "ask_first_name" : "ask_issue";
+  caller.callbackConfirmed = null;
+  caller.address = null;
+  caller.urgency = null;
+  caller.appointmentDate = null;
+  caller.appointmentTime = null;
+  caller.status = "in_progress";
+  caller.lastStep = "ask_issue";
+  caller.retryCount = 0;
+
+  console.log(`[${APP_VERSION}] incoming-call from ${phone}`);
 
   buildSpeechGather(
     twiml,
     `${baseUrl}/handle-input`,
-    caller.afterHours
-      ? "Thank you for calling Blue Caller Automation, this is Alex. What is your first name?"
-      : "Thanks for calling Blue Caller Automation. What is going on today?"
+    "Thanks for calling Blue Caller Automation. What is going on today?"
   );
 
   return res.type("text/xml").send(twiml.toString());
 });
 
-app.post("/handle-input", async (req, res) => {
+app.post("/handle-input", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const baseUrl = getBaseUrl(req);
   const phone = req.body.From || "unknown";
   const speech = cleanSpeechText(req.body.SpeechResult || "");
   const caller = getOrCreateCaller(phone);
 
+  console.log(`[${APP_VERSION}] step=${caller.lastStep} speech="${speech}"`);
+
   if (!speech) {
+    caller.retryCount = (caller.retryCount || 0) + 1;
+
+    if (caller.retryCount <= 1) {
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Sorry, I missed that. Please say that again."
+      );
+    } else {
+      twiml.say({ voice: "alice" }, "I am sorry, I still could not hear you. Please call back.");
+      twiml.hangup();
+    }
+
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  caller.retryCount = 0;
+
+  if (caller.lastStep === "ask_issue") {
+    caller.issue = cleanForSpeech(speech);
+    caller.urgency = detectUrgency(speech);
+    caller.lastStep = "ask_first_name";
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Sorry, I missed that. Please say that again."
+      "What is your first name?"
     );
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "ask_issue") {
-    caller.issue = speech;
-    caller.urgency = detectUrgency(speech);
-    caller.lastStep = "ask_first_name";
-
-    buildSpeechGather(twiml, `${baseUrl}/handle-input`, "What is your first name?");
-    return res.type("text/xml").send(twiml.toString());
-  }
-
   if (caller.lastStep === "ask_first_name") {
-    caller.firstName = cleanNamePart(speech);
+    const cleanedFirstName = cleanNamePart(speech);
+
+    if (!cleanedFirstName) {
+      caller.retryCount = (caller.retryCount || 0) + 1;
+
+      if (caller.retryCount <= 1) {
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          "Sorry, I missed that. What is your first name?"
+        );
+      } else {
+        twiml.say({ voice: "alice" }, "I am sorry, I still could not get your first name. Please call back.");
+        twiml.hangup();
+      }
+
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    caller.firstName = cleanedFirstName;
     caller.lastStep = "ask_last_name";
 
-    buildSpeechGather(twiml, `${baseUrl}/handle-input`, "And your last name?");
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "And your last name?"
+    );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_last_name") {
-    caller.lastName = cleanNamePart(speech);
+    const cleanedLastName = cleanNamePart(speech);
+
+    if (!cleanedLastName) {
+      caller.retryCount = (caller.retryCount || 0) + 1;
+
+      if (caller.retryCount <= 1) {
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          "Sorry, I missed that. What is your last name?"
+        );
+      } else {
+        twiml.say({ voice: "alice" }, "I am sorry, I still could not get your last name. Please call back.");
+        twiml.hangup();
+      }
+
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    caller.lastName = cleanedLastName;
     rebuildFullName(caller);
+    caller.lastStep = "confirm_callback";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "Is this the best callback number to reach you?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "confirm_callback") {
+    const lowered = speech.toLowerCase();
+
+    if (lowered.includes("yes") || lowered.includes("yeah") || lowered.includes("correct")) {
+      caller.callbackConfirmed = true;
+      caller.lastStep = "ask_address";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "What is the address for the job?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    if (lowered.includes("no") || lowered.includes("wrong") || lowered.includes("different")) {
+      caller.callbackConfirmed = false;
+      caller.lastStep = "ask_callback";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "What is the best callback number to reach you?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "Sorry, I missed that. Is this the best callback number to reach you?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "ask_callback") {
+    caller.callbackNumber = cleanForSpeech(speech);
     caller.lastStep = "ask_address";
 
-    buildSpeechGather(twiml, `${baseUrl}/handle-input`, "What is the address for the job?");
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "What is the address for the job?"
+    );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_address") {
-    caller.address = speech;
+    caller.address = cleanForSpeech(speech);
     caller.lastStep = "ask_appt";
 
     buildSpeechGather(
@@ -293,7 +439,7 @@ app.post("/handle-input", async (req, res) => {
     caller.appointmentTime = appt.time;
     caller.status = "new_lead";
 
-    await sendLeadToMake(caller);
+    sendLeadToMake(caller);
 
     twiml.say(
       { voice: "alice" },
@@ -301,8 +447,8 @@ app.post("/handle-input", async (req, res) => {
         caller.urgency === "emergency" ? "urgent" : "for normal service"
       }. Someone will call you shortly to confirm the appointment.`
     );
-
     twiml.hangup();
+
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -312,5 +458,5 @@ app.post("/handle-input", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
 });
