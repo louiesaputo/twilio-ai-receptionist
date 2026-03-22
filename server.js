@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V22-OPENING-NAME-CAPTURE";
+const APP_VERSION = "VOICE-FLOW-V24-EMERGENCY-ROUTING";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -61,9 +61,6 @@ function cleanName(input) {
     .replace(/^this is\s+/i, "")
     .replace(/^i am\s+/i, "")
     .replace(/^i'm\s+/i, "")
-    .replace(/^mr\.?\s+/i, "")
-    .replace(/^mrs\.?\s+/i, "")
-    .replace(/^ms\.?\s+/i, "")
     .trim();
 }
 
@@ -72,50 +69,18 @@ function getFirstName(fullName) {
   return cleanForSpeech(fullName).split(/\s+/)[0] || "";
 }
 
-function extractOpeningNameAndIssue(text) {
-  const original = cleanSpeechText(text || "");
-  if (!original) {
-    return { name: null, issueText: "" };
-  }
-
-  const patterns = [
-    /^(?:hi|hello|hey)[,\s]+this is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:calling\s+)?(?:about|with|for)?\s*(.+)$/i,
-    /^this is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:calling\s+)?(?:about|with|for)?\s*(.+)$/i,
-    /^(?:hi|hello|hey)[,\s]+my name is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
-    /^my name is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
-    /^(?:hi|hello|hey)[,\s]+i am\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
-    /^i am\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
-    /^i'm\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
-    /^(?:hi|hello|hey)[,\s]+([a-z]+(?:\s+[a-z]+){0,2})\s+calling\s+(?:about|with|for)?\s*(.+)$/i,
-    /^([a-z]+(?:\s+[a-z]+){0,2})\s+calling\s+(?:about|with|for)?\s*(.+)$/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = original.match(pattern);
-    if (match) {
-      const name = cleanName(match[1] || "");
-      const issueText = cleanForSpeech(match[2] || "");
-      if (name && issueText) {
-        return { name, issueText };
-      }
-    }
-  }
-
-  return { name: null, issueText: original };
-}
-
 function getBaseUrl(req) {
   const proto = req.get("x-forwarded-proto") || "https";
   return `${proto}://${req.get("host")}`;
 }
 
-function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
+function buildSpeechGather(twiml, actionUrl, prompt) {
   const gather = twiml.gather({
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: options.speechTimeout || "auto",
-    timeout: options.timeout || 8,
+    speechTimeout: "auto",
+    timeout: 6,
     actionOnEmptyResult: true,
     language: "en-US",
   });
@@ -127,24 +92,19 @@ function formatPhoneNumberForSpeech(phone) {
   if (!phone) return "unknown";
 
   let digits = String(phone).replace(/\D/g, "");
-
   if (digits.length === 11 && digits.startsWith("1")) {
     digits = digits.substring(1);
   }
-
-  if (!digits) return "unknown";
 
   return digits.split("").join(" ");
 }
 
 function isYes(text) {
-  return /yes|yeah|yep|correct|right|sure|that is correct|that's correct/.test(
-    (text || "").toLowerCase()
-  );
+  return /yes|yeah|yep|correct|right|sure/.test((text || "").toLowerCase());
 }
 
 function isNo(text) {
-  return /no|nope|wrong|different|not correct|that's wrong|that is wrong|nothing else|that is all|that's all|all set|i am good|i'm good/.test(
+  return /no|nope|wrong|different|nothing else|that is all|that's all|all set/.test(
     (text || "").toLowerCase()
   );
 }
@@ -155,22 +115,14 @@ function isEmergencyPhrase(text) {
     t.includes("emergency") ||
     t.includes("urgent") ||
     t.includes("asap") ||
-    t.includes("right away") ||
     t.includes("immediately") ||
-    t.includes("burst pipe") ||
     t.includes("flood") ||
-    t.includes("flooding") ||
-    t.includes("gas leak") ||
-    t.includes("smell gas") ||
-    t.includes("no heat") ||
-    t.includes("no water") ||
-    t.includes("sewage") ||
-    t.includes("overflow") ||
-    t.includes("sparking") ||
-    t.includes("smoke") ||
+    t.includes("burst") ||
     t.includes("leak") ||
-    t.includes("leaking") ||
-    t.includes("leaky")
+    t.includes("gas") ||
+    t.includes("smoke") ||
+    t.includes("no water") ||
+    t.includes("no heat")
   );
 }
 
@@ -180,17 +132,7 @@ function detectUrgency(text) {
 
 function isPricingQuestion(text) {
   const t = (text || "").toLowerCase();
-  return (
-    t.includes("how much") ||
-    t.includes("price") ||
-    t.includes("pricing") ||
-    t.includes("cost") ||
-    t.includes("estimate") ||
-    t.includes("quote") ||
-    t.includes("what do you charge") ||
-    t.includes("what will it cost") ||
-    t.includes("what does it cost")
-  );
+  return t.includes("price") || t.includes("cost") || t.includes("how much");
 }
 
 function pricingResponse() {
@@ -198,137 +140,45 @@ function pricingResponse() {
 }
 
 function summarizeIssue(issue) {
-  const text = (issue || "").toLowerCase().trim();
+  const text = (issue || "").toLowerCase();
 
-  if (!text) return "the issue you described";
-
-  if (
-    text.includes("bathroom faucet") &&
-    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
-  ) {
-    return "a leak in your bathroom faucet";
+  if (text.includes("front yard") && text.includes("leak")) {
+    return "a possible water main leak in your front yard";
   }
 
-  if (
-    text.includes("kitchen faucet") &&
-    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
-  ) {
+  if (text.includes("kitchen faucet") && text.includes("leak")) {
     return "a leak in your kitchen faucet";
   }
 
-  if (
-    text.includes("faucet") &&
-    (text.includes("leak") || text.includes("leaky") || text.includes("leaking"))
-  ) {
-    return "a leak in your faucet";
+  if (text.includes("bathroom faucet") && text.includes("leak")) {
+    return "a leak in your bathroom faucet";
   }
 
   if (text.includes("toilet") && text.includes("clog")) {
-    return "a clog in your toilet";
+    return "a clogged toilet";
   }
 
-  if (text.includes("toilet") && text.includes("running")) {
-    return "a toilet that is running constantly";
-  }
-
-  if (text.includes("toilet") && (text.includes("leak") || text.includes("leaking"))) {
-    return "a leak in or around your toilet";
-  }
-
-  if (text.includes("drain") && text.includes("clog")) {
-    return "a clogged drain";
-  }
-
-  if (
-    text.includes("water heater") &&
-    (text.includes("no hot water") || text.includes("not getting hot water"))
-  ) {
+  if (text.includes("water heater") && text.includes("no hot water")) {
     return "a water heater issue with no hot water";
   }
 
-  if (
-    text.includes("water heater") &&
-    (text.includes("leak") || text.includes("leaking"))
-  ) {
-    return "a leak in your water heater";
-  }
-
-  if (
-    (text.includes("ac") || text.includes("air conditioner")) &&
-    (text.includes("not cooling") || text.includes("no cooling"))
-  ) {
+  if (text.includes("ac") && text.includes("not cooling")) {
     return "an air conditioner that is not cooling";
   }
 
-  if (
-    text.includes("heat") &&
-    (text.includes("not working") || text.includes("no heat"))
-  ) {
-    return "a heating system that is not working";
-  }
-
-  if (
-    text.includes("water main") &&
-    (text.includes("leak") || text.includes("leaking"))
-  ) {
-    return "a leak in your water main";
-  }
-
-  if (text.includes("leak") || text.includes("leaky") || text.includes("leaking")) {
-    return "a leak";
-  }
+  if (text.includes("leak")) return "a leak";
 
   return "the issue you described";
 }
 
-function parseAppointmentResponse(text) {
-  const lowered = (text || "").toLowerCase();
-  let date = null;
-  let time = null;
-
-  if (lowered.includes("today")) date = "today";
-  else if (lowered.includes("tomorrow")) date = "tomorrow";
-  else if (lowered.includes("monday")) date = "monday";
-  else if (lowered.includes("tuesday")) date = "tuesday";
-  else if (lowered.includes("wednesday")) date = "wednesday";
-  else if (lowered.includes("thursday")) date = "thursday";
-  else if (lowered.includes("friday")) date = "friday";
-  else if (lowered.includes("saturday")) date = "saturday";
-  else if (lowered.includes("sunday")) date = "sunday";
-
-  if (lowered.includes("first thing")) time = "first thing in the morning";
-  else if (lowered.includes("morning")) time = "morning";
-  else if (lowered.includes("afternoon")) time = "afternoon";
-  else if (lowered.includes("evening")) time = "evening";
-
-  return { date, time };
-}
-
 function sendLeadToMake(caller) {
   try {
-    const data = JSON.stringify({
-      timestamp: new Date().toISOString(),
-      phone: caller.phone || "",
-      fullName: caller.name || "",
-      firstName: caller.firstName || "",
-      callbackNumber: caller.callbackNumber || "",
-      callbackConfirmed: caller.callbackConfirmed ?? "",
-      address: caller.address || "",
-      issue: caller.issue || "",
-      issueSummary: caller.issueSummary || "",
-      urgency: caller.urgency || "",
-      emergencyAlert: caller.emergencyAlert === true,
-      appointmentDate: caller.appointmentDate || "",
-      appointmentTime: caller.appointmentTime || "",
-      additionalNeed: caller.additionalNeed || "",
-      status: caller.status || "",
-    });
-
+    const data = JSON.stringify(caller);
     const url = new URL(MAKE_WEBHOOK_URL);
 
     const options = {
       hostname: url.hostname,
-      path: `${url.pathname}${url.search || ""}`,
+      path: url.pathname,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -336,51 +186,12 @@ function sendLeadToMake(caller) {
       },
     };
 
-    const makeReq = https.request(options);
-    makeReq.write(data);
-    makeReq.end();
-
-    console.log("[MAKE] Lead sent");
+    const req = https.request(options);
+    req.write(data);
+    req.end();
   } catch (err) {
-    console.error("[MAKE ERROR]", err.message);
+    console.error(err);
   }
-}
-
-function getRepromptForCurrentStep(caller) {
-  if (caller.lastStep === "confirm_issue") {
-    return `Now, just to confirm, you are calling about ${caller.issueSummary || "the issue you described"}. Is that correct?`;
-  }
-
-  if (caller.lastStep === "ask_name") {
-    return "Now, can I have your full name?";
-  }
-
-  if (caller.lastStep === "confirm_callback") {
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-    return `Now, I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
-  }
-
-  if (caller.lastStep === "ask_callback") {
-    return "Now, what is the best callback number to reach you?";
-  }
-
-  if (caller.lastStep === "ask_address") {
-    return "Now, what is the address for the job?";
-  }
-
-  if (caller.lastStep === "ask_appt") {
-    return "Now, do you have a preferred day or time for the appointment?";
-  }
-
-  if (caller.lastStep === "anything_else") {
-    return "Other than that, is there anything else you would like to add before we finish up?";
-  }
-
-  if (caller.lastStep === "capture_additional_need") {
-    return "Please tell me what else you would like to add.";
-  }
-
-  return "Now, please continue.";
 }
 
 function closeCall(twiml, caller) {
@@ -389,15 +200,11 @@ function closeCall(twiml, caller) {
   twiml.say(
     `Thank you ${caller.firstName || ""}. This call has been marked ${
       caller.urgency === "emergency" ? "urgent" : "for normal service"
-    }. Someone will call you shortly. Have a great day.`
+    }. Someone will contact you shortly. Have a great day.`
   );
 
   twiml.hangup();
 }
-
-app.get("/", (req, res) => {
-  res.send(`Server is running - ${APP_VERSION}`);
-});
 
 app.post("/incoming-call", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
@@ -414,12 +221,8 @@ app.post("/incoming-call", (req, res) => {
   caller.address = null;
   caller.urgency = null;
   caller.emergencyAlert = false;
-  caller.appointmentDate = null;
-  caller.appointmentTime = null;
-  caller.additionalNeed = null;
   caller.status = "in_progress";
   caller.lastStep = "ask_issue";
-  caller.retryCount = 0;
 
   buildSpeechGather(
     twiml,
@@ -427,7 +230,7 @@ app.post("/incoming-call", (req, res) => {
     "Thanks for calling Blue Caller Automation. What is going on today?"
   );
 
-  return res.type("text/xml").send(twiml.toString());
+  res.type("text/xml").send(twiml.toString());
 });
 
 app.post("/handle-input", (req, res) => {
@@ -437,73 +240,39 @@ app.post("/handle-input", (req, res) => {
   const speech = cleanSpeechText(req.body.SpeechResult || "");
   const caller = getOrCreateCaller(phone);
 
-  if (!speech) {
-    caller.retryCount++;
-
-    if (caller.retryCount <= 1) {
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "Sorry, I missed that. Please say that again."
-      );
-    } else {
-      twiml.say("I am sorry, I still could not hear you. Please call back.");
-      twiml.hangup();
-    }
-
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  caller.retryCount = 0;
-
   if (isPricingQuestion(speech)) {
     twiml.say(pricingResponse());
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      getRepromptForCurrentStep(caller)
-    );
-
+    buildSpeechGather(twiml, `${baseUrl}/handle-input`, "Now, please continue.");
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_issue") {
-    const parsedOpening = extractOpeningNameAndIssue(speech);
-
-    if (parsedOpening.name) {
-      caller.name = parsedOpening.name;
-      caller.firstName = getFirstName(parsedOpening.name);
-    }
-
-    caller.issue = cleanForSpeech(parsedOpening.issueText || speech);
+    caller.issue = cleanForSpeech(speech);
     caller.issueSummary = summarizeIssue(caller.issue);
     caller.urgency = detectUrgency(caller.issue);
     caller.emergencyAlert = caller.urgency === "emergency";
+
     caller.lastStep = "confirm_issue";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `Just to confirm, you are calling about ${caller.issueSummary}. Is that correct?`
-    );
+    if (caller.urgency === "emergency") {
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        `I understand this is an emergency regarding ${caller.issueSummary}. I am marking this as urgent. Just to confirm, is that correct?`
+      );
+    } else {
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        `Just to confirm, you are calling about ${caller.issueSummary}. Is that correct?`
+      );
+    }
+
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "confirm_issue") {
     if (isYes(speech)) {
-      if (caller.name) {
-        caller.lastStep = "confirm_callback";
-        const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-
-        buildSpeechGather(
-          twiml,
-          `${baseUrl}/handle-input`,
-          `Thank you ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
-        );
-        return res.type("text/xml").send(twiml.toString());
-      }
-
       caller.lastStep = "ask_name";
 
       buildSpeechGather(
@@ -511,49 +280,13 @@ app.post("/handle-input", (req, res) => {
         `${baseUrl}/handle-input`,
         "Can I have your full name?"
       );
+
       return res.type("text/xml").send(twiml.toString());
     }
-
-    if (isNo(speech)) {
-      caller.lastStep = "ask_issue";
-
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "Okay. Please tell me briefly what is going on."
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `Sorry, I missed that. You are calling about ${caller.issueSummary || "the issue you described"}. Is that correct?`
-    );
-    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_name") {
-    const cleanedName = cleanName(speech);
-
-    if (!cleanedName) {
-      caller.retryCount++;
-
-      if (caller.retryCount <= 1) {
-        buildSpeechGather(
-          twiml,
-          `${baseUrl}/handle-input`,
-          "Sorry, I missed that. Can I have your full name?"
-        );
-      } else {
-        twiml.say("I am sorry, I still could not get your name. Please call back.");
-        twiml.hangup();
-      }
-
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    caller.name = cleanedName;
+    caller.name = cleanName(speech);
     caller.firstName = getFirstName(caller.name);
     caller.lastStep = "confirm_callback";
 
@@ -564,12 +297,12 @@ app.post("/handle-input", (req, res) => {
       `${baseUrl}/handle-input`,
       `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
     );
+
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "confirm_callback") {
     if (isYes(speech)) {
-      caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
 
       buildSpeechGather(
@@ -577,45 +310,21 @@ app.post("/handle-input", (req, res) => {
         `${baseUrl}/handle-input`,
         "What is the address for the job?"
       );
+
       return res.type("text/xml").send(twiml.toString());
     }
-
-    if (isNo(speech)) {
-      caller.callbackConfirmed = false;
-      caller.lastStep = "ask_callback";
-
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "What is the best callback number to reach you?"
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `Sorry, I missed that. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "ask_callback") {
-    caller.callbackNumber = cleanForSpeech(speech);
-    caller.lastStep = "ask_address";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "What is the address for the job?"
-    );
-    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_address") {
     caller.address = cleanForSpeech(speech);
+
+    // EMERGENCY → SKIP APPOINTMENT
+    if (caller.urgency === "emergency") {
+      caller.status = "new_emergency";
+      closeCall(twiml, caller);
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     caller.lastStep = "ask_appt";
 
     buildSpeechGather(
@@ -623,65 +332,19 @@ app.post("/handle-input", (req, res) => {
       `${baseUrl}/handle-input`,
       "Do you have a preferred day or time for the appointment?"
     );
+
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_appt") {
-    const appt = parseAppointmentResponse(speech);
-    caller.appointmentDate = appt.date;
-    caller.appointmentTime = appt.time;
     caller.status = "new_lead";
-    caller.lastStep = "anything_else";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "Is there anything else you would like to add before we finish up?"
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "anything_else") {
-    if (isNo(speech)) {
-      closeCall(twiml, caller);
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    if (isYes(speech)) {
-      caller.lastStep = "capture_additional_need";
-
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "Okay. Please tell me what else you would like to add."
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    caller.lastStep = "capture_additional_need";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "Okay. Please tell me what else you would like to add."
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "capture_additional_need") {
-    caller.additionalNeed = cleanForSpeech(speech);
-
-    if (caller.additionalNeed) {
-      caller.issue = `${caller.issue}. Additional request: ${caller.additionalNeed}`;
-    }
-
     closeCall(twiml, caller);
     return res.type("text/xml").send(twiml.toString());
   }
 
   twiml.say("Sorry, something went wrong. Please call back.");
   twiml.hangup();
-  return res.type("text/xml").send(twiml.toString());
+  res.type("text/xml").send(twiml.toString());
 });
 
 app.listen(PORT, () => {
