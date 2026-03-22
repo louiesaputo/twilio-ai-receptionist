@@ -1,5 +1,5 @@
 // Confirmed changes in this version:
-// - Improves opening name capture with delimiter-based parsing
+// - Fixes intro parsing so name + issue are both captured from opening sentence
 // - Keeps detailed issue summaries and emergency routing
 // - Keeps callback number read-back
 // - Keeps pricing response handling
@@ -16,7 +16,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V28-NAME-CAPTURE-DELIMITERS";
+const APP_VERSION = "VOICE-FLOW-V29-INTRO-PARSE-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -144,41 +144,47 @@ function extractOpeningNameAndIssue(text) {
     return { name: null, issueText: "" };
   }
 
-  const lower = original.toLowerCase();
-
-  const prefixMatches = [
-    { regex: /^(?:hi|hello|hey)[,\s]+this is\s+(.+)$/i },
-    { regex: /^this is\s+(.+)$/i },
-    { regex: /^(?:hi|hello|hey)[,\s]+my name is\s+(.+)$/i },
-    { regex: /^my name is\s+(.+)$/i },
-    { regex: /^(?:hi|hello|hey)[,\s]+i am\s+(.+)$/i },
-    { regex: /^i am\s+(.+)$/i },
-    { regex: /^i'm\s+(.+)$/i },
+  const prefixPatterns = [
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+(.+)$/i,
+    /^this is\s+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*my name is\s+(.+)$/i,
+    /^my name is\s+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*i am\s+(.+)$/i,
+    /^i am\s+(.+)$/i,
+    /^i'm\s+(.+)$/i,
   ];
 
   const delimiters = [
-    " calling about ",
-    " calling with ",
-    " calling for ",
-    " with ",
-    " about ",
-    " because ",
-    " regarding ",
-    " concerning ",
+    ", and i have ",
     " and i have ",
-    " and i've got ",
-    " and i need ",
-    " and there is ",
-    " and my ",
+    ", i have ",
     " i have ",
+    ", and i've got ",
+    " and i've got ",
+    ", i've got ",
     " i've got ",
+    ", and i need ",
+    " and i need ",
+    ", i need ",
     " i need ",
-    " there is ",
-    " my ",
+    ", with ",
+    " with ",
+    ", about ",
+    " about ",
+    ", regarding ",
+    " regarding ",
+    ", because ",
+    " because ",
+    ", for ",
+    " for ",
+    " calling with ",
+    " calling about ",
+    " calling for ",
+    " calling regarding ",
   ];
 
-  for (const item of prefixMatches) {
-    const match = original.match(item.regex);
+  for (const pattern of prefixPatterns) {
+    const match = original.match(pattern);
     if (!match) continue;
 
     const remainder = match[1].trim();
@@ -190,19 +196,6 @@ function extractOpeningNameAndIssue(text) {
         const namePart = remainder.slice(0, idx).trim();
         let issuePart = remainder.slice(idx + delimiter.length).trim();
 
-        if (
-          delimiter.trim() === "with" ||
-          delimiter.trim() === "about" ||
-          delimiter.trim() === "regarding" ||
-          delimiter.trim() === "concerning"
-        ) {
-          issuePart = `${delimiter.trim()} ${issuePart}`.trim();
-        }
-
-        if (delimiter.trim() === "my") {
-          issuePart = `my ${issuePart}`.trim();
-        }
-
         const name = normalizeNameCandidate(namePart);
         const issueText = cleanForSpeech(issuePart);
 
@@ -212,16 +205,16 @@ function extractOpeningNameAndIssue(text) {
       }
     }
 
-    const possibleWholeName = normalizeNameCandidate(remainder);
-    if (possibleWholeName) {
-      return { name: possibleWholeName, issueText: "" };
+    const possibleName = normalizeNameCandidate(remainder);
+    if (possibleName) {
+      return { name: possibleName, issueText: "" };
     }
   }
 
   const directPatterns = [
     /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
-    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+with\s+(.+)$/i,
-    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+about\s+(.+)$/i,
+    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s*,\s*and i have\s+(.+)$/i,
+    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+and i have\s+(.+)$/i,
   ];
 
   for (const pattern of directPatterns) {
@@ -322,7 +315,7 @@ function classifyIssue(issue) {
     };
   }
 
-  const hasLeak = containsAny(text, ["leak", "leaking", "leaky", "busted", "burst"]);
+  const hasLeak = containsAny(text, ["leak", "leaking", "leaky", "busted", "burst", "broke", "broken"]);
   const hasFlood = containsAny(text, ["flood", "flooding", "pooling water", "water everywhere"]);
   const hasNoWater = containsAny(text, ["no water", "lost water", "water is off", "no running water"]);
   const hasUrgentWords = containsAny(text, ["emergency", "urgent", "asap", "immediately", "right away"]);
