@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V13-STABLE";
+const APP_VERSION = "VOICE-FLOW-V14-CONFIRMATIONS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -99,6 +99,32 @@ function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
   });
 
   gather.say({ voice: "alice" }, prompt);
+}
+
+function formatPhoneNumberForSpeech(phone) {
+  if (!phone) return "unknown";
+
+  let digits = String(phone).replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.startsWith("1")) {
+    digits = digits.substring(1);
+  }
+
+  if (!digits) return "unknown";
+
+  return digits.split("").join(" ");
+}
+
+function isYes(text) {
+  return /yes|yeah|yep|correct|right|that'?s right|it is|sure/.test(
+    (text || "").toLowerCase()
+  );
+}
+
+function isNo(text) {
+  return /no|nope|wrong|different|not correct|that'?s wrong/.test(
+    (text || "").toLowerCase()
+  );
 }
 
 function isEmergencyPhrase(text) {
@@ -301,12 +327,43 @@ app.post("/handle-input", (req, res) => {
   if (caller.lastStep === "ask_issue") {
     caller.issue = cleanForSpeech(speech);
     caller.urgency = detectUrgency(speech);
-    caller.lastStep = "ask_first_name";
+    caller.lastStep = "confirm_issue";
 
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "What is your first name?"
+      `Just to confirm, you are calling about ${caller.issue}. Is that correct?`
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "confirm_issue") {
+    if (isYes(speech)) {
+      caller.lastStep = "ask_first_name";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "What is your first name?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    if (isNo(speech)) {
+      caller.lastStep = "ask_issue";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Okay. Please tell me briefly what is going on."
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      `Sorry, I missed that. You are calling about ${caller.issue}. Is that correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -366,18 +423,18 @@ app.post("/handle-input", (req, res) => {
     rebuildFullName(caller);
     caller.lastStep = "confirm_callback";
 
+    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Is this the best callback number to reach you?"
+      `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "confirm_callback") {
-    const lowered = speech.toLowerCase();
-
-    if (lowered.includes("yes") || lowered.includes("yeah") || lowered.includes("correct")) {
+    if (isYes(speech)) {
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
 
@@ -389,7 +446,7 @@ app.post("/handle-input", (req, res) => {
       return res.type("text/xml").send(twiml.toString());
     }
 
-    if (lowered.includes("no") || lowered.includes("wrong") || lowered.includes("different")) {
+    if (isNo(speech)) {
       caller.callbackConfirmed = false;
       caller.lastStep = "ask_callback";
 
@@ -401,10 +458,12 @@ app.post("/handle-input", (req, res) => {
       return res.type("text/xml").send(twiml.toString());
     }
 
+    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Sorry, I missed that. Is this the best callback number to reach you?"
+      `Sorry, I missed that. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
