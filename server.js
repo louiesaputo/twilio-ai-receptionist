@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V21-CALLBACK-AND-PRICING-FIX";
+const APP_VERSION = "VOICE-FLOW-V22-OPENING-NAME-CAPTURE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -70,6 +70,38 @@ function cleanName(input) {
 function getFirstName(fullName) {
   if (!fullName) return "";
   return cleanForSpeech(fullName).split(/\s+/)[0] || "";
+}
+
+function extractOpeningNameAndIssue(text) {
+  const original = cleanSpeechText(text || "");
+  if (!original) {
+    return { name: null, issueText: "" };
+  }
+
+  const patterns = [
+    /^(?:hi|hello|hey)[,\s]+this is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:calling\s+)?(?:about|with|for)?\s*(.+)$/i,
+    /^this is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:calling\s+)?(?:about|with|for)?\s*(.+)$/i,
+    /^(?:hi|hello|hey)[,\s]+my name is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
+    /^my name is\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
+    /^(?:hi|hello|hey)[,\s]+i am\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
+    /^i am\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
+    /^i'm\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:and\s+)?(.+)$/i,
+    /^(?:hi|hello|hey)[,\s]+([a-z]+(?:\s+[a-z]+){0,2})\s+calling\s+(?:about|with|for)?\s*(.+)$/i,
+    /^([a-z]+(?:\s+[a-z]+){0,2})\s+calling\s+(?:about|with|for)?\s*(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = original.match(pattern);
+    if (match) {
+      const name = cleanName(match[1] || "");
+      const issueText = cleanForSpeech(match[2] || "");
+      if (name && issueText) {
+        return { name, issueText };
+      }
+    }
+  }
+
+  return { name: null, issueText: original };
 }
 
 function getBaseUrl(req) {
@@ -437,9 +469,16 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_issue") {
-    caller.issue = cleanForSpeech(speech);
+    const parsedOpening = extractOpeningNameAndIssue(speech);
+
+    if (parsedOpening.name) {
+      caller.name = parsedOpening.name;
+      caller.firstName = getFirstName(parsedOpening.name);
+    }
+
+    caller.issue = cleanForSpeech(parsedOpening.issueText || speech);
     caller.issueSummary = summarizeIssue(caller.issue);
-    caller.urgency = detectUrgency(speech);
+    caller.urgency = detectUrgency(caller.issue);
     caller.emergencyAlert = caller.urgency === "emergency";
     caller.lastStep = "confirm_issue";
 
@@ -453,6 +492,18 @@ app.post("/handle-input", (req, res) => {
 
   if (caller.lastStep === "confirm_issue") {
     if (isYes(speech)) {
+      if (caller.name) {
+        caller.lastStep = "confirm_callback";
+        const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          `Thank you ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+        );
+        return res.type("text/xml").send(twiml.toString());
+      }
+
       caller.lastStep = "ask_name";
 
       buildSpeechGather(
