@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V15-ISSUE-SUMMARY";
+const APP_VERSION = "VOICE-FLOW-V16-PRICING";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -154,6 +154,28 @@ function isEmergencyPhrase(text) {
 
 function detectUrgency(text) {
   return isEmergencyPhrase(text) ? "emergency" : "non-emergency";
+}
+
+function isPricingQuestion(text) {
+  const t = (text || "").toLowerCase();
+
+  return (
+    t.includes("how much") ||
+    t.includes("what does it cost") ||
+    t.includes("what will it cost") ||
+    t.includes("price") ||
+    t.includes("pricing") ||
+    t.includes("cost") ||
+    t.includes("estimate") ||
+    t.includes("quote") ||
+    t.includes("ballpark") ||
+    t.includes("what do you charge") ||
+    t.includes("how expensive")
+  );
+}
+
+function pricingResponse() {
+  return "Each service call is different, so pricing depends on the details of the work. One of our trained team members will go over the pricing with you when they call to review your service request.";
 }
 
 function summarizeIssue(issue) {
@@ -432,6 +454,19 @@ app.post("/handle-input", (req, res) => {
       return res.type("text/xml").send(twiml.toString());
     }
 
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      const issueSummary = summarizeIssue(caller.issue);
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        `Now, just to confirm, you are calling about ${issueSummary}. Is that correct?`
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     const issueSummary = summarizeIssue(caller.issue);
 
     buildSpeechGather(
@@ -443,6 +478,17 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_first_name") {
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Now, what is your first name?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     const cleanedFirstName = cleanNamePart(speech);
 
     if (!cleanedFirstName) {
@@ -474,6 +520,17 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_last_name") {
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Now, what is your last name?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     const cleanedLastName = cleanNamePart(speech);
 
     if (!cleanedLastName) {
@@ -508,6 +565,19 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "confirm_callback") {
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        `Now, I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     if (isYes(speech)) {
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
@@ -543,6 +613,17 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_callback") {
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Now, what is the best callback number to reach you?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     caller.callbackNumber = cleanForSpeech(speech);
     caller.lastStep = "ask_address";
 
@@ -555,6 +636,17 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_address") {
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Now, what is the address for the job?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     caller.address = cleanForSpeech(speech);
     caller.lastStep = "ask_appt";
 
@@ -567,6 +659,17 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_appt") {
+    if (isPricingQuestion(speech)) {
+      twiml.say({ voice: "alice" }, pricingResponse());
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Now, do you have a preferred day or time for the appointment?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     const appt = parseAppointmentResponse(speech);
     caller.appointmentDate = appt.date;
     caller.appointmentTime = appt.time;
