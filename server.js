@@ -5,8 +5,6 @@
 // - Keeps pricing response handling
 // - Keeps anything-else step
 // - Keeps Make payload fields including emergencyAlert and issueSummary
-// - Adds missing parseAppointmentResponse() function
-// - Adds leadType to Make payload for easier routing in Make
 
 console.log("🔥 NEW DEPLOY LOADED 🔥");
 
@@ -18,7 +16,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V30-APPT-FIX-EMERGENCY-READY";
+const APP_VERSION = "VOICE-FLOW-V29-INTRO-PARSE-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -45,7 +43,6 @@ function getOrCreateCaller(phone) {
       appointmentTime: null,
       additionalNeed: null,
       status: null,
-      leadType: null,
       lastStep: null,
       retryCount: 0,
       createdAt: now,
@@ -197,7 +194,7 @@ function extractOpeningNameAndIssue(text) {
       const idx = remainderLower.indexOf(delimiter);
       if (idx > 0) {
         const namePart = remainder.slice(0, idx).trim();
-        const issuePart = remainder.slice(idx + delimiter.length).trim();
+        let issuePart = remainder.slice(idx + delimiter.length).trim();
 
         const name = normalizeNameCandidate(namePart);
         const issueText = cleanForSpeech(issuePart);
@@ -305,44 +302,6 @@ function pricingResponse() {
 
 function containsAny(text, phrases) {
   return phrases.some((phrase) => text.includes(phrase));
-}
-
-function parseAppointmentResponse(text) {
-  const cleaned = cleanForSpeech(text || "");
-  const lower = cleaned.toLowerCase();
-
-  if (!cleaned) {
-    return {
-      date: "",
-      time: "",
-    };
-  }
-
-  const noPreferencePhrases = [
-    "no preference",
-    "any time",
-    "anytime",
-    "whenever",
-    "doesn't matter",
-    "does not matter",
-    "first available",
-    "soon as possible",
-    "as soon as possible",
-    "earliest available",
-    "whatever works",
-  ];
-
-  if (containsAny(lower, noPreferencePhrases)) {
-    return {
-      date: "No preference",
-      time: "First available",
-    };
-  }
-
-  return {
-    date: cleaned,
-    time: cleaned,
-  };
 }
 
 function classifyIssue(issue) {
@@ -631,7 +590,6 @@ function sendLeadToMake(caller) {
   try {
     const data = JSON.stringify({
       timestamp: new Date().toISOString(),
-      leadType: caller.leadType || (caller.emergencyAlert ? "emergency_service" : "standard_service"),
       phone: caller.phone || "",
       fullName: caller.name || "",
       firstName: caller.firstName || "",
@@ -747,7 +705,6 @@ app.post("/incoming-call", (req, res) => {
   caller.appointmentTime = null;
   caller.additionalNeed = null;
   caller.status = "in_progress";
-  caller.leadType = null;
   caller.lastStep = "ask_issue";
   caller.retryCount = 0;
 
@@ -970,7 +927,6 @@ app.post("/handle-input", (req, res) => {
 
     if (caller.urgency === "emergency") {
       caller.status = "new_emergency";
-      caller.leadType = "emergency_service";
       caller.lastStep = "anything_else";
 
       buildSpeechGather(
@@ -996,7 +952,6 @@ app.post("/handle-input", (req, res) => {
     caller.appointmentDate = appt.date;
     caller.appointmentTime = appt.time;
     caller.status = "new_lead";
-    caller.leadType = "standard_service";
     caller.lastStep = "anything_else";
 
     buildSpeechGather(
