@@ -7,6 +7,10 @@
 // - Keeps Make payload fields including emergencyAlert and issueSummary
 // - Adds missing parseAppointmentResponse() function
 // - Adds leadType to Make payload for easier routing in Make
+// - Sends lead to Make earlier so emergency/normal leads are not lost
+// - Prevents duplicate Make sends
+// - Adds Make webhook response/error logging
+// - Reduces speech silence wait time for faster responses
 
 console.log("🔥 NEW DEPLOY LOADED 🔥");
 
@@ -18,7 +22,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V30-APPT-FIX-EMERGENCY-READY";
+const APP_VERSION = "VOICE-FLOW-V31-EARLY-SEND-FASTER-RESPONSES";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -46,6 +50,7 @@ function getOrCreateCaller(phone) {
       additionalNeed: null,
       status: null,
       leadType: null,
+      leadSentToMake: false,
       lastStep: null,
       retryCount: 0,
       createdAt: now,
@@ -245,8 +250,8 @@ function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: options.speechTimeout || 3,
-    timeout: options.timeout || 10,
+    speechTimeout: options.speechTimeout ?? 1,
+    timeout: options.timeout ?? 8,
     actionOnEmptyResult: true,
     language: "en-US",
   });
@@ -628,6 +633,11 @@ function classifyIssue(issue) {
 }
 
 function sendLeadToMake(caller) {
+  if (caller.leadSentToMake) {
+    console.log("[MAKE] Lead already sent, skipping duplicate send");
+    return;
+  }
+
   try {
     const data = JSON.stringify({
       timestamp: new Date().toISOString(),
@@ -661,12 +671,45 @@ function sendLeadToMake(caller) {
       },
     };
 
-    const makeReq = https.request(options);
+    caller.leadSentToMake = true;
+
+    const makeReq = https.request(options, (makeRes) => {
+      let responseBody = "";
+
+      makeRes.on("data", (chunk) => {
+        responseBody += chunk;
+      });
+
+      makeRes.on("end", () => {
+        console.log(`[MAKE] Response status: ${makeRes.statusCode}`);
+        if (responseBody) {
+          console.log(`[MAKE] Response body: ${responseBody}`);
+        }
+
+        if (makeRes.statusCode < 200 || makeRes.statusCode >= 300) {
+          caller.leadSentToMake = false;
+          console.error("[MAKE ERROR] Non-2xx response from Make");
+        }
+      });
+    });
+
+    makeReq.on("error", (err) => {
+      caller.leadSentToMake = false;
+      console.error("[MAKE ERROR]", err.message);
+    });
+
+    makeReq.setTimeout(10000, () => {
+      caller.leadSentToMake = false;
+      console.error("[MAKE ERROR] Request timed out");
+      makeReq.destroy();
+    });
+
     makeReq.write(data);
     makeReq.end();
 
-    console.log("[MAKE] Lead sent");
+    console.log("[MAKE] Lead send attempt started");
   } catch (err) {
+    caller.leadSentToMake = false;
     console.error("[MAKE ERROR]", err.message);
   }
 }
@@ -748,6 +791,7 @@ app.post("/incoming-call", (req, res) => {
   caller.additionalNeed = null;
   caller.status = "in_progress";
   caller.leadType = null;
+  caller.leadSentToMake = false;
   caller.lastStep = "ask_issue";
   caller.retryCount = 0;
 
@@ -971,6 +1015,7 @@ app.post("/handle-input", (req, res) => {
     if (caller.urgency === "emergency") {
       caller.status = "new_emergency";
       caller.leadType = "emergency_service";
+      sendLeadToMake(caller);
       caller.lastStep = "anything_else";
 
       buildSpeechGather(
@@ -997,6 +1042,7 @@ app.post("/handle-input", (req, res) => {
     caller.appointmentTime = appt.time;
     caller.status = "new_lead";
     caller.leadType = "standard_service";
+    sendLeadToMake(caller);
     caller.lastStep = "anything_else";
 
     buildSpeechGather(
