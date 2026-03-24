@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V37-SIMPLE-NAME-PARSE";
+const APP_VERSION = "VOICE-FLOW-V38-NAME-CAPTURE-HARD-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -55,7 +55,7 @@ function cleanSpeechText(input) {
 
 function cleanForSpeech(input) {
   if (!input) return "";
-  return input.replace(/[.,!?]+$/g, "").trim();
+  return input.replace(/[!?]+$/g, "").trim();
 }
 
 function cleanName(input) {
@@ -75,7 +75,10 @@ function toTitleCase(value) {
   return value
     .split(/\s+/)
     .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
     .join(" ");
 }
 
@@ -128,10 +131,12 @@ function normalizeNameCandidate(rawName) {
     "valve",
     "call",
     "calling",
-    "help",
     "hello",
     "hi",
-    "hey"
+    "hey",
+    "help",
+    "house",
+    "home"
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -145,78 +150,103 @@ function stripIssueLeadIn(text) {
     .replace(/^(and\s+)?i\s+have\s+/i, "")
     .replace(/^(and\s+)?i've\s+got\s+/i, "")
     .replace(/^(and\s+)?i\s+need\s+/i, "")
+    .replace(/^(and\s+)?there('?s| is)\s+/i, "")
     .replace(/^an?\s+/i, "")
     .trim();
+}
+
+function extractNameFromIntro(text) {
+  const original = cleanSpeechText(text || "");
+  if (!original) return "";
+
+  const patterns = [
+    /(?:^|[,.]\s*)(?:hi|hello|hey)?\s*this is\s+(.+)$/i,
+    /(?:^|[,.]\s*)my name is\s+(.+)$/i,
+    /(?:^|[,.]\s*)i am\s+(.+)$/i,
+    /(?:^|[,.]\s*)i'm\s+(.+)$/i,
+  ];
+
+  const stops = [
+    /\s+and\s+i\s+have\s+/i,
+    /\s+i\s+have\s+/i,
+    /\s+and\s+i've\s+got\s+/i,
+    /\s+i've\s+got\s+/i,
+    /\s+and\s+i\s+need\s+/i,
+    /\s+i\s+need\s+/i,
+    /\.\s+/,
+    /,\s+/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = original.match(pattern);
+    if (!match) continue;
+
+    let candidate = match[1].trim();
+
+    for (const stop of stops) {
+      const stopMatch = candidate.match(stop);
+      if (stopMatch && stopMatch.index !== undefined) {
+        candidate = candidate.slice(0, stopMatch.index).trim();
+        break;
+      }
+    }
+
+    const normalized = normalizeNameCandidate(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function extractIssueFromIntro(text) {
+  const original = cleanSpeechText(text || "");
+  if (!original) return "";
+
+  const lower = original.toLowerCase();
+  const markers = [
+    " and i have ",
+    " i have ",
+    " and i've got ",
+    " i've got ",
+    " and i need ",
+    " i need ",
+  ];
+
+  for (const marker of markers) {
+    const idx = lower.indexOf(marker);
+    if (idx >= 0) {
+      return stripIssueLeadIn(original.slice(idx + marker.length));
+    }
+  }
+
+  // Sentence fallback: if they say "my name is John Smith. I have..."
+  const sentenceMatch = original.match(/[.]\s*(i have|i've got|i need)\s+(.+)$/i);
+  if (sentenceMatch) {
+    return stripIssueLeadIn(sentenceMatch[2]);
+  }
+
+  return cleanForSpeech(original);
 }
 
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
-  const lower = original.toLowerCase();
+  const name = extractNameFromIntro(original);
+  const issueText = extractIssueFromIntro(original);
 
-  const prefixes = [
-    "this is ",
-    "my name is ",
-    "i am ",
-    "i'm "
-  ];
+  console.log("[OPENING EXTRACT]", {
+    original,
+    extractedName: name,
+    extractedIssue: issueText
+  });
 
-  const separators = [
-    " and i have ",
-    " and i've got ",
-    " and i need ",
-    ", and i have ",
-    ", and i've got ",
-    ", and i need ",
-    ", i have ",
-    ", i've got ",
-    ", i need "
-  ];
-
-  for (const prefix of prefixes) {
-    if (!lower.startsWith(prefix)) continue;
-
-    const remainder = original.slice(prefix.length);
-
-    for (const separator of separators) {
-      const idx = remainder.toLowerCase().indexOf(separator);
-      if (idx > 0) {
-        const rawName = remainder.slice(0, idx).trim();
-        const rawIssue = remainder.slice(idx + separator.length).trim();
-
-        const name = normalizeNameCandidate(rawName);
-        const issueText = cleanForSpeech(stripIssueLeadIn(rawIssue));
-
-        console.log("[OPENING PARSE]", {
-          original,
-          rawName,
-          rawIssue,
-          parsedName: name,
-          parsedIssue: issueText
-        });
-
-        if (name && issueText) {
-          return { name, issueText };
-        }
-      }
-    }
-
-    const maybeName = normalizeNameCandidate(remainder);
-    console.log("[OPENING NAME ONLY]", {
-      original,
-      remainder,
-      parsedName: maybeName
-    });
-
-    if (maybeName) {
-      return { name: maybeName, issueText: "" };
-    }
-  }
-
-  console.log("[OPENING FALLBACK]", { original });
-
-  return { name: null, issueText: cleanForSpeech(original) };
+  return {
+    name: name || null,
+    issueText: issueText || cleanForSpeech(original)
+  };
 }
 
 function getBaseUrl(req) {
@@ -410,38 +440,6 @@ function classifyIssue(issue) {
       category: "slab_leak",
       summary: "a possible slab leak",
       urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["water heater"]) && containsAny(text, ["leak", "leaking"])) {
-    return {
-      category: "water_heater_leak",
-      summary: "a leak in your water heater",
-      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["water heater"]) && containsAny(text, ["no hot water", "not getting hot water", "cold water only"])) {
-    return {
-      category: "water_heater_no_hot_water",
-      summary: "a water heater issue with no hot water",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["water heater"]) && containsAny(text, ["pilot", "won't light", "not turning on"])) {
-    return {
-      category: "water_heater_not_working",
-      summary: "a water heater that is not working",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["faucet", "tap", "spigot"]) && hasLeak) {
-    return {
-      category: "faucet_leak",
-      summary: "a leak in your faucet",
-      urgency: "non-emergency",
     };
   }
 
