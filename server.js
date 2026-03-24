@@ -1,17 +1,3 @@
-// Confirmed changes in this version:
-// - Fixes intro parsing so name + issue are both captured from opening sentence
-// - Keeps detailed issue summaries and emergency routing
-// - Keeps callback number read-back
-// - Keeps pricing response handling
-// - Keeps anything-else step
-// - Keeps Make payload fields including emergencyAlert and issueSummary
-// - Adds missing parseAppointmentResponse() function
-// - Adds leadType to Make payload for easier routing in Make
-// - Sends lead to Make earlier so emergency/normal leads are not lost
-// - Prevents duplicate Make sends
-// - Adds Make webhook response/error logging
-// - Reduces speech silence wait time for faster responses
-
 console.log("🔥 NEW DEPLOY LOADED 🔥");
 
 const express = require("express");
@@ -22,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V31-EARLY-SEND-FASTER-RESPONSES";
+const APP_VERSION = "VOICE-FLOW-V31-EMERGENCY-EARLY-SEND";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -50,9 +36,9 @@ function getOrCreateCaller(phone) {
       additionalNeed: null,
       status: null,
       leadType: null,
-      leadSentToMake: false,
       lastStep: null,
       retryCount: 0,
+      makeSent: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -139,11 +125,31 @@ function normalizeNameCandidate(rawName) {
     "lawn",
     "sink",
     "faucet",
+    "call",
+    "calling"
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
 
   return toTitleCase(words.join(" "));
+}
+
+function stripIssueLeadIn(text) {
+  if (!text) return "";
+  return cleanForSpeech(text)
+    .replace(/^(and\s+)?i\s+have\s+/i, "")
+    .replace(/^(and\s+)?i've\s+got\s+/i, "")
+    .replace(/^(and\s+)?i\s+need\s+/i, "")
+    .replace(/^calling\s+about\s+/i, "")
+    .replace(/^calling\s+with\s+/i, "")
+    .replace(/^calling\s+for\s+/i, "")
+    .replace(/^calling\s+regarding\s+/i, "")
+    .replace(/^about\s+/i, "")
+    .replace(/^with\s+/i, "")
+    .replace(/^regarding\s+/i, "")
+    .replace(/^because\s+/i, "")
+    .replace(/^for\s+/i, "")
+    .trim();
 }
 
 function extractOpeningNameAndIssue(text) {
@@ -152,88 +158,47 @@ function extractOpeningNameAndIssue(text) {
     return { name: null, issueText: "" };
   }
 
-  const prefixPatterns = [
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+(.+)$/i,
-    /^this is\s+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*my name is\s+(.+)$/i,
-    /^my name is\s+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*i am\s+(.+)$/i,
-    /^i am\s+(.+)$/i,
-    /^i'm\s+(.+)$/i,
+  const patterns = [
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})[\s,.-]+(.+)$/i,
+    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
+    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s*,?\s+and\s+i\s+have\s+(.+)$/i,
   ];
 
-  const delimiters = [
-    ", and i have ",
-    " and i have ",
-    ", i have ",
-    " i have ",
-    ", and i've got ",
-    " and i've got ",
-    ", i've got ",
-    " i've got ",
-    ", and i need ",
-    " and i need ",
-    ", i need ",
-    " i need ",
-    ", with ",
-    " with ",
-    ", about ",
-    " about ",
-    ", regarding ",
-    " regarding ",
-    ", because ",
-    " because ",
-    ", for ",
-    " for ",
-    " calling with ",
-    " calling about ",
-    " calling for ",
-    " calling regarding ",
-  ];
-
-  for (const pattern of prefixPatterns) {
+  for (const pattern of patterns) {
     const match = original.match(pattern);
     if (!match) continue;
 
-    const remainder = match[1].trim();
-    const remainderLower = remainder.toLowerCase();
+    const name = normalizeNameCandidate(match[1]);
+    const issueText = stripIssueLeadIn(match[2]);
 
-    for (const delimiter of delimiters) {
-      const idx = remainderLower.indexOf(delimiter);
-      if (idx > 0) {
-        const namePart = remainder.slice(0, idx).trim();
-        const issuePart = remainder.slice(idx + delimiter.length).trim();
-
-        const name = normalizeNameCandidate(namePart);
-        const issueText = cleanForSpeech(issuePart);
-
-        if (name && issueText) {
-          return { name, issueText };
-        }
-      }
-    }
-
-    const possibleName = normalizeNameCandidate(remainder);
-    if (possibleName) {
-      return { name: possibleName, issueText: "" };
+    if (name && issueText) {
+      return { name, issueText };
     }
   }
 
-  const directPatterns = [
-    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
-    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s*,\s*and i have\s+(.+)$/i,
-    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+and i have\s+(.+)$/i,
+  const nameOnlyPatterns = [
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
   ];
 
-  for (const pattern of directPatterns) {
+  for (const pattern of nameOnlyPatterns) {
     const match = original.match(pattern);
     if (!match) continue;
 
-    const possibleName = normalizeNameCandidate(match[1]);
-    const issueText = cleanForSpeech(match[2]);
-
-    if (possibleName && issueText) {
-      return { name: possibleName, issueText };
+    const name = normalizeNameCandidate(match[1]);
+    if (name) {
+      return { name, issueText: "" };
     }
   }
 
@@ -250,8 +215,8 @@ function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: options.speechTimeout ?? 1,
-    timeout: options.timeout ?? 8,
+    speechTimeout: options.speechTimeout || 3,
+    timeout: options.timeout || 10,
     actionOnEmptyResult: true,
     language: "en-US",
   });
@@ -633,8 +598,8 @@ function classifyIssue(issue) {
 }
 
 function sendLeadToMake(caller) {
-  if (caller.leadSentToMake) {
-    console.log("[MAKE] Lead already sent, skipping duplicate send");
+  if (caller.makeSent) {
+    console.log("[MAKE] Skipped duplicate send");
     return;
   }
 
@@ -671,45 +636,20 @@ function sendLeadToMake(caller) {
       },
     };
 
-    caller.leadSentToMake = true;
-
     const makeReq = https.request(options, (makeRes) => {
-      let responseBody = "";
-
-      makeRes.on("data", (chunk) => {
-        responseBody += chunk;
-      });
-
-      makeRes.on("end", () => {
-        console.log(`[MAKE] Response status: ${makeRes.statusCode}`);
-        if (responseBody) {
-          console.log(`[MAKE] Response body: ${responseBody}`);
-        }
-
-        if (makeRes.statusCode < 200 || makeRes.statusCode >= 300) {
-          caller.leadSentToMake = false;
-          console.error("[MAKE ERROR] Non-2xx response from Make");
-        }
-      });
+      console.log(`[MAKE] Status: ${makeRes.statusCode}`);
     });
 
     makeReq.on("error", (err) => {
-      caller.leadSentToMake = false;
       console.error("[MAKE ERROR]", err.message);
-    });
-
-    makeReq.setTimeout(10000, () => {
-      caller.leadSentToMake = false;
-      console.error("[MAKE ERROR] Request timed out");
-      makeReq.destroy();
     });
 
     makeReq.write(data);
     makeReq.end();
 
-    console.log("[MAKE] Lead send attempt started");
+    caller.makeSent = true;
+    console.log("[MAKE] Lead sent");
   } catch (err) {
-    caller.leadSentToMake = false;
     console.error("[MAKE ERROR]", err.message);
   }
 }
@@ -758,6 +698,7 @@ function closeCall(twiml, caller) {
   sendLeadToMake(caller);
 
   twiml.say(
+    { voice: "alice" },
     `Thank you ${caller.firstName || ""}. This call has been marked ${
       caller.urgency === "emergency" ? "urgent" : "for normal service"
     }. Someone will call you shortly. Have a great day.`
@@ -791,9 +732,9 @@ app.post("/incoming-call", (req, res) => {
   caller.additionalNeed = null;
   caller.status = "in_progress";
   caller.leadType = null;
-  caller.leadSentToMake = false;
   caller.lastStep = "ask_issue";
   caller.retryCount = 0;
+  caller.makeSent = false;
 
   buildSpeechGather(
     twiml,
@@ -821,7 +762,7 @@ app.post("/handle-input", (req, res) => {
         "Sorry, I missed that. Please say that again."
       );
     } else {
-      twiml.say("I am sorry, I still could not hear you. Please call back.");
+      twiml.say({ voice: "alice" }, "I am sorry, I still could not hear you. Please call back.");
       twiml.hangup();
     }
 
@@ -831,7 +772,7 @@ app.post("/handle-input", (req, res) => {
   caller.retryCount = 0;
 
   if (isPricingQuestion(speech)) {
-    twiml.say(pricingResponse());
+    twiml.say({ voice: "alice" }, pricingResponse());
 
     buildSpeechGather(
       twiml,
@@ -941,7 +882,7 @@ app.post("/handle-input", (req, res) => {
           "Sorry, I missed that. Can I have your full name?"
         );
       } else {
-        twiml.say("I am sorry, I still could not get your name. Please call back.");
+        twiml.say({ voice: "alice" }, "I am sorry, I still could not get your name. Please call back.");
         twiml.hangup();
       }
 
@@ -1015,7 +956,10 @@ app.post("/handle-input", (req, res) => {
     if (caller.urgency === "emergency") {
       caller.status = "new_emergency";
       caller.leadType = "emergency_service";
+
+      // Send emergency lead immediately after address is captured.
       sendLeadToMake(caller);
+
       caller.lastStep = "anything_else";
 
       buildSpeechGather(
@@ -1042,7 +986,6 @@ app.post("/handle-input", (req, res) => {
     caller.appointmentTime = appt.time;
     caller.status = "new_lead";
     caller.leadType = "standard_service";
-    sendLeadToMake(caller);
     caller.lastStep = "anything_else";
 
     buildSpeechGather(
@@ -1091,7 +1034,7 @@ app.post("/handle-input", (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
 
-  twiml.say("Sorry, something went wrong. Please call back.");
+  twiml.say({ voice: "alice" }, "Sorry, something went wrong. Please call back.");
   twiml.hangup();
   return res.type("text/xml").send(twiml.toString());
 });
