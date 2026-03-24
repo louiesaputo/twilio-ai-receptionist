@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V33-OPENING-PARSE-FIX";
+const APP_VERSION = "VOICE-FLOW-V34-EMERGENCY-FLOW-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -853,26 +853,7 @@ app.post("/handle-input", (req, res) => {
     caller.issueCategory = classification.category;
     caller.urgency = classification.urgency;
     caller.emergencyAlert = caller.urgency === "emergency";
-    caller.lastStep = "confirm_issue";
 
-    if (caller.urgency === "emergency") {
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `I understand this is an emergency regarding ${caller.issueSummary || "your issue"}, and I'm marking this as urgent.`
-      );
-    } else {
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `Just so I have this right, you're calling about ${caller.issueSummary || "the issue you described"}, correct?`
-      );
-    }
-
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "confirm_issue") {
     if (caller.urgency === "emergency") {
       if (caller.name) {
         caller.lastStep = "confirm_callback";
@@ -881,7 +862,7 @@ app.post("/handle-input", (req, res) => {
         buildSpeechGather(
           twiml,
           `${baseUrl}/handle-input`,
-          `Thank you ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+          `I understand this is an emergency regarding ${caller.issueSummary || "your issue"}, and I'm marking this as urgent. Thank you ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
         );
         return res.type("text/xml").send(twiml.toString());
       }
@@ -890,11 +871,21 @@ app.post("/handle-input", (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "Can I have your full name?"
+        `I understand this is an emergency regarding ${caller.issueSummary || "your issue"}, and I'm marking this as urgent. Can I have your full name?`
       );
       return res.type("text/xml").send(twiml.toString());
     }
 
+    caller.lastStep = "confirm_issue";
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      `Just so I have this right, you're calling about ${caller.issueSummary || "the issue you described"}, correct?`
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "confirm_issue") {
     if (isYes(speech)) {
       if (caller.name) {
         caller.lastStep = "confirm_callback";
@@ -909,7 +900,6 @@ app.post("/handle-input", (req, res) => {
       }
 
       caller.lastStep = "ask_name";
-
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
@@ -932,7 +922,7 @@ app.post("/handle-input", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      getRepromptForCurrentStep(caller)
+      `Sorry, I missed that. Just so I have this right, you're calling about ${caller.issueSummary || "the issue you described"}, correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
