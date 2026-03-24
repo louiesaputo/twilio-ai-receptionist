@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V34-EMERGENCY-FLOW-FIX";
+const APP_VERSION = "VOICE-FLOW-V35-NAME-FALLBACK-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -202,6 +202,30 @@ function splitNameAndIssueRemainder(remainder) {
   return { name: cleaned, issueText: "" };
 }
 
+function findFallbackNameInSpeech(text) {
+  const cleaned = cleanSpeechText(text || "");
+  if (!cleaned) return "";
+
+  const patterns = [
+    /(?:^|\b)this is\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
+    /(?:^|\b)my name is\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
+    /(?:^|\b)i am\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
+    /(?:^|\b)i'm\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    if (!match) continue;
+
+    const normalized = normalizeNameCandidate(match[1]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) {
@@ -251,6 +275,11 @@ function extractOpeningNameAndIssue(text) {
     if (name && issueText) {
       return { name, issueText };
     }
+  }
+
+  const fallbackName = findFallbackNameInSpeech(original);
+  if (fallbackName) {
+    return { name: fallbackName, issueText: cleanForSpeech(original) };
   }
 
   return { name: null, issueText: cleanForSpeech(original) };
@@ -900,6 +929,7 @@ app.post("/handle-input", (req, res) => {
       }
 
       caller.lastStep = "ask_name";
+
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
