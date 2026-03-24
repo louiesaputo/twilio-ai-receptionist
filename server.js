@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V31-EMERGENCY-EARLY-SEND";
+const APP_VERSION = "VOICE-FLOW-V32-GREETING-NAME-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -657,41 +657,41 @@ function sendLeadToMake(caller) {
 function getRepromptForCurrentStep(caller) {
   if (caller.lastStep === "confirm_issue") {
     if (caller.urgency === "emergency") {
-      return `I understand this is an emergency regarding ${caller.issueSummary || "your issue"}. I am marking this as urgent. Just to confirm, is that correct?`;
+      return `I understand this is an emergency regarding ${caller.issueSummary || "your issue"}, and I'm marking this as urgent.`;
     }
-    return `Now, just to confirm, you are calling about ${caller.issueSummary || "the issue you described"}. Is that correct?`;
+    return `Just so I have this right, you're calling about ${caller.issueSummary || "the issue you described"}, correct?`;
   }
 
   if (caller.lastStep === "ask_name") {
-    return "Now, can I have your full name?";
+    return "Can I have your full name?";
   }
 
   if (caller.lastStep === "confirm_callback") {
     const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-    return `Now, I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
+    return `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
   }
 
   if (caller.lastStep === "ask_callback") {
-    return "Now, what is the best callback number to reach you?";
+    return "What is the best callback number to reach you?";
   }
 
   if (caller.lastStep === "ask_address") {
-    return "Now, what is the address for the job?";
+    return "What is the address for the job?";
   }
 
   if (caller.lastStep === "ask_appt") {
-    return "Now, do you have a preferred day or time for the appointment?";
+    return "Do you have a preferred day or time for the appointment?";
   }
 
   if (caller.lastStep === "anything_else") {
-    return "Other than that, is there anything else you would like to add before we finish up?";
+    return "Is there anything else you'd like us to know before I finish this up?";
   }
 
   if (caller.lastStep === "capture_additional_need") {
-    return "Please tell me what else you would like to add.";
+    return "Please tell me anything else you'd like us to know about the job.";
   }
 
-  return "Now, please continue.";
+  return "Please continue.";
 }
 
 function closeCall(twiml, caller) {
@@ -739,7 +739,7 @@ app.post("/incoming-call", (req, res) => {
   buildSpeechGather(
     twiml,
     `${baseUrl}/handle-input`,
-    "Thank you for calling Blue Caller Automation. This is Alex, how can I help you??"
+    "Thank you for calling Blue Caller Automation. This is Alex, how can I help you?"
   );
 
   return res.type("text/xml").send(twiml.toString());
@@ -804,13 +804,13 @@ app.post("/handle-input", (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `I understand this is an emergency regarding ${caller.issueSummary}. I am marking this as urgent. Just to confirm, is that correct?`
+        `I understand this is an emergency regarding ${caller.issueSummary}. I'm marking this as urgent.`
       );
     } else {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `Got it, you are calling about ${caller.issueSummary}. Correct?`
+        `Just so I have this right, you're calling about ${caller.issueSummary}. Is that correct?`
       );
     }
 
@@ -818,6 +818,28 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "confirm_issue") {
+    if (caller.urgency === "emergency") {
+      if (caller.name) {
+        caller.lastStep = "confirm_callback";
+        const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          `Thank you ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+        );
+        return res.type("text/xml").send(twiml.toString());
+      }
+
+      caller.lastStep = "ask_name";
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Can I have your full name?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     if (isYes(speech)) {
       if (caller.name) {
         caller.lastStep = "confirm_callback";
@@ -853,10 +875,23 @@ app.post("/handle-input", (req, res) => {
     }
 
     if (caller.urgency === "emergency") {
+      if (caller.name) {
+        caller.lastStep = "confirm_callback";
+        const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
+
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          `Thank you ${caller.firstName}. I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`
+        );
+        return res.type("text/xml").send(twiml.toString());
+      }
+
+      caller.lastStep = "ask_name";
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `Sorry, I missed that. I understand this is an emergency regarding ${caller.issueSummary}. I am marking this as urgent. Just to confirm, is that correct?`
+        "Can I have your full name?"
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -864,7 +899,7 @@ app.post("/handle-input", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `Sorry, I missed that. You are calling about ${caller.issueSummary || "the issue you described"}. Is that correct?`
+      `Sorry, I missed that. Just so I have this right, you're calling about ${caller.issueSummary || "the issue you described"}, correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -957,7 +992,6 @@ app.post("/handle-input", (req, res) => {
       caller.status = "new_emergency";
       caller.leadType = "emergency_service";
 
-      // Send emergency lead immediately after address is captured.
       sendLeadToMake(caller);
 
       caller.lastStep = "anything_else";
@@ -965,7 +999,7 @@ app.post("/handle-input", (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "Is there anything else you would like to add before we finish up?"
+        "Is there anything else you'd like us to know before I finish this up?"
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -991,7 +1025,7 @@ app.post("/handle-input", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Is there anything else you would like to add before we finish up?"
+      "Is there anything else you'd like us to know before I finish this up?"
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -1008,7 +1042,7 @@ app.post("/handle-input", (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "Okay. Please tell me what else you would like to add."
+        "Please tell me anything else you'd like us to know about the job."
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1018,7 +1052,7 @@ app.post("/handle-input", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "Okay. Please tell me what else you would like to add."
+      "Please tell me anything else you'd like us to know about the job."
     );
     return res.type("text/xml").send(twiml.toString());
   }
