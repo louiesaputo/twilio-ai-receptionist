@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V35-NAME-FALLBACK-FIX";
+const APP_VERSION = "VOICE-FLOW-V36-NAME-PATTERN-HARDENED";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -75,7 +75,10 @@ function toTitleCase(value) {
   return value
     .split(/\s+/)
     .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
     .join(" ");
 }
 
@@ -130,7 +133,8 @@ function normalizeNameCandidate(rawName) {
     "help",
     "hello",
     "hi",
-    "hey"
+    "hey",
+    "valve"
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -144,128 +148,37 @@ function stripIssueLeadIn(text) {
     .replace(/^(and\s+)?i\s+have\s+/i, "")
     .replace(/^(and\s+)?i've\s+got\s+/i, "")
     .replace(/^(and\s+)?i\s+need\s+/i, "")
-    .replace(/^(and\s+)?i\s+am\s+calling\s+about\s+/i, "")
-    .replace(/^(and\s+)?i\s+am\s+calling\s+with\s+/i, "")
-    .replace(/^(and\s+)?i\s+am\s+calling\s+for\s+/i, "")
-    .replace(/^(and\s+)?i\s+am\s+calling\s+regarding\s+/i, "")
-    .replace(/^calling\s+about\s+/i, "")
-    .replace(/^calling\s+with\s+/i, "")
-    .replace(/^calling\s+for\s+/i, "")
-    .replace(/^calling\s+regarding\s+/i, "")
-    .replace(/^about\s+/i, "")
-    .replace(/^with\s+/i, "")
-    .replace(/^regarding\s+/i, "")
-    .replace(/^because\s+/i, "")
-    .replace(/^for\s+/i, "")
+    .replace(/^an?\s+/i, "")
     .trim();
-}
-
-function splitNameAndIssueRemainder(remainder) {
-  const cleaned = cleanSpeechText(remainder || "");
-  if (!cleaned) return { name: "", issueText: "" };
-
-  const delimiters = [
-    /\s+and\s+i\s+have\s+/i,
-    /\s+i\s+have\s+/i,
-    /\s+and\s+i've\s+got\s+/i,
-    /\s+i've\s+got\s+/i,
-    /\s+and\s+i\s+need\s+/i,
-    /\s+i\s+need\s+/i,
-    /\s+and\s+i\s+am\s+calling\s+about\s+/i,
-    /\s+i\s+am\s+calling\s+about\s+/i,
-    /\s+calling\s+about\s+/i,
-    /\s+calling\s+with\s+/i,
-    /\s+calling\s+for\s+/i,
-    /\s+calling\s+regarding\s+/i,
-    /\s+about\s+/i,
-    /\s+with\s+/i,
-    /\s+regarding\s+/i,
-    /\s+because\s+/i,
-    /\s+for\s+/i,
-  ];
-
-  for (const delimiter of delimiters) {
-    const match = cleaned.match(delimiter);
-    if (!match || match.index === undefined) continue;
-
-    const namePart = cleaned.slice(0, match.index).trim();
-    const issuePart = cleaned.slice(match.index + match[0].length).trim();
-
-    if (namePart && issuePart) {
-      return {
-        name: namePart,
-        issueText: stripIssueLeadIn(issuePart),
-      };
-    }
-  }
-
-  return { name: cleaned, issueText: "" };
-}
-
-function findFallbackNameInSpeech(text) {
-  const cleaned = cleanSpeechText(text || "");
-  if (!cleaned) return "";
-
-  const patterns = [
-    /(?:^|\b)this is\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
-    /(?:^|\b)my name is\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
-    /(?:^|\b)i am\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
-    /(?:^|\b)i'm\s+([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)(?=\s+and\s+i\s+have|\s+i\s+have|\s+and\s+i've\s+got|\s+i've\s+got|\s+and\s+i\s+need|\s+i\s+need|$)/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = cleaned.match(pattern);
-    if (!match) continue;
-
-    const normalized = normalizeNameCandidate(match[1]);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return "";
 }
 
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
-  if (!original) {
-    return { name: null, issueText: "" };
-  }
+  if (!original) return { name: null, issueText: "" };
 
-  const prefixPatterns = [
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+(.+)$/i,
-    /^this is\s+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*my name is\s+(.+)$/i,
-    /^my name is\s+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*i am\s+(.+)$/i,
-    /^i am\s+(.+)$/i,
-    /^i'm\s+(.+)$/i,
+  const patterns = [
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
+
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
   ];
 
-  for (const pattern of prefixPatterns) {
-    const match = original.match(pattern);
-    if (!match) continue;
-
-    const split = splitNameAndIssueRemainder(match[1]);
-    const name = normalizeNameCandidate(split.name);
-    const issueText = cleanForSpeech(split.issueText);
-
-    if (name && issueText) {
-      return { name, issueText };
-    }
-
-    if (name) {
-      return { name, issueText: "" };
-    }
-  }
-
-  const directPatterns = [
-    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
-    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s*,?\s+and\s+i\s+have\s+(.+)$/i,
-    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-  ];
-
-  for (const pattern of directPatterns) {
+  for (const pattern of patterns) {
     const match = original.match(pattern);
     if (!match) continue;
 
@@ -277,9 +190,22 @@ function extractOpeningNameAndIssue(text) {
     }
   }
 
-  const fallbackName = findFallbackNameInSpeech(original);
-  if (fallbackName) {
-    return { name: fallbackName, issueText: cleanForSpeech(original) };
+  const nameOnlyPatterns = [
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
+  ];
+
+  for (const pattern of nameOnlyPatterns) {
+    const match = original.match(pattern);
+    if (!match) continue;
+
+    const name = normalizeNameCandidate(match[1]);
+    if (name) {
+      return { name, issueText: "" };
+    }
   }
 
   return { name: null, issueText: cleanForSpeech(original) };
@@ -410,7 +336,20 @@ function classifyIssue(issue) {
   const hasFlood = containsAny(text, ["flood", "flooding", "pooling water", "water everywhere"]);
   const hasNoWater = containsAny(text, ["no water", "lost water", "water is off", "no running water"]);
   const hasUrgentWords = containsAny(text, ["emergency", "urgent", "asap", "immediately", "right away"]);
-  const hasMainHint = containsAny(text, ["water main", "main line", "main water line", "service line", "water line break", "main pipe", "main valve", "my main", "the main", "in my main"]);
+  const hasMainHint = containsAny(text, [
+    "water main",
+    "main line",
+    "main water line",
+    "service line",
+    "water line break",
+    "main pipe",
+    "main valve",
+    "main valve leak",
+    "emergency main valve leak",
+    "my main",
+    "the main",
+    "in my main"
+  ]);
 
   if (containsAny(text, ["gas leak", "smell gas", "gas odor", "gas smell", "hissing gas", "gas line"])) {
     return {
@@ -738,46 +677,6 @@ function sendLeadToMake(caller) {
   }
 }
 
-function getRepromptForCurrentStep(caller) {
-  if (caller.lastStep === "confirm_issue") {
-    if (caller.urgency === "emergency") {
-      return `I understand this is an emergency regarding ${caller.issueSummary || "your issue"}, and I'm marking this as urgent.`;
-    }
-    return `Just so I have this right, you're calling about ${caller.issueSummary || "the issue you described"}, correct?`;
-  }
-
-  if (caller.lastStep === "ask_name") {
-    return "Can I have your full name?";
-  }
-
-  if (caller.lastStep === "confirm_callback") {
-    const spokenNumber = formatPhoneNumberForSpeech(caller.callbackNumber);
-    return `I have your callback number as ${spokenNumber}. Is this the best callback number to reach you?`;
-  }
-
-  if (caller.lastStep === "ask_callback") {
-    return "What is the best callback number to reach you?";
-  }
-
-  if (caller.lastStep === "ask_address") {
-    return "What is the address for the job?";
-  }
-
-  if (caller.lastStep === "ask_appt") {
-    return "Do you have a preferred day or time for the appointment?";
-  }
-
-  if (caller.lastStep === "anything_else") {
-    return "Is there anything else you'd like us to know before I finish this up?";
-  }
-
-  if (caller.lastStep === "capture_additional_need") {
-    return "Please tell me anything else you'd like us to know about the job.";
-  }
-
-  return "Please continue.";
-}
-
 function closeCall(twiml, caller) {
   sendLeadToMake(caller);
 
@@ -861,7 +760,9 @@ app.post("/handle-input", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      getRepromptForCurrentStep(caller)
+      caller.lastStep === "confirm_callback"
+        ? `I have your callback number as ${formatPhoneNumberForSpeech(caller.callbackNumber)}. Is this the best callback number to reach you?`
+        : "Please continue."
     );
 
     return res.type("text/xml").send(twiml.toString());
@@ -929,7 +830,6 @@ app.post("/handle-input", (req, res) => {
       }
 
       caller.lastStep = "ask_name";
-
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
@@ -940,7 +840,6 @@ app.post("/handle-input", (req, res) => {
 
     if (isNo(speech)) {
       caller.lastStep = "ask_issue";
-
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
