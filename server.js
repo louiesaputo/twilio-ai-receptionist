@@ -739,7 +739,7 @@ app.post("/incoming-call", (req, res) => {
   buildSpeechGather(
     twiml,
     `${baseUrl}/handle-input`,
-    "Thanks for calling Blue Caller Automation. What is going on today?"
+    "Blue Caller Automation. This is Alex, how can I help you??"
   );
 
   return res.type("text/xml").send(twiml.toString());
