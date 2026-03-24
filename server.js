@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V36-NAME-PATTERN-HARDENED";
+const APP_VERSION = "VOICE-FLOW-V37-SIMPLE-NAME-PARSE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -75,10 +75,7 @@ function toTitleCase(value) {
   return value
     .split(/\s+/)
     .filter(Boolean)
-    .map((word) => {
-      const lower = word.toLowerCase();
-      return lower.charAt(0).toUpperCase() + lower.slice(1);
-    })
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ");
 }
 
@@ -128,13 +125,13 @@ function normalizeNameCandidate(rawName) {
     "lawn",
     "sink",
     "faucet",
+    "valve",
     "call",
     "calling",
     "help",
     "hello",
     "hi",
-    "hey",
-    "valve"
+    "hey"
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -156,57 +153,68 @@ function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
-  const patterns = [
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
-    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+have\s+(.+)$/i,
+  const lower = original.toLowerCase();
 
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
-    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
-    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
-    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
-    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i've\s+got\s+(.+)$/i,
-
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
-    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
-    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
-    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
-    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})\s+and\s+i\s+need\s+(.+)$/i,
+  const prefixes = [
+    "this is ",
+    "my name is ",
+    "i am ",
+    "i'm "
   ];
 
-  for (const pattern of patterns) {
-    const match = original.match(pattern);
-    if (!match) continue;
+  const separators = [
+    " and i have ",
+    " and i've got ",
+    " and i need ",
+    ", and i have ",
+    ", and i've got ",
+    ", and i need ",
+    ", i have ",
+    ", i've got ",
+    ", i need "
+  ];
 
-    const name = normalizeNameCandidate(match[1]);
-    const issueText = cleanForSpeech(stripIssueLeadIn(match[2]));
+  for (const prefix of prefixes) {
+    if (!lower.startsWith(prefix)) continue;
 
-    if (name && issueText) {
-      return { name, issueText };
+    const remainder = original.slice(prefix.length);
+
+    for (const separator of separators) {
+      const idx = remainder.toLowerCase().indexOf(separator);
+      if (idx > 0) {
+        const rawName = remainder.slice(0, idx).trim();
+        const rawIssue = remainder.slice(idx + separator.length).trim();
+
+        const name = normalizeNameCandidate(rawName);
+        const issueText = cleanForSpeech(stripIssueLeadIn(rawIssue));
+
+        console.log("[OPENING PARSE]", {
+          original,
+          rawName,
+          rawIssue,
+          parsedName: name,
+          parsedIssue: issueText
+        });
+
+        if (name && issueText) {
+          return { name, issueText };
+        }
+      }
+    }
+
+    const maybeName = normalizeNameCandidate(remainder);
+    console.log("[OPENING NAME ONLY]", {
+      original,
+      remainder,
+      parsedName: maybeName
+    });
+
+    if (maybeName) {
+      return { name: maybeName, issueText: "" };
     }
   }
 
-  const nameOnlyPatterns = [
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
-    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
-    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
-    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
-    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,2})$/i,
-  ];
-
-  for (const pattern of nameOnlyPatterns) {
-    const match = original.match(pattern);
-    if (!match) continue;
-
-    const name = normalizeNameCandidate(match[1]);
-    if (name) {
-      return { name, issueText: "" };
-    }
-  }
+  console.log("[OPENING FALLBACK]", { original });
 
   return { name: null, issueText: cleanForSpeech(original) };
 }
@@ -429,163 +437,11 @@ function classifyIssue(issue) {
     };
   }
 
-  if (containsAny(text, ["kitchen faucet"]) && hasLeak) {
-    return {
-      category: "kitchen_faucet_leak",
-      summary: "a leak in your kitchen faucet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["bathroom faucet"]) && hasLeak) {
-    return {
-      category: "bathroom_faucet_leak",
-      summary: "a leak in your bathroom faucet",
-      urgency: "non-emergency",
-    };
-  }
-
   if (containsAny(text, ["faucet", "tap", "spigot"]) && hasLeak) {
     return {
       category: "faucet_leak",
       summary: "a leak in your faucet",
       urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["under the sink", "under my sink", "under sink", "cabinet"]) && hasLeak) {
-    return {
-      category: "under_sink_leak",
-      summary: "a leak under your sink",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["dishwasher"]) && hasLeak) {
-    return {
-      category: "dishwasher_leak",
-      summary: "a leaking dishwasher",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["washing machine", "washer", "laundry room"]) && hasLeak) {
-    return {
-      category: "washer_leak",
-      summary: "a leaking washing machine",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["refrigerator", "fridge", "ice maker", "icemaker"]) && hasLeak) {
-    return {
-      category: "fridge_line_leak",
-      summary: "a leak from your refrigerator water line",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["garbage disposal", "disposal"]) && hasLeak) {
-    return {
-      category: "garbage_disposal_leak",
-      summary: "a leaking garbage disposal",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["garbage disposal", "disposal"]) && containsAny(text, ["jam", "stuck", "not working", "humming"])) {
-    return {
-      category: "garbage_disposal_jam",
-      summary: "a garbage disposal that is jammed or not working",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet"]) && containsAny(text, ["clog", "clogged"])) {
-    return {
-      category: "toilet_clog",
-      summary: "a clogged toilet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet"]) && containsAny(text, ["running"])) {
-    return {
-      category: "toilet_running",
-      summary: "a toilet that is running constantly",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet"]) && hasLeak) {
-    return {
-      category: "toilet_leak",
-      summary: "a leak in or around your toilet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["drain", "sink drain", "shower drain", "tub drain", "floor drain"]) && containsAny(text, ["clog", "clogged", "slow", "backed up"])) {
-    return {
-      category: "drain_clog",
-      summary: "a clogged or backed-up drain",
-      urgency: containsAny(text, ["backed up", "overflow", "overflowing"]) ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["sewer smell", "smell sewage", "drain smell"])) {
-    return {
-      category: "drain_odor",
-      summary: "a sewer or drain odor issue",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["hose bib", "hose bibb", "spigot", "outside faucet", "outdoor faucet"]) && hasLeak) {
-    return {
-      category: "outdoor_spigot_leak",
-      summary: "a leak in your outdoor faucet or spigot",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["low water pressure", "weak pressure", "pressure is low"])) {
-    return {
-      category: "low_pressure",
-      summary: "a low water pressure issue",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (hasNoWater) {
-    return {
-      category: "no_water",
-      summary: "a loss of water service",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["flood", "flooding", "water everywhere", "pooling water", "kitchen is flooding"])) {
-    return {
-      category: "flooding",
-      summary: "flooding or pooling water",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["boiler"]) && containsAny(text, ["no heat", "not working", "leak"])) {
-    return {
-      category: "boiler_issue",
-      summary: "a boiler issue",
-      urgency: containsAny(text, ["no heat", "leak"]) ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["heat"]) && containsAny(text, ["not working", "no heat"])) {
-    return {
-      category: "heating_issue",
-      summary: "a heating system that is not working",
-      urgency: "emergency",
     };
   }
 
@@ -602,14 +458,6 @@ function classifyIssue(issue) {
       category: "generic_leak",
       summary: "a leak",
       urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["not working", "broken"])) {
-    return {
-      category: "generic_not_working",
-      summary: "something that is not working properly",
-      urgency: "non-emergency",
     };
   }
 
