@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V38-NAME-CAPTURE-HARD-FIX";
+const APP_VERSION = "VOICE-FLOW-V39-NAME-AND-SUMMARY-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -62,8 +62,13 @@ function cleanName(input) {
   return cleanForSpeech(input)
     .replace(/^my name is\s+/i, "")
     .replace(/^this is\s+/i, "")
+    .replace(/^it's\s+/i, "")
+    .replace(/^it is\s+/i, "")
     .replace(/^i am\s+/i, "")
     .replace(/^i'm\s+/i, "")
+    .replace(/^hi[, ]+\s*/i, "")
+    .replace(/^hello[, ]+\s*/i, "")
+    .replace(/^hey[, ]+\s*/i, "")
     .replace(/^mr\.?\s+/i, "")
     .replace(/^mrs\.?\s+/i, "")
     .replace(/^ms\.?\s+/i, "")
@@ -161,9 +166,11 @@ function extractNameFromIntro(text) {
 
   const patterns = [
     /(?:^|[,.]\s*)(?:hi|hello|hey)?\s*this is\s+(.+)$/i,
+    /(?:^|[,.]\s*)(?:hi|hello|hey)?\s*it's\s+(.+)$/i,
+    /(?:^|[,.]\s*)(?:hi|hello|hey)?\s*it is\s+(.+)$/i,
     /(?:^|[,.]\s*)my name is\s+(.+)$/i,
-    /(?:^|[,.]\s*)i am\s+(.+)$/i,
-    /(?:^|[,.]\s*)i'm\s+(.+)$/i,
+    /(?:^|[,.]\s*)(?:hi|hello|hey)?\s*i am\s+(.+)$/i,
+    /(?:^|[,.]\s*)(?:hi|hello|hey)?\s*i'm\s+(.+)$/i,
   ];
 
   const stops = [
@@ -173,6 +180,10 @@ function extractNameFromIntro(text) {
     /\s+i've\s+got\s+/i,
     /\s+and\s+i\s+need\s+/i,
     /\s+i\s+need\s+/i,
+    /\s+calling\s+about\s+/i,
+    /\s+calling\s+with\s+/i,
+    /\s+calling\s+for\s+/i,
+    /\s+calling\s+regarding\s+/i,
     /\.\s+/,
     /,\s+/,
   ];
@@ -197,6 +208,22 @@ function extractNameFromIntro(text) {
     }
   }
 
+  const directNamePatterns = [
+    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+calling\s+(?:about|with|for|regarding)\s+/i,
+    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s*,\s*and\s+i\s+have\s+/i,
+    /^([a-zA-Z'-]+\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+)?)\s+and\s+i\s+have\s+/i,
+  ];
+
+  for (const pattern of directNamePatterns) {
+    const match = original.match(pattern);
+    if (!match) continue;
+
+    const normalized = normalizeNameCandidate(match[1]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
   return "";
 }
 
@@ -212,6 +239,10 @@ function extractIssueFromIntro(text) {
     " i've got ",
     " and i need ",
     " i need ",
+    " calling about ",
+    " calling with ",
+    " calling for ",
+    " calling regarding ",
   ];
 
   for (const marker of markers) {
@@ -221,7 +252,6 @@ function extractIssueFromIntro(text) {
     }
   }
 
-  // Sentence fallback: if they say "my name is John Smith. I have..."
   const sentenceMatch = original.match(/[.]\s*(i have|i've got|i need)\s+(.+)$/i);
   if (sentenceMatch) {
     return stripIssueLeadIn(sentenceMatch[2]);
@@ -440,6 +470,46 @@ function classifyIssue(issue) {
       category: "slab_leak",
       summary: "a possible slab leak",
       urgency: "emergency",
+    };
+  }
+
+  if (containsAny(text, ["water heater"]) && containsAny(text, ["leak", "leaking"])) {
+    return {
+      category: "water_heater_leak",
+      summary: "a leak in your water heater",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["kitchen faucet"]) && hasLeak) {
+    return {
+      category: "kitchen_faucet_leak",
+      summary: "a leak in your kitchen faucet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["bathroom faucet"]) && hasLeak) {
+    return {
+      category: "bathroom_faucet_leak",
+      summary: "a leak in your bathroom faucet",
+      urgency: "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["under the sink", "under my sink", "under sink", "cabinet"]) && hasLeak) {
+    return {
+      category: "under_sink_leak",
+      summary: "a leak under your sink",
+      urgency: hasFlood ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["faucet", "tap", "spigot"]) && hasLeak) {
+    return {
+      category: "faucet_leak",
+      summary: "a leak in your faucet",
+      urgency: "non-emergency",
     };
   }
 
