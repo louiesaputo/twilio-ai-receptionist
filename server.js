@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V40-DEMO-INTRO";
+const APP_VERSION = "VOICE-FLOW-V41-END-DEMO-HOOK";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -36,6 +36,10 @@ function getOrCreateCaller(phone) {
       additionalNeed: null,
       status: null,
       leadType: null,
+      demoRequested: false,
+      demoName: null,
+      demoPhone: null,
+      demoEmail: null,
       lastStep: null,
       retryCount: 0,
       makeSent: false,
@@ -345,6 +349,19 @@ function isPricingQuestion(text) {
   );
 }
 
+function isDemoRequest(text) {
+  const t = (text || "").toLowerCase();
+  return (
+    t.includes("book a call") ||
+    t.includes("book call") ||
+    t.includes("schedule a call") ||
+    t.includes("book a demo") ||
+    t.includes("schedule a demo") ||
+    t.includes("i want a demo") ||
+    t.includes("i want to learn more")
+  );
+}
+
 function pricingResponse() {
   return "Each job is different, so pricing depends on the details of the work. One of our team members will go over pricing with you when they follow up.";
 }
@@ -555,7 +572,7 @@ function classifyIssue(issue) {
 }
 
 function sendLeadToMake(caller) {
-  if (caller.makeSent) {
+  if (caller.makeSent && caller.leadType !== "demo_request") {
     console.log("[MAKE] Skipped duplicate send");
     return;
   }
@@ -579,6 +596,10 @@ function sendLeadToMake(caller) {
       appointmentTime: caller.appointmentTime || "",
       additionalNeed: caller.additionalNeed || "",
       status: caller.status || "",
+      demoRequested: caller.demoRequested === true,
+      demoName: caller.demoName || "",
+      demoPhone: caller.demoPhone || "",
+      demoEmail: caller.demoEmail || "",
     });
 
     const url = new URL(MAKE_WEBHOOK_URL);
@@ -604,7 +625,10 @@ function sendLeadToMake(caller) {
     makeReq.write(data);
     makeReq.end();
 
-    caller.makeSent = true;
+    if (caller.leadType !== "demo_request") {
+      caller.makeSent = true;
+    }
+
     console.log("[MAKE] Lead sent");
   } catch (err) {
     console.error("[MAKE ERROR]", err.message);
@@ -612,8 +636,6 @@ function sendLeadToMake(caller) {
 }
 
 function closeCall(twiml, caller) {
-  sendLeadToMake(caller);
-
   twiml.say(
     { voice: "alice" },
     `Thank you ${caller.firstName || ""}. Someone will follow up with you shortly. Have a great day.`
@@ -647,6 +669,10 @@ app.post("/incoming-call", (req, res) => {
   caller.additionalNeed = null;
   caller.status = "in_progress";
   caller.leadType = null;
+  caller.demoRequested = false;
+  caller.demoName = null;
+  caller.demoPhone = null;
+  caller.demoEmail = null;
   caller.lastStep = "ask_issue";
   caller.retryCount = 0;
   caller.makeSent = false;
@@ -686,6 +712,19 @@ app.post("/handle-input", (req, res) => {
 
   caller.retryCount = 0;
 
+  if (isDemoRequest(speech) && !caller.demoRequested) {
+    caller.demoRequested = true;
+    caller.leadType = "demo_request";
+    caller.lastStep = "demo_name";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "Absolutely. I can help with that. What is your name?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
   if (isPricingQuestion(speech)) {
     twiml.say({ voice: "alice" }, pricingResponse());
 
@@ -697,6 +736,49 @@ app.post("/handle-input", (req, res) => {
         : "Please continue."
     );
 
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "demo_name") {
+    caller.demoName = toTitleCase(cleanName(speech));
+    caller.lastStep = "demo_phone";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "What is the best phone number to reach you?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "demo_phone") {
+    caller.demoPhone = cleanForSpeech(speech);
+    caller.lastStep = "demo_email";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "What is the best email address to send details to, if you'd like to leave one?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "demo_email") {
+    const lower = speech.toLowerCase();
+
+    if (lower.includes("no") || lower.includes("rather not") || lower.includes("don't want")) {
+      caller.demoEmail = "";
+    } else {
+      caller.demoEmail = cleanForSpeech(speech);
+    }
+
+    sendLeadToMake(caller);
+
+    twiml.say(
+      { voice: "alice" },
+      "Perfect. I have everything I need. Someone will reach out to you soon to show you how this could work for your business. Thank you for trying the Blue Caller Automation demo."
+    );
+    twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
 
@@ -925,11 +1007,39 @@ app.post("/handle-input", (req, res) => {
 
   if (caller.lastStep === "anything_else") {
     if (isNo(speech)) {
-      closeCall(twiml, caller);
+      caller.lastStep = "offer_demo_hook";
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Before we wrap up, would you like to book a follow-up call to learn how this AI receptionist could work for your business?"
+      );
       return res.type("text/xml").send(twiml.toString());
     }
 
     caller.additionalNeed = cleanForSpeech(speech);
+    caller.lastStep = "offer_demo_hook";
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "Before we wrap up, would you like to book a follow-up call to learn how this AI receptionist could work for your business?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "offer_demo_hook") {
+    if (isYes(speech)) {
+      caller.demoRequested = true;
+      caller.leadType = "demo_request";
+      caller.lastStep = "demo_name";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "Great. What is your name?"
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     closeCall(twiml, caller);
     return res.type("text/xml").send(twiml.toString());
   }
