@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V42-CONFIRMATIONS-FIRST-AVAILABLE";
+const APP_VERSION = "VOICE-FLOW-V43-PHONE-FIX-EMERGENCY-DETAILS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -141,7 +141,7 @@ function normalizeNameCandidate(rawName) {
     "call",
     "calling",
     "demo",
-    "schedule"
+    "schedule",
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -253,10 +253,6 @@ function formatPhoneNumberForSpeech(phone) {
   }
 
   if (!digits) return "unknown";
-
-  if (digits.length === 10) {
-    return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
-  }
 
   return digits.split("").join(" ");
 }
@@ -427,6 +423,20 @@ function cleanEmail(input) {
   cleaned = cleaned.replace(/@+/g, "@");
 
   return cleaned;
+}
+
+function isBareEmergencyOnly(text) {
+  const t = (text || "").toLowerCase().trim();
+  return (
+    t === "emergency" ||
+    t === "it's an emergency" ||
+    t === "it is an emergency" ||
+    t === "this is an emergency" ||
+    t === "urgent" ||
+    t === "it's urgent" ||
+    t === "it is urgent" ||
+    t === "this is urgent"
+  );
 }
 
 function classifyIssue(issue) {
@@ -783,6 +793,10 @@ function sendLeadToMake(caller) {
 }
 
 function getRepromptForCurrentStep(caller) {
+  if (caller.lastStep === "ask_emergency_details") {
+    return "I understand this is urgent. Please tell me a little more about what is going on.";
+  }
+
   if (caller.lastStep === "confirm_issue") {
     if (caller.urgency === "emergency") {
       return `I have this marked as urgent for ${caller.issueSummary || "your issue"}. Is that correct?`;
@@ -831,7 +845,7 @@ function getRepromptForCurrentStep(caller) {
   }
 
   if (caller.lastStep === "ask_demo_name") {
-    return "Absolutely. May I have your full name?";
+    return "Absolutely. I can help with that. May I have your full name?";
   }
 
   if (caller.lastStep === "confirm_demo_name") {
@@ -985,6 +999,19 @@ app.post("/handle-input", (req, res) => {
 
     caller.issue = cleanForSpeech(parsedOpening.issueText || speech);
 
+    if (isBareEmergencyOnly(caller.issue)) {
+      caller.urgency = "emergency";
+      caller.emergencyAlert = true;
+      caller.lastStep = "ask_emergency_details";
+
+      buildSpeechGather(
+        twiml,
+        `${baseUrl}/handle-input`,
+        "I understand this is urgent. Please tell me a little more about what is going on."
+      );
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     const classification = classifyIssue(caller.issue);
     caller.issueSummary = buildNaturalIssueSummary(caller.issue, classification);
     caller.issueCategory = classification.category;
@@ -1006,6 +1033,24 @@ app.post("/handle-input", (req, res) => {
       );
     }
 
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "ask_emergency_details") {
+    caller.issue = cleanForSpeech(speech);
+
+    const classification = classifyIssue(caller.issue);
+    caller.issueSummary = buildNaturalIssueSummary(caller.issue, classification);
+    caller.issueCategory = classification.category;
+    caller.urgency = "emergency";
+    caller.emergencyAlert = true;
+    caller.lastStep = "confirm_issue";
+
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      `I understand this sounds urgent, and I am marking it that way. Just to confirm, you are calling about ${caller.issueSummary}. Is that correct?`
+    );
     return res.type("text/xml").send(twiml.toString());
   }
 
