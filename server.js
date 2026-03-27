@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V52-CLASSIFIER-FIX";
+const APP_VERSION = "VOICE-FLOW-V53-HUMAN-FLOW";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -122,11 +122,9 @@ function isEndCallPhrase(text) {
   return containsAny(t, ["no","that's all","nothing else","i'm good","all set"]);
 }
 
-/* FIXED ISSUE CLASSIFIER */
 function classifyIssue(issue) {
   const text = normalizedText(issue);
 
-  // EMERGENCIES
   if (containsAny(text, ["burst pipe","pipe burst"])) {
     return { summary: "a burst pipe", urgency: "emergency" };
   }
@@ -135,11 +133,10 @@ function classifyIssue(issue) {
     return { summary: "a sewer backup", urgency: "emergency" };
   }
 
-  if (containsAny(text, ["house is flooding","home is flooding","flooding"])) {
+  if (containsAny(text, ["flood","flooding"])) {
     return { summary: "flooding", urgency: "emergency" };
   }
 
-  // UNCLEAR POSSIBLE EMERGENCY
   if (
     (text.includes("pooling") || text.includes("standing water")) &&
     (text.includes("yard") || text.includes("outside") || text.includes("ground"))
@@ -147,27 +144,22 @@ function classifyIssue(issue) {
     return { summary: "water pooling in your yard", urgency: "unclear" };
   }
 
-  // ROOF LEAK
   if (text.includes("roof") && text.includes("leak")) {
     return { summary: "a roof leak", urgency: "non-emergency" };
   }
 
-  // FAUCET / SINK
   if ((text.includes("faucet") || text.includes("sink")) && text.includes("leak")) {
     return { summary: "a leaking faucet", urgency: "non-emergency" };
   }
 
-  // WATER HEATER
   if (text.includes("water heater") && text.includes("leak")) {
     return { summary: "a leaking water heater", urgency: "non-emergency" };
   }
 
-  // DRAIN
   if (containsAny(text, ["clog","clogged","drain"])) {
     return { summary: "a clogged drain", urgency: "non-emergency" };
   }
 
-  // GENERIC LEAK
   if (text.includes("leak")) {
     return { summary: "a water leak", urgency: "non-emergency" };
   }
@@ -230,7 +222,6 @@ function buildAndSend(twiml, res, baseUrl, text) {
   return res.type("text/xml").send(twiml.toString());
 }
 
-/* INCOMING CALL */
 app.post("/incoming-call", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const baseUrl = getBaseUrl(req);
@@ -254,7 +245,6 @@ app.post("/incoming-call", (req, res) => {
   );
 });
 
-/* HANDLE INPUT */
 app.post("/handle-input", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const baseUrl = getBaseUrl(req);
@@ -288,7 +278,7 @@ app.post("/handle-input", (req, res) => {
     caller.lastStep = "ask_name";
     return buildAndSend(
       twiml, res, baseUrl,
-      `I can definitely help you with that. So this is ${caller.issueSummary}, correct? Can I start by getting your full name, please?`
+      "Alright, I can definitely help you with that. Can I start by getting your full name, please?"
     );
   }
 
@@ -349,11 +339,10 @@ app.post("/handle-input", (req, res) => {
     caller.address = normalizeAddressInput(speech);
     caller.lastStep = "ask_notes";
 
-    const prompt = caller.emergencyAlert
-      ? "Before I submit this emergency call, are there any special notes I need to add to your case?"
-      : "Got it. Before I submit this service call, are there any special notes I need to add to your case?";
-
-    return buildAndSend(twiml, res, baseUrl, prompt);
+    return buildAndSend(
+      twiml, res, baseUrl,
+      "Before I submit this, are there any notes or details you'd like me to add for the technician?"
+    );
   }
 
   if (caller.lastStep === "ask_notes") {
@@ -365,7 +354,7 @@ app.post("/handle-input", (req, res) => {
 
     const recap = caller.emergencyAlert
       ? `Okay, just to recap, I am marking this as an emergency for ${caller.issueSummary}, and I'm submitting it for review now. Someone from our service team will contact you shortly. Is there anything else I can do for you today?`
-      : `Okay, just to recap, I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will give you a call shortly to go over this and get you scheduled. Is there anything else I can add to your case before I submit this?`;
+      : `Okay, just to recap, I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will give you a call shortly to go over this and get you scheduled. Is there anything else I can add before I submit this?`;
 
     return buildAndSend(twiml, res, baseUrl, recap);
   }
