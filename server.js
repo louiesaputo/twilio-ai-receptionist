@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V45-FIXED-COMPLETE";
+const APP_VERSION = "VOICE-FLOW-V46-ADDRESS-CLEANUP-NO-END-DEMO-PITCH";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -317,6 +317,17 @@ function formatEmailForSpeech(email) {
     .replace(/_/g, " underscore ")
     .replace(/-/g, " dash ")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeAddressInput(input) {
+  if (!input) return "";
+  return cleanForSpeech(input)
+    .replace(/\bperiod\b/gi, "")
+    .replace(/\bcomma\b/gi, "")
+    .replace(/\s+\.\s*/g, " ")
+    .replace(/\s+,/g, ",")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
@@ -832,7 +843,7 @@ function closeCall(twiml, caller) {
   if (caller.quoteRequested) {
     twiml.say(
       { voice: "alice" },
-      `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. We have everything we need and someone from the office will reach out to discuss your quote request. If you would like to see how this system could work for your company, you can say book a demo at any time. Have a great day.`
+      `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. We have everything we need and someone from the office will reach out to discuss your quote request. Have a great day.`
     );
     twiml.hangup();
     return;
@@ -841,7 +852,7 @@ function closeCall(twiml, caller) {
   if (caller.emergencyAlert) {
     twiml.say(
       { voice: "alice" },
-      `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. I have everything I need and I am passing this along now. Someone will contact you shortly. If you would like to see how this system could work for your company, you can say book a demo at any time. Take care.`
+      `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. I have everything I need and I am passing this along now. Someone will contact you shortly. Take care.`
     );
     twiml.hangup();
     return;
@@ -849,7 +860,7 @@ function closeCall(twiml, caller) {
 
   twiml.say(
     { voice: "alice" },
-    `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. We have everything we need and someone from the office will give you a call shortly. If you would like to see how this system could work for your company, you can say book a demo at any time. Have a great day.`
+    `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. We have everything we need and someone from the office will give you a call shortly. Have a great day.`
   );
   twiml.hangup();
 }
@@ -1135,7 +1146,7 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "ask_address") {
-    caller.address = cleanForSpeech(speech);
+    caller.address = normalizeAddressInput(speech);
 
     if (caller.quoteRequested) {
       caller.lastStep = "ask_quote_timeline";
