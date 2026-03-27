@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V46-ADDRESS-CLEANUP-NO-END-DEMO-PITCH";
+const APP_VERSION = "VOICE-FLOW-V47-ADDRESS-DEDUPE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -322,13 +322,27 @@ function formatEmailForSpeech(email) {
 
 function normalizeAddressInput(input) {
   if (!input) return "";
-  return cleanForSpeech(input)
+
+  let value = cleanForSpeech(input)
     .replace(/\bperiod\b/gi, "")
     .replace(/\bcomma\b/gi, "")
-    .replace(/\s+\.\s*/g, " ")
-    .replace(/\s+,/g, ",")
+    .replace(/\bdot\b/gi, "")
+    .replace(/[.,]+$/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+
+  // Fix "2 248 lake street" -> "248 lake street"
+  value = value.replace(/^(\d)\s+(\d{2,})(\b.*)$/i, (match, first, second, rest) => {
+    if (second.startsWith(first)) {
+      return `${second}${rest}`;
+    }
+    return match;
+  });
+
+  // Fix "248 248 lake street" -> "248 lake street"
+  value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
+
+  return value.trim();
 }
 
 function containsAny(text, phrases) {
