@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V45-NATURAL-FLOW-DEMO-QUOTE";
+const APP_VERSION = "VOICE-FLOW-V45-FIXED-COMPLETE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -250,6 +250,74 @@ function extractOpeningNameAndIssue(text) {
   }
 
   return { name: null, issueText: original };
+}
+
+function getBaseUrl(req) {
+  const proto = req.get("x-forwarded-proto") || "https";
+  return `${proto}://${req.get("host")}`;
+}
+
+function addPause(twiml, ms = 700) {
+  twiml.pause({ length: Math.max(1, Math.round(ms / 1000)) });
+}
+
+function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
+  const gather = twiml.gather({
+    input: "speech",
+    action: actionUrl,
+    method: "POST",
+    speechTimeout: options.speechTimeout || 3,
+    timeout: options.timeout || 10,
+    actionOnEmptyResult: true,
+    language: "en-US",
+  });
+
+  gather.say({ voice: "alice" }, prompt);
+}
+
+function formatPhoneNumberForSpeech(phone) {
+  if (!phone) return "unknown";
+
+  let digits = String(phone).replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.startsWith("1")) {
+    digits = digits.substring(1);
+  }
+
+  if (!digits) return "unknown";
+  return digits.split("").join(" ");
+}
+
+function cleanEmail(input) {
+  if (!input) return "";
+
+  let cleaned = String(input).toLowerCase().trim();
+
+  cleaned = cleaned
+    .replace(/\s+at\s+/g, "@")
+    .replace(/\s+dot\s+/g, ".")
+    .replace(/\s+underscore\s+/g, "_")
+    .replace(/\s+dash\s+/g, "-")
+    .replace(/\s+hyphen\s+/g, "-")
+    .replace(/\s+/g, "")
+    .replace(/,+/g, "")
+    .replace(/;+?/g, "")
+    .replace(/:+/g, "");
+
+  cleaned = cleaned.replace(/@+/g, "@");
+  return cleaned;
+}
+
+function formatEmailForSpeech(email) {
+  if (!email) return "unknown";
+
+  return email
+    .replace(/@/g, " at ")
+    .replace(/\./g, " dot ")
+    .replace(/_/g, " underscore ")
+    .replace(/-/g, " dash ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function containsAny(text, phrases) {
@@ -1011,18 +1079,8 @@ app.post("/handle-input", (req, res) => {
   if (caller.lastStep === "ask_name" || caller.lastStep === "ask_emergency_name") {
     caller.name = toTitleCase(cleanName(speech));
     caller.firstName = getFirstName(caller.name);
-
-    if (caller.quoteRequested) {
-      caller.lastStep = "confirm_callback";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `Thank you, ${caller.firstName || caller.name}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
     caller.lastStep = "confirm_callback";
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
