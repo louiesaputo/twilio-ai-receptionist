@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V50-RECEPTIONIST-FINAL";
+const APP_VERSION = "VOICE-FLOW-V51-RECEPTIONIST-FINAL-WITH-DEMO";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -35,9 +35,6 @@ function getOrCreateCaller(phone) {
       unclearEmergency: false,
 
       notes: null,
-
-      demoRequested: false,
-      quoteRequested: false,
 
       status: null,
       leadType: null,
@@ -142,47 +139,38 @@ function isNegative(text) {
 
 function isEndCallPhrase(text) {
   const t = normalizedText(text);
-  return containsAny(t, ["no","that's all","that is all","nothing else","i'm good","all set"]);
+  return containsAny(t, ["no","that's all","nothing else","i'm good","all set"]);
 }
-
-/* -------- ISSUE CLASSIFICATION -------- */
 
 function classifyIssue(issue) {
   const text = normalizedText(issue);
 
   if (containsAny(text, ["burst pipe","pipe burst"])) {
-    return { category: "burst_pipe", summary: "a burst pipe", urgency: "emergency" };
+    return { summary: "a burst pipe", urgency: "emergency" };
   }
 
   if (containsAny(text, ["sewer","backup","sewage"])) {
-    return { category: "sewer_backup", summary: "a sewer backup", urgency: "emergency" };
+    return { summary: "a sewer backup", urgency: "emergency" };
   }
 
   if (containsAny(text, ["flood","flooding"])) {
-    return { category: "flooding", summary: "flooding", urgency: "emergency" };
+    return { summary: "flooding", urgency: "emergency" };
   }
 
-  if (containsAny(text, ["water heater","leak"])) {
-    return { category: "water_heater_leak", summary: "a leaking water heater", urgency: "non-emergency" };
+  if (containsAny(text, ["water","pooling","yard","outside","ground"])) {
+    return { summary: "water pooling in your yard", urgency: "unclear" };
   }
 
   if (containsAny(text, ["faucet","sink"]) && text.includes("leak")) {
-    return { category: "faucet_leak", summary: "a leaking faucet", urgency: "non-emergency" };
+    return { summary: "a leaking faucet", urgency: "non-emergency" };
   }
 
   if (containsAny(text, ["clog","clogged","drain"])) {
-    return { category: "drain_clog", summary: "a clogged drain", urgency: "non-emergency" };
+    return { summary: "a clogged drain", urgency: "non-emergency" };
   }
 
-  // UNCLEAR BUT POSSIBLE EMERGENCY
-  if (containsAny(text, ["water","pooling","yard","outside","ground"])) {
-    return { category: "unclear_water", summary: "water pooling in your yard", urgency: "unclear" };
-  }
-
-  return { category: "generic", summary: "your service issue", urgency: "non-emergency" };
+  return { summary: "your service issue", urgency: "non-emergency" };
 }
-
-/* -------- SEND TO MAKE -------- */
 
 function sendLeadToMake(caller) {
   if (caller.makeSent) return;
@@ -190,9 +178,8 @@ function sendLeadToMake(caller) {
   try {
     const data = JSON.stringify({
       timestamp: new Date().toISOString(),
-      leadType: caller.leadType,
       phone: caller.phone,
-      fullName: caller.name,
+      name: caller.name,
       address: caller.address,
       issueSummary: caller.issueSummary,
       emergency: caller.emergencyAlert,
@@ -221,8 +208,6 @@ function sendLeadToMake(caller) {
   }
 }
 
-/* -------- TWILIO HELPERS -------- */
-
 function getBaseUrl(req) {
   const proto = req.get("x-forwarded-proto") || "https";
   return `${proto}://${req.get("host")}`;
@@ -240,8 +225,6 @@ function buildSpeechGather(twiml, actionUrl, prompt) {
   gather.say({ voice: "alice" }, prompt);
 }
 
-/* -------- CALL ROUTES -------- */
-
 app.post("/incoming-call", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const baseUrl = getBaseUrl(req);
@@ -252,10 +235,16 @@ app.post("/incoming-call", (req, res) => {
 
   twiml.say(
     { voice: "alice" },
-    "Thank you for calling Blue Caller Automation, this is Alex. How can I help you today?"
+    "Thank you for calling Blue Caller Automation. This is Alex, our automated receptionist demo. Please speak to me just like one of your customers would if they were calling to book a service call or request a quote. Let's get this demo started."
   );
 
-  buildSpeechGather(twiml, `${baseUrl}/handle-input`, "");
+  twiml.pause({ length: 1 });
+
+  buildSpeechGather(
+    twiml,
+    `${baseUrl}/handle-input`,
+    "Thank you for calling Blue Caller Automation, this is Alex. How can I help you today?"
+  );
 
   return res.type("text/xml").send(twiml.toString());
 });
@@ -276,53 +265,43 @@ app.post("/handle-input", (req, res) => {
       caller.emergencyAlert = true;
       caller.lastStep = "ask_name";
 
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `I'm sorry you're dealing with that. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
+      return buildAndSend(
+        twiml, res, baseUrl,
+        "I'm sorry you're dealing with that. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?"
       );
-      return res.type("text/xml").send(twiml.toString());
     }
 
     if (classification.urgency === "unclear") {
-      caller.unclearEmergency = true;
       caller.lastStep = "unclear_emergency";
 
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
+      return buildAndSend(
+        twiml, res, baseUrl,
         `Alright, so you have ${caller.issueSummary}. If you'd like, I can mark this as an emergency and have someone get back to you as soon as possible.`
       );
-      return res.type("text/xml").send(twiml.toString());
     }
 
     caller.lastStep = "ask_name";
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I can definitely help you with that. Can I start by getting your full name, please?`
+    return buildAndSend(
+      twiml, res, baseUrl,
+      "I can definitely help you with that. Can I start by getting your full name, please?"
     );
-    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "unclear_emergency") {
+    caller.lastStep = "ask_name";
+
     if (isAffirmative(speech)) {
       caller.emergencyAlert = true;
-      caller.lastStep = "ask_name";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `Alright, I've got this marked as an emergency. Can I start by getting your full name, please?`
-      );
-    } else {
-      caller.lastStep = "ask_name";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `Alright, no problem. Can I start by getting your full name, please?`
+      return buildAndSend(
+        twiml, res, baseUrl,
+        "Alright, I've got this marked as an emergency. Can I start by getting your full name, please?"
       );
     }
-    return res.type("text/xml").send(twiml.toString());
+
+    return buildAndSend(
+      twiml, res, baseUrl,
+      "Alright, no problem. Can I start by getting your full name, please?"
+    );
   }
 
   if (caller.lastStep === "ask_name") {
@@ -330,44 +309,35 @@ app.post("/handle-input", (req, res) => {
     caller.firstName = getFirstName(caller.name);
     caller.lastStep = "confirm_phone";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
+    return buildAndSend(
+      twiml, res, baseUrl,
       `Thank you, ${caller.firstName}. I'm showing your phone number as ${formatPhoneNumberForSpeech(caller.callbackNumber)}. Is that a good number to reach you?`
     );
-    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "confirm_phone") {
     if (isNegative(speech)) {
       caller.lastStep = "get_new_phone";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `No problem. What's the best number to reach you?`
+      return buildAndSend(
+        twiml, res, baseUrl,
+        "No problem. What's the best number to reach you?"
       );
-      return res.type("text/xml").send(twiml.toString());
     }
 
     caller.lastStep = "ask_address";
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `What is the service address?`
+    return buildAndSend(
+      twiml, res, baseUrl,
+      "What is the service address?"
     );
-    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "get_new_phone") {
     caller.callbackNumber = speech;
     caller.lastStep = "ask_address";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `What is the service address?`
+    return buildAndSend(
+      twiml, res, baseUrl,
+      "What is the service address?"
     );
-    return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_address") {
@@ -378,8 +348,7 @@ app.post("/handle-input", (req, res) => {
       ? "Before I submit this emergency call, are there any special notes I need to add to your case?"
       : "Got it. Before I submit this service call, are there any special notes I need to add to your case?";
 
-    buildSpeechGather(twiml, `${baseUrl}/handle-input`, prompt);
-    return res.type("text/xml").send(twiml.toString());
+    return buildAndSend(twiml, res, baseUrl, prompt);
   }
 
   if (caller.lastStep === "ask_notes") {
@@ -393,8 +362,7 @@ app.post("/handle-input", (req, res) => {
       ? `Okay, just to recap and make sure I have everything in here correctly, I am marking this as an emergency for ${caller.issueSummary}, and I'm submitting it for review now. Someone from our service team will contact you shortly. Is there anything else I can do for you today?`
       : `Okay, just to recap, I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will give you a call shortly to go over this and get you scheduled. Is there anything else I can add to your case before I submit this?`;
 
-    buildSpeechGather(twiml, `${baseUrl}/handle-input`, recap);
-    return res.type("text/xml").send(twiml.toString());
+    return buildAndSend(twiml, res, baseUrl, recap);
   }
 
   if (caller.lastStep === "recap") {
@@ -417,6 +385,20 @@ app.post("/handle-input", (req, res) => {
   twiml.hangup();
   return res.type("text/xml").send(twiml.toString());
 });
+
+function buildAndSend(twiml, res, baseUrl, text) {
+  const gather = twiml.gather({
+    input: "speech",
+    action: `${baseUrl}/handle-input`,
+    method: "POST",
+    speechTimeout: 3,
+    timeout: 10,
+    language: "en-US",
+  });
+
+  gather.say({ voice: "alice" }, text);
+  return res.type("text/xml").send(twiml.toString());
+}
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
