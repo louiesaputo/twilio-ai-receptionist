@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V55-NAME-CAPTURE-FIX";
+const APP_VERSION = "VOICE-FLOW-V56-ALEX-GREETING-NAME-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -143,6 +143,7 @@ function normalizeNameCandidate(rawName) {
     "quote",
     "estimate",
     "project",
+    "alex",
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -173,6 +174,13 @@ function extractOpeningNameAndIssue(text) {
   if (!original) return { name: null, issueText: "" };
 
   const patterns = [
+    // "Hi Alex, this is John Smith and I have..."
+    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+
+    // Existing patterns
     /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^(?:hi|hello|hey)\s*,?\s*it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
@@ -389,7 +397,7 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller, normalPrompt, emerge
       ? `${emergencyPrompt} Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
       : `${normalPrompt} Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`;
 
-    return buildAndSend(twiml, res, baseUrl, prompt);
+    return buildAndSend(twiml, res, baseUrl, prompt.trim());
   }
 
   caller.lastStep = "ask_name";
@@ -397,7 +405,7 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller, normalPrompt, emerge
     ? `${emergencyPrompt} Can I start by getting your full name, please?`
     : `${normalPrompt} Can I start by getting your full name, please?`;
 
-  return buildAndSend(twiml, res, baseUrl, prompt);
+  return buildAndSend(twiml, res, baseUrl, prompt.trim());
 }
 
 app.post("/incoming-call", (req, res) => {
@@ -538,75 +546,4 @@ app.post("/handle-input", (req, res) => {
       twiml,
       res,
       baseUrl,
-      "What is the service address?"
-    );
-  }
-
-  if (caller.lastStep === "ask_address") {
-    caller.address = normalizeAddressInput(speech);
-    caller.lastStep = "ask_notes";
-
-    return buildAndSend(
-      twiml,
-      res,
-      baseUrl,
-      "Before I submit this, are there any notes or details you'd like me to add for the technician?"
-    );
-  }
-
-  if (caller.lastStep === "ask_notes") {
-    if (isPricingQuestion(speech)) {
-      return buildAndSend(
-        twiml,
-        res,
-        baseUrl,
-        `${pricingResponse()} Before I submit this, are there any notes or details you'd like me to add for the technician?`
-      );
-    }
-
-    if (!isEndCallPhrase(speech)) {
-      caller.notes = speech;
-    }
-
-    caller.lastStep = "recap";
-
-    const recap = caller.emergencyAlert
-      ? `Okay, just to recap, I am marking this as an emergency for ${caller.issueSummary}, and I'm submitting it for review now. Someone from our service team will contact you shortly. Is there anything else I can do for you today?`
-      : `Okay, just to recap, I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will give you a call shortly to go over this and get you scheduled. Is there anything else I can add before I submit this?`;
-
-    return buildAndSend(twiml, res, baseUrl, recap);
-  }
-
-  if (caller.lastStep === "recap") {
-    if (isPricingQuestion(speech)) {
-      return buildAndSend(
-        twiml,
-        res,
-        baseUrl,
-        `${pricingResponse()} ${caller.emergencyAlert ? "Is there anything else I can do for you today?" : "Is there anything else I can add before I submit this?"}`
-      );
-    }
-
-    if (!isEndCallPhrase(speech)) {
-      caller.notes = caller.notes ? `${caller.notes} ${speech}` : speech;
-    }
-
-    sendLeadToMake(caller);
-
-    const goodbye = caller.emergencyAlert
-      ? "Thank you for calling. Take care."
-      : "Perfect. Thank you for calling, and have a great day.";
-
-    twiml.say({ voice: "alice" }, goodbye);
-    twiml.hangup();
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  twiml.say("Sorry, something went wrong. Please call back.");
-  twiml.hangup();
-  return res.type("text/xml").send(twiml.toString());
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+      "What is the service
