@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V44-DEMO-QUOTE-FINALIZED";
+const APP_VERSION = "VOICE-FLOW-V45-NATURAL-FLOW-DEMO-QUOTE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -21,15 +21,15 @@ function getOrCreateCaller(phone) {
     const now = new Date().toISOString();
     callerStore[phone] = {
       phone,
-      issue: null,
-      issueSummary: null,
-      issueCategory: null,
       name: null,
       firstName: null,
       callbackNumber: null,
       callbackConfirmed: null,
       address: null,
-      addressConfirmed: null,
+
+      issue: null,
+      issueSummary: null,
+      issueCategory: null,
       urgency: null,
       emergencyAlert: false,
 
@@ -39,11 +39,7 @@ function getOrCreateCaller(phone) {
       proposedAppointmentTime: null,
 
       additionalNeed: null,
-      status: null,
-      leadType: null,
-      lastStep: null,
-      retryCount: 0,
-      makeSent: false,
+      notes: null,
 
       demoRequested: false,
       demoName: null,
@@ -54,7 +50,12 @@ function getOrCreateCaller(phone) {
       projectType: null,
       timeline: null,
       proposalDeadline: null,
-      notes: null,
+
+      status: null,
+      leadType: null,
+      lastStep: null,
+      retryCount: 0,
+      makeSent: false,
 
       createdAt: now,
       updatedAt: now,
@@ -65,17 +66,54 @@ function getOrCreateCaller(phone) {
   return callerStore[phone];
 }
 
+function resetCallerForNewCall(caller, phone) {
+  caller.phone = phone;
+
+  caller.name = null;
+  caller.firstName = null;
+  caller.callbackNumber = phone;
+  caller.callbackConfirmed = null;
+  caller.address = null;
+
+  caller.issue = null;
+  caller.issueSummary = null;
+  caller.issueCategory = null;
+  caller.urgency = null;
+  caller.emergencyAlert = false;
+
+  caller.appointmentDate = null;
+  caller.appointmentTime = null;
+  caller.proposedAppointmentDate = null;
+  caller.proposedAppointmentTime = null;
+
+  caller.additionalNeed = null;
+  caller.notes = null;
+
+  caller.demoRequested = false;
+  caller.demoName = null;
+  caller.demoPhone = null;
+  caller.demoEmail = null;
+
+  caller.quoteRequested = false;
+  caller.projectType = null;
+  caller.timeline = null;
+  caller.proposalDeadline = null;
+
+  caller.status = "in_progress";
+  caller.leadType = null;
+  caller.lastStep = "ask_issue";
+  caller.retryCount = 0;
+  caller.makeSent = false;
+}
+
 function cleanSpeechText(input) {
   if (!input) return "";
-  return input.trim().replace(/\s+/g, " ");
+  return String(input).trim().replace(/\s+/g, " ");
 }
 
 function cleanForSpeech(input) {
   if (!input) return "";
-  return input
-    .replace(/[!?]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return cleanSpeechText(input).replace(/[!?]+$/g, "").trim();
 }
 
 function cleanName(input) {
@@ -154,16 +192,12 @@ function normalizeNameCandidate(rawName) {
     "call",
     "calling",
     "demo",
-    "schedule",
     "quote",
     "estimate",
-    "install",
-    "installation",
     "project",
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
-
   return toTitleCase(words.join(" "));
 }
 
@@ -187,9 +221,7 @@ function stripIssueLeadIn(text) {
 
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
-  if (!original) {
-    return { name: null, issueText: "" };
-  }
+  if (!original) return { name: null, issueText: "" };
 
   const patterns = [
     /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
@@ -217,86 +249,19 @@ function extractOpeningNameAndIssue(text) {
     }
   }
 
-  const nameOnlyPatterns = [
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^(?:hi|hello|hey)\s*,?\s*it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})$/i,
-  ];
-
-  for (const pattern of nameOnlyPatterns) {
-    const match = original.match(pattern);
-    if (!match) continue;
-
-    const name = normalizeNameCandidate(match[1]);
-    if (name) {
-      return { name, issueText: "" };
-    }
-  }
-
   return { name: null, issueText: original };
-}
-
-function getBaseUrl(req) {
-  const proto = req.get("x-forwarded-proto") || "https";
-  return `${proto}://${req.get("host")}`;
-}
-
-function addPause(twiml, ms = 700) {
-  twiml.pause({ length: Math.max(1, Math.round(ms / 1000)) });
-}
-
-function buildSpeechGather(twiml, actionUrl, prompt, options = {}) {
-  const gather = twiml.gather({
-    input: "speech",
-    action: actionUrl,
-    method: "POST",
-    speechTimeout: options.speechTimeout || 3,
-    timeout: options.timeout || 10,
-    actionOnEmptyResult: true,
-    language: "en-US",
-  });
-
-  gather.say({ voice: "alice" }, prompt);
-}
-
-function formatPhoneNumberForSpeech(phone) {
-  if (!phone) return "unknown";
-
-  let digits = String(phone).replace(/\D/g, "");
-
-  if (digits.length === 11 && digits.startsWith("1")) {
-    digits = digits.substring(1);
-  }
-
-  if (!digits) return "unknown";
-
-  return digits.split("").join(" ");
-}
-
-function formatEmailForSpeech(email) {
-  if (!email) return "unknown";
-
-  return email
-    .replace(/@/g, " at ")
-    .replace(/\./g, " dot ")
-    .replace(/_/g, " underscore ")
-    .replace(/-/g, " dash ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function containsAny(text, phrases) {
   return phrases.some((phrase) => text.includes(phrase));
 }
 
+function normalizedText(text) {
+  return cleanForSpeech(text || "").toLowerCase();
+}
+
 function isAffirmative(text) {
-  const t = (text || "").toLowerCase().trim();
+  const t = normalizedText(text);
   return containsAny(t, [
     "yes",
     "yeah",
@@ -305,9 +270,9 @@ function isAffirmative(text) {
     "correct",
     "that's right",
     "that is right",
+    "right",
     "that is correct",
     "that's correct",
-    "right",
     "you got it",
     "sounds right",
     "looks right",
@@ -324,7 +289,7 @@ function isAffirmative(text) {
 }
 
 function isNegative(text) {
-  const t = (text || "").toLowerCase().trim();
+  const t = normalizedText(text);
   return containsAny(t, [
     "no",
     "nope",
@@ -344,7 +309,7 @@ function isNegative(text) {
 }
 
 function isEndCallPhrase(text) {
-  const t = (text || "").toLowerCase().trim();
+  const t = normalizedText(text);
   return containsAny(t, [
     "that's it",
     "that is it",
@@ -360,12 +325,13 @@ function isEndCallPhrase(text) {
     "thank you that's all",
     "no that's everything",
     "no that is everything",
-    "nope that's it",
+    "nope",
+    "no",
   ]);
 }
 
 function isPricingQuestion(text) {
-  const t = (text || "").toLowerCase();
+  const t = normalizedText(text);
   return (
     t.includes("how much") ||
     t.includes("price") ||
@@ -383,11 +349,11 @@ function isPricingQuestion(text) {
 }
 
 function pricingResponse() {
-  return "That is a great question. Pricing can vary depending on the job, so one of our team members will go over that with you when they call to confirm the appointment.";
+  return "That is a great question. Pricing can vary depending on the job, so one of our team members will go over that with you when they call to confirm the appointment or discuss the project.";
 }
 
 function isDemoRequest(text) {
-  const t = (text || "").toLowerCase();
+  const t = normalizedText(text);
   return (
     t.includes("book a demo") ||
     t.includes("schedule a demo") ||
@@ -403,7 +369,7 @@ function isDemoRequest(text) {
 }
 
 function isQuoteRequest(text) {
-  const t = (text || "").toLowerCase();
+  const t = normalizedText(text);
   return (
     t.includes("quote") ||
     t.includes("estimate") ||
@@ -420,6 +386,206 @@ function isQuoteRequest(text) {
     t.includes("repipe") ||
     t.includes("remodel")
   );
+}
+
+function isBareEmergencyOnly(text) {
+  const t = normalizedText(text);
+  return (
+    t === "emergency" ||
+    t === "it's an emergency" ||
+    t === "it is an emergency" ||
+    t === "this is an emergency" ||
+    t === "urgent" ||
+    t === "it's urgent" ||
+    t === "it is urgent" ||
+    t === "this is urgent"
+  );
+}
+
+function classifyIssue(issue) {
+  const text = normalizedText(issue);
+
+  if (!text) {
+    return { category: "generic", summary: "", urgency: "non-emergency" };
+  }
+
+  const hasLeak = containsAny(text, ["leak", "leaking", "leaky", "busted", "burst", "broke", "broken"]);
+  const hasFlood = containsAny(text, ["flood", "flooding", "pooling water", "water everywhere"]);
+  const hasNoWater = containsAny(text, ["no water", "lost water", "water is off", "no running water"]);
+  const hasUrgentWords = containsAny(text, ["emergency", "urgent", "asap", "immediately", "right away"]);
+
+  if (containsAny(text, ["gas leak", "smell gas", "gas odor", "gas smell", "hissing gas", "gas line"])) {
+    return { category: "gas_leak", summary: "a possible gas leak", urgency: "emergency" };
+  }
+
+  if (
+    (containsAny(text, ["front yard", "yard", "lawn", "outside", "out front", "by the street", "near the curb", "in the grass"]) && (hasLeak || hasFlood || hasNoWater)) ||
+    containsAny(text, ["water main", "main line", "main water line", "service line", "water line break", "main pipe", "main valve"])
+  ) {
+    return { category: "water_main", summary: "a possible water main leak in your front yard", urgency: "emergency" };
+  }
+
+  if (
+    containsAny(text, ["burst pipe", "pipe burst", "broken pipe", "frozen pipe", "pipe busted"]) ||
+    (hasLeak && hasFlood && containsAny(text, ["pipe", "ceiling", "wall"]))
+  ) {
+    return { category: "burst_pipe", summary: "a burst or broken pipe", urgency: "emergency" };
+  }
+
+  if (containsAny(text, ["sewer backup", "backing up", "sewage backup", "raw sewage", "sewer line", "main drain backup"])) {
+    return { category: "sewer_backup", summary: "a sewer backup", urgency: "emergency" };
+  }
+
+  if (containsAny(text, ["toilet overflow", "overflowing toilet"])) {
+    return { category: "toilet_overflow", summary: "an overflowing toilet", urgency: "emergency" };
+  }
+
+  if (containsAny(text, ["slab leak", "foundation leak", "hot spot on floor", "wet slab"])) {
+    return { category: "slab_leak", summary: "a possible slab leak", urgency: "emergency" };
+  }
+
+  if (text.includes("water heater") && containsAny(text, ["leak", "leaking"])) {
+    return {
+      category: "water_heater_leak",
+      summary: "a leak in your water heater",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (text.includes("water heater") && containsAny(text, ["no hot water", "not getting hot water", "cold water only"])) {
+    return { category: "water_heater_no_hot_water", summary: "a water heater issue with no hot water", urgency: "non-emergency" };
+  }
+
+  if (text.includes("water heater") && containsAny(text, ["pilot", "won't light", "not turning on"])) {
+    return { category: "water_heater_not_working", summary: "a water heater that is not working", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["kitchen faucet"]) && hasLeak) {
+    return { category: "kitchen_faucet_leak", summary: "a leak in your kitchen faucet", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["bathroom faucet"]) && hasLeak) {
+    return { category: "bathroom_faucet_leak", summary: "a leak in your bathroom faucet", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["faucet", "tap", "spigot"]) && hasLeak) {
+    return { category: "faucet_leak", summary: "a leak in your faucet", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["under the sink", "under my sink", "under sink", "cabinet"]) && hasLeak) {
+    return { category: "under_sink_leak", summary: "a leak under your sink", urgency: hasFlood ? "emergency" : "non-emergency" };
+  }
+
+  if (containsAny(text, ["dishwasher"]) && hasLeak) {
+    return { category: "dishwasher_leak", summary: "a leaking dishwasher", urgency: hasFlood ? "emergency" : "non-emergency" };
+  }
+
+  if (containsAny(text, ["washing machine", "washer", "laundry room"]) && hasLeak) {
+    return { category: "washer_leak", summary: "a leaking washing machine", urgency: hasFlood ? "emergency" : "non-emergency" };
+  }
+
+  if (containsAny(text, ["refrigerator", "fridge", "ice maker", "icemaker"]) && hasLeak) {
+    return { category: "fridge_line_leak", summary: "a leak from your refrigerator water line", urgency: hasFlood ? "emergency" : "non-emergency" };
+  }
+
+  if (containsAny(text, ["garbage disposal", "disposal"]) && hasLeak) {
+    return { category: "garbage_disposal_leak", summary: "a leaking garbage disposal", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["garbage disposal", "disposal"]) && containsAny(text, ["jam", "stuck", "not working", "humming"])) {
+    return { category: "garbage_disposal_jam", summary: "a garbage disposal that is jammed or not working", urgency: "non-emergency" };
+  }
+
+  if (text.includes("toilet") && containsAny(text, ["clog", "clogged"])) {
+    return { category: "toilet_clog", summary: "a clogged toilet", urgency: "non-emergency" };
+  }
+
+  if (text.includes("toilet") && containsAny(text, ["running"])) {
+    return { category: "toilet_running", summary: "a toilet that is running constantly", urgency: "non-emergency" };
+  }
+
+  if (text.includes("toilet") && hasLeak) {
+    return { category: "toilet_leak", summary: "a leak in or around your toilet", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["drain", "sink drain", "shower drain", "tub drain", "floor drain"]) && containsAny(text, ["clog", "clogged", "slow", "backed up"])) {
+    return {
+      category: "drain_clog",
+      summary: "a clogged or backed-up drain",
+      urgency: containsAny(text, ["backed up", "overflow", "overflowing"]) ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["sewer smell", "smell sewage", "drain smell"])) {
+    return { category: "drain_odor", summary: "a sewer or drain odor issue", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["hose bib", "hose bibb", "spigot", "outside faucet", "outdoor faucet"]) && hasLeak) {
+    return { category: "outdoor_spigot_leak", summary: "a leak in your outdoor faucet or spigot", urgency: "non-emergency" };
+  }
+
+  if (containsAny(text, ["low water pressure", "weak pressure", "pressure is low"])) {
+    return { category: "low_pressure", summary: "a low water pressure issue", urgency: "non-emergency" };
+  }
+
+  if (hasNoWater) {
+    return { category: "no_water", summary: "a loss of water service", urgency: "emergency" };
+  }
+
+  if (containsAny(text, ["flood", "flooding", "water everywhere", "pooling water", "kitchen is flooding"])) {
+    return { category: "flooding", summary: "flooding or pooling water", urgency: "emergency" };
+  }
+
+  if ((hasLeak || hasFlood || hasUrgentWords) && containsAny(text, ["pipe"])) {
+    return {
+      category: "pipe_leak",
+      summary: "a leaking pipe",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (hasLeak) {
+    return {
+      category: "generic_leak",
+      summary: "",
+      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
+    };
+  }
+
+  if (containsAny(text, ["not working", "broken"])) {
+    return { category: "generic_not_working", summary: "", urgency: "non-emergency" };
+  }
+
+  return {
+    category: "generic",
+    summary: "",
+    urgency: hasUrgentWords ? "emergency" : "non-emergency",
+  };
+}
+
+function buildNaturalIssueSummary(issue, classification) {
+  if (classification.summary) return classification.summary;
+
+  const cleaned = cleanForSpeech(issue || "").trim();
+  if (!cleaned) return "the issue you described";
+
+  let summary = cleaned
+    .replace(/^hi[, ]*/i, "")
+    .replace(/^hello[, ]*/i, "")
+    .replace(/^hey[, ]*/i, "")
+    .replace(/^this is\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){0,3}\s+and\s+/i, "")
+    .replace(/^my name is\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){0,3}\s+and\s+/i, "")
+    .replace(/^i have\s+/i, "")
+    .replace(/^there is\s+/i, "")
+    .replace(/^there's\s+/i, "")
+    .trim();
+
+  if (!summary) return "the issue you described";
+  if (!/^a\s|^an\s|^the\s|^my\s|^our\s/i.test(summary)) {
+    summary = `a ${summary}`;
+  }
+
+  return summary;
 }
 
 function parseAppointmentResponse(text) {
@@ -500,333 +666,6 @@ function getNextAvailableSlot() {
     date: `${weekday} ${month} ${day}, ${year}`,
     time,
   };
-}
-
-function cleanEmail(input) {
-  if (!input) return "";
-
-  let cleaned = String(input).toLowerCase().trim();
-
-  cleaned = cleaned
-    .replace(/\s+at\s+/g, "@")
-    .replace(/\s+dot\s+/g, ".")
-    .replace(/\s+underscore\s+/g, "_")
-    .replace(/\s+dash\s+/g, "-")
-    .replace(/\s+hyphen\s+/g, "-")
-    .replace(/\s+/g, "")
-    .replace(/,+/g, "")
-    .replace(/;+?/g, "")
-    .replace(/:+/g, "");
-
-  cleaned = cleaned.replace(/@+/g, "@");
-
-  return cleaned;
-}
-
-function isBareEmergencyOnly(text) {
-  const t = (text || "").toLowerCase().trim();
-  return (
-    t === "emergency" ||
-    t === "it's an emergency" ||
-    t === "it is an emergency" ||
-    t === "this is an emergency" ||
-    t === "urgent" ||
-    t === "it's urgent" ||
-    t === "it is urgent" ||
-    t === "this is urgent"
-  );
-}
-
-function classifyIssue(issue) {
-  const text = (issue || "").toLowerCase().trim();
-
-  if (!text) {
-    return {
-      category: "generic",
-      summary: "",
-      urgency: "non-emergency",
-    };
-  }
-
-  const hasLeak = containsAny(text, ["leak", "leaking", "leaky", "busted", "burst", "broke", "broken"]);
-  const hasFlood = containsAny(text, ["flood", "flooding", "pooling water", "water everywhere"]);
-  const hasNoWater = containsAny(text, ["no water", "lost water", "water is off", "no running water"]);
-  const hasUrgentWords = containsAny(text, ["emergency", "urgent", "asap", "immediately", "right away"]);
-
-  if (containsAny(text, ["gas leak", "smell gas", "gas odor", "gas smell", "hissing gas", "gas line"])) {
-    return {
-      category: "gas_leak",
-      summary: "a possible gas leak",
-      urgency: "emergency",
-    };
-  }
-
-  if (
-    (containsAny(text, ["front yard", "yard", "lawn", "outside", "out front", "by the street", "near the curb", "in the grass"]) && (hasLeak || hasFlood || hasNoWater)) ||
-    containsAny(text, ["water main", "main line", "main water line", "service line", "water line break", "main pipe", "main valve"])
-  ) {
-    return {
-      category: "water_main",
-      summary: "a possible water main leak in your front yard",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["burst pipe", "pipe burst", "broken pipe", "frozen pipe", "pipe busted"]) || (hasLeak && hasFlood && containsAny(text, ["pipe", "ceiling", "wall"]))) {
-    return {
-      category: "burst_pipe",
-      summary: "a burst or broken pipe",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["sewer backup", "backing up", "sewage backup", "raw sewage", "sewer line", "main drain backup"])) {
-    return {
-      category: "sewer_backup",
-      summary: "a sewer backup",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet overflow", "overflowing toilet"])) {
-    return {
-      category: "toilet_overflow",
-      summary: "an overflowing toilet",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["slab leak", "foundation leak", "hot spot on floor", "wet slab"])) {
-    return {
-      category: "slab_leak",
-      summary: "a possible slab leak",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["water heater"]) && containsAny(text, ["leak", "leaking"])) {
-    return {
-      category: "water_heater_leak",
-      summary: "a leak in your water heater",
-      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["water heater"]) && containsAny(text, ["no hot water", "not getting hot water", "cold water only"])) {
-    return {
-      category: "water_heater_no_hot_water",
-      summary: "a water heater issue with no hot water",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["water heater"]) && containsAny(text, ["pilot", "won't light", "not turning on"])) {
-    return {
-      category: "water_heater_not_working",
-      summary: "a water heater that is not working",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["kitchen faucet"]) && hasLeak) {
-    return {
-      category: "kitchen_faucet_leak",
-      summary: "a leak in your kitchen faucet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["bathroom faucet"]) && hasLeak) {
-    return {
-      category: "bathroom_faucet_leak",
-      summary: "a leak in your bathroom faucet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["faucet", "tap", "spigot"]) && hasLeak) {
-    return {
-      category: "faucet_leak",
-      summary: "a leak in your faucet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["under the sink", "under my sink", "under sink", "cabinet"]) && hasLeak) {
-    return {
-      category: "under_sink_leak",
-      summary: "a leak under your sink",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["dishwasher"]) && hasLeak) {
-    return {
-      category: "dishwasher_leak",
-      summary: "a leaking dishwasher",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["washing machine", "washer", "laundry room"]) && hasLeak) {
-    return {
-      category: "washer_leak",
-      summary: "a leaking washing machine",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["refrigerator", "fridge", "ice maker", "icemaker"]) && hasLeak) {
-    return {
-      category: "fridge_line_leak",
-      summary: "a leak from your refrigerator water line",
-      urgency: hasFlood ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["garbage disposal", "disposal"]) && hasLeak) {
-    return {
-      category: "garbage_disposal_leak",
-      summary: "a leaking garbage disposal",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["garbage disposal", "disposal"]) && containsAny(text, ["jam", "stuck", "not working", "humming"])) {
-    return {
-      category: "garbage_disposal_jam",
-      summary: "a garbage disposal that is jammed or not working",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet"]) && containsAny(text, ["clog", "clogged"])) {
-    return {
-      category: "toilet_clog",
-      summary: "a clogged toilet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet"]) && containsAny(text, ["running"])) {
-    return {
-      category: "toilet_running",
-      summary: "a toilet that is running constantly",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["toilet"]) && hasLeak) {
-    return {
-      category: "toilet_leak",
-      summary: "a leak in or around your toilet",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["drain", "sink drain", "shower drain", "tub drain", "floor drain"]) && containsAny(text, ["clog", "clogged", "slow", "backed up"])) {
-    return {
-      category: "drain_clog",
-      summary: "a clogged or backed-up drain",
-      urgency: containsAny(text, ["backed up", "overflow", "overflowing"]) ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["sewer smell", "smell sewage", "drain smell"])) {
-    return {
-      category: "drain_odor",
-      summary: "a sewer or drain odor issue",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["hose bib", "hose bibb", "spigot", "outside faucet", "outdoor faucet"]) && hasLeak) {
-    return {
-      category: "outdoor_spigot_leak",
-      summary: "a leak in your outdoor faucet or spigot",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["low water pressure", "weak pressure", "pressure is low"])) {
-    return {
-      category: "low_pressure",
-      summary: "a low water pressure issue",
-      urgency: "non-emergency",
-    };
-  }
-
-  if (hasNoWater) {
-    return {
-      category: "no_water",
-      summary: "a loss of water service",
-      urgency: "emergency",
-    };
-  }
-
-  if (containsAny(text, ["flood", "flooding", "water everywhere", "pooling water", "kitchen is flooding"])) {
-    return {
-      category: "flooding",
-      summary: "flooding or pooling water",
-      urgency: "emergency",
-    };
-  }
-
-  if ((hasLeak || hasFlood || hasUrgentWords) && containsAny(text, ["pipe"])) {
-    return {
-      category: "pipe_leak",
-      summary: "a leaking pipe",
-      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (hasLeak) {
-    return {
-      category: "generic_leak",
-      summary: "",
-      urgency: hasFlood || hasUrgentWords ? "emergency" : "non-emergency",
-    };
-  }
-
-  if (containsAny(text, ["not working", "broken"])) {
-    return {
-      category: "generic_not_working",
-      summary: "",
-      urgency: "non-emergency",
-    };
-  }
-
-  return {
-    category: "generic",
-    summary: "",
-    urgency: hasUrgentWords ? "emergency" : "non-emergency",
-  };
-}
-
-function buildNaturalIssueSummary(issue, classification) {
-  if (classification.summary) return classification.summary;
-
-  const cleaned = cleanForSpeech(issue || "").trim();
-  if (!cleaned) return "the issue you described";
-
-  let summary = cleaned
-    .replace(/^hi[, ]*/i, "")
-    .replace(/^hello[, ]*/i, "")
-    .replace(/^hey[, ]*/i, "")
-    .replace(/^this is\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){0,3}\s+and\s+/i, "")
-    .replace(/^my name is\s+[a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){0,3}\s+and\s+/i, "")
-    .replace(/^i have\s+/i, "")
-    .replace(/^there is\s+/i, "")
-    .replace(/^there's\s+/i, "")
-    .trim();
-
-  if (!summary) return "the issue you described";
-
-  if (!/^a\s|^an\s|^the\s|^my\s|^our\s/i.test(summary)) {
-    summary = `a ${summary}`;
-  }
-
-  return summary;
 }
 
 function sendLeadToMake(caller) {
@@ -925,7 +764,7 @@ function closeCall(twiml, caller) {
   if (caller.quoteRequested) {
     twiml.say(
       { voice: "alice" },
-      `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. We have everything we need, and someone from the office will reach out to discuss your quote request. If you would like to see how this system could work for your company, you can say book a demo at any time. Have a great day.`
+      `Thank you${caller.firstName ? `, ${caller.firstName}` : ""}. We have everything we need and someone from the office will reach out to discuss your quote request. If you would like to see how this system could work for your company, you can say book a demo at any time. Have a great day.`
     );
     twiml.hangup();
     return;
@@ -997,40 +836,7 @@ app.post("/incoming-call", (req, res) => {
   const phone = req.body.From || "unknown";
   const caller = getOrCreateCaller(phone);
 
-  caller.issue = null;
-  caller.issueSummary = null;
-  caller.issueCategory = null;
-  caller.name = null;
-  caller.firstName = null;
-  caller.callbackNumber = phone;
-  caller.callbackConfirmed = null;
-  caller.address = null;
-  caller.addressConfirmed = null;
-  caller.urgency = null;
-  caller.emergencyAlert = false;
-
-  caller.appointmentDate = null;
-  caller.appointmentTime = null;
-  caller.proposedAppointmentDate = null;
-  caller.proposedAppointmentTime = null;
-
-  caller.additionalNeed = null;
-  caller.notes = null;
-  caller.status = "in_progress";
-  caller.leadType = null;
-  caller.lastStep = "ask_issue";
-  caller.retryCount = 0;
-  caller.makeSent = false;
-
-  caller.demoRequested = false;
-  caller.demoName = null;
-  caller.demoPhone = null;
-  caller.demoEmail = null;
-
-  caller.quoteRequested = false;
-  caller.projectType = null;
-  caller.timeline = null;
-  caller.proposalDeadline = null;
+  resetCallerForNewCall(caller, phone);
 
   twiml.say(
     { voice: "alice" },
@@ -1041,7 +847,7 @@ app.post("/incoming-call", (req, res) => {
   buildSpeechGather(
     twiml,
     `${baseUrl}/handle-input`,
-    "Blue Caller Automation, this is Alex. How can I help you today?"
+    "Thank you for calling Blue Caller Automation, this is Alex, how can I help you today?"
   );
 
   return res.type("text/xml").send(twiml.toString());
@@ -1115,7 +921,7 @@ app.post("/handle-input", (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "I'm sorry you're dealing with that. Please tell me a little more about what is going on."
+        "Please tell me a little more about what is going on."
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1125,17 +931,6 @@ app.post("/handle-input", (req, res) => {
     caller.issueCategory = classification.category;
     caller.urgency = classification.urgency;
     caller.emergencyAlert = caller.urgency === "emergency";
-
-    if (caller.emergencyAlert) {
-      caller.lastStep = "ask_emergency_name";
-
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "I'm sorry you're dealing with that. Let's get this processed for you right away so someone can call you as soon as possible. Can I get your name?"
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
 
     caller.lastStep = "confirm_issue";
     buildSpeechGather(
@@ -1154,23 +949,43 @@ app.post("/handle-input", (req, res) => {
     caller.issueCategory = classification.category;
     caller.urgency = "emergency";
     caller.emergencyAlert = true;
-    caller.lastStep = "ask_emergency_name";
+    caller.lastStep = "confirm_issue";
 
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "I'm sorry you're dealing with that. Let's get this processed for you right away so someone can call you as soon as possible. Can I get your name?"
+      `So you are calling about ${caller.issueSummary}. Is that correct?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "confirm_issue") {
     if (isAffirmative(speech)) {
+      if (caller.emergencyAlert) {
+        caller.lastStep = "ask_emergency_name";
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          `I'm sorry you're dealing with ${caller.issueSummary}. Let's get this processed for you right away so someone can call you as soon as possible. Can I get your name?`
+        );
+        return res.type("text/xml").send(twiml.toString());
+      }
+
+      if (caller.quoteRequested) {
+        caller.lastStep = "ask_name";
+        buildSpeechGather(
+          twiml,
+          `${baseUrl}/handle-input`,
+          "Can I get your name?"
+        );
+        return res.type("text/xml").send(twiml.toString());
+      }
+
       caller.lastStep = "ask_name";
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "Can I get your name?"
+        `I'm sorry you're dealing with ${caller.issueSummary}. Let's get this taken care of for you. Can I get your name?`
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1193,46 +1008,25 @@ app.post("/handle-input", (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "ask_name") {
+  if (caller.lastStep === "ask_name" || caller.lastStep === "ask_emergency_name") {
     caller.name = toTitleCase(cleanName(speech));
     caller.firstName = getFirstName(caller.name);
-    caller.lastStep = "confirm_name";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I have your name as ${caller.name}. Do I have that right?`
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "confirm_name") {
-    if (isAffirmative(speech)) {
+    if (caller.quoteRequested) {
       caller.lastStep = "confirm_callback";
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+        `Thank you, ${caller.firstName || caller.name}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
       );
       return res.type("text/xml").send(twiml.toString());
     }
 
-    if (isNegative(speech)) {
-      caller.name = null;
-      caller.firstName = null;
-      caller.lastStep = "ask_name";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "I'm sorry about that. Can I get your name again?"
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
+    caller.lastStep = "confirm_callback";
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `I have your name as ${caller.name || "your name"}. Do I have that right?`
+      `Thank you, ${caller.firstName || caller.name}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -1241,10 +1035,11 @@ app.post("/handle-input", (req, res) => {
     if (isAffirmative(speech)) {
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
+
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        caller.quoteRequested ? "What is the address for the project?" : "What is the address for the job?"
+        caller.quoteRequested ? "What is the address for the project?" : "What is the service address?"
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1252,12 +1047,11 @@ app.post("/handle-input", (req, res) => {
     if (isNegative(speech)) {
       caller.callbackConfirmed = false;
       caller.lastStep = "ask_callback";
+
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        caller.quoteRequested
-          ? "Okay. What is a good number to reach you about the quote?"
-          : "Okay. What is a good number to reach you?"
+        "What is a good number to reach you?"
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1272,94 +1066,47 @@ app.post("/handle-input", (req, res) => {
 
   if (caller.lastStep === "ask_callback") {
     caller.callbackNumber = cleanForSpeech(speech);
-
-    if (caller.quoteRequested) {
-      caller.lastStep = "ask_address";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "What is the address for the project?"
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
     caller.lastStep = "ask_address";
+
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      "What is the address for the job?"
+      caller.quoteRequested ? "What is the address for the project?" : "What is the service address?"
     );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_address") {
     caller.address = cleanForSpeech(speech);
-    caller.lastStep = "confirm_address";
 
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I have the address as ${caller.address}. Do I have that right?`
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "confirm_address") {
-    if (isAffirmative(speech)) {
-      caller.addressConfirmed = true;
-
-      if (caller.emergencyAlert) {
-        caller.status = "new_emergency";
-        caller.leadType = "emergency_service";
-        caller.lastStep = "final_notes";
-
-        buildSpeechGather(
-          twiml,
-          `${baseUrl}/handle-input`,
-          "Before we hang up, are there any notes or details you'd like me to add to your service request?"
-        );
-        return res.type("text/xml").send(twiml.toString());
-      }
-
-      if (caller.quoteRequested) {
-        caller.lastStep = "ask_quote_timeline";
-        buildSpeechGather(
-          twiml,
-          `${baseUrl}/handle-input`,
-          "What kind of timeline are you working with for this project?"
-        );
-        return res.type("text/xml").send(twiml.toString());
-      }
-
-      caller.lastStep = "ask_appt";
+    if (caller.quoteRequested) {
+      caller.lastStep = "ask_quote_timeline";
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        caller.firstName
-          ? `Thanks, ${caller.firstName}. When would you like us to come out?`
-          : "When would you like us to come out?"
+        `Got it. I have the address as ${caller.address}. What kind of timeline are you working with for this project?`
       );
       return res.type("text/xml").send(twiml.toString());
     }
 
-    if (isNegative(speech)) {
-      caller.address = null;
-      caller.addressConfirmed = false;
-      caller.lastStep = "ask_address";
+    if (caller.emergencyAlert) {
+      caller.status = "new_emergency";
+      caller.leadType = "emergency_service";
+      caller.lastStep = "final_notes";
+
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        caller.quoteRequested
-          ? "I'm sorry about that. What is the correct address for the project?"
-          : "I'm sorry about that. What is the correct address for the job?"
+        `Got it. I have the address as ${caller.address}. Before we hang up, are there any notes or details you'd like me to add to your service request?`
       );
       return res.type("text/xml").send(twiml.toString());
     }
 
+    caller.lastStep = "ask_appt";
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `I have the address as ${caller.address || "the address you gave me"}. Do I have that right?`
+      `Got it. I have the address as ${caller.address}. When would you like us to come out?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -1376,7 +1123,7 @@ app.post("/handle-input", (req, res) => {
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        `Our first available appointment is ${nextSlot.date} at ${nextSlot.time}. Would you like me to schedule that for you?`
+        `Our first available appointment is ${nextSlot.date} at ${nextSlot.time}. Would that work for you?`
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1415,6 +1162,7 @@ app.post("/handle-input", (req, res) => {
       caller.proposedAppointmentDate = null;
       caller.proposedAppointmentTime = null;
       caller.lastStep = "ask_appt";
+
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
@@ -1426,97 +1174,46 @@ app.post("/handle-input", (req, res) => {
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `Our first available appointment is ${caller.proposedAppointmentDate} at ${caller.proposedAppointmentTime}. Would you like me to schedule that for you?`
+      `Our first available appointment is ${caller.proposedAppointmentDate} at ${caller.proposedAppointmentTime}. Would that work for you?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "final_notes") {
-    if (isEndCallPhrase(speech) || isNegative(speech)) {
-      if (!caller.status) {
-        caller.status = caller.emergencyAlert
-          ? "new_emergency"
-          : caller.quoteRequested
-            ? "new_quote_request"
-            : "new_lead";
-      }
+  if (caller.lastStep === "ask_quote_timeline") {
+    caller.timeline = cleanForSpeech(speech);
+    caller.lastStep = "ask_quote_deadline";
 
-      if (!caller.leadType) {
-        caller.leadType = caller.emergencyAlert
-          ? "emergency_service"
-          : caller.quoteRequested
-            ? "quote_request"
-            : "standard_service";
-      }
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "Do you have a deadline for receiving the proposal or estimate?"
+    );
+    return res.type("text/xml").send(twiml.toString());
+  }
 
-      closeCall(twiml, caller);
-      return res.type("text/xml").send(twiml.toString());
-    }
+  if (caller.lastStep === "ask_quote_deadline") {
+    caller.proposalDeadline = cleanForSpeech(speech);
+    caller.leadType = "quote_request";
+    caller.status = "new_quote_request";
+    caller.lastStep = "final_notes";
 
-    caller.notes = cleanForSpeech(speech);
-    caller.additionalNeed = caller.notes;
-
-    if (!caller.status) {
-      caller.status = caller.emergencyAlert
-        ? "new_emergency"
-        : caller.quoteRequested
-          ? "new_quote_request"
-          : "new_lead";
-    }
-
-    if (!caller.leadType) {
-      caller.leadType = caller.emergencyAlert
-        ? "emergency_service"
-        : caller.quoteRequested
-          ? "quote_request"
-          : "standard_service";
-    }
-
-    closeCall(twiml, caller);
+    buildSpeechGather(
+      twiml,
+      `${baseUrl}/handle-input`,
+      "Before we hang up, are there any notes or details you'd like me to add to your service request?"
+    );
     return res.type("text/xml").send(twiml.toString());
   }
 
   if (caller.lastStep === "ask_demo_name") {
     caller.demoName = toTitleCase(cleanName(speech));
-    caller.lastStep = "confirm_demo_name";
+    caller.demoPhone = caller.phone;
+    caller.lastStep = "confirm_demo_phone";
 
     buildSpeechGather(
       twiml,
       `${baseUrl}/handle-input`,
-      `I have your name as ${caller.demoName}. Do I have that right?`
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "confirm_demo_name") {
-    if (isAffirmative(speech)) {
-      caller.demoPhone = caller.phone;
-      caller.lastStep = "confirm_demo_phone";
-
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        `Is ${formatPhoneNumberForSpeech(caller.demoPhone)} a good number to reach you?`
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    if (isNegative(speech)) {
-      caller.demoName = null;
-      caller.lastStep = "ask_demo_name";
-
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "I'm sorry about that. What is your full name?"
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I have your name as ${caller.demoName || "your name"}. Do I have that right?`
+      `Thank you, ${getFirstName(caller.demoName) || caller.demoName}. Is ${formatPhoneNumberForSpeech(caller.demoPhone)} a good number to reach you?`
     );
     return res.type("text/xml").send(twiml.toString());
   }
@@ -1524,7 +1221,6 @@ app.post("/handle-input", (req, res) => {
   if (caller.lastStep === "confirm_demo_phone") {
     if (isAffirmative(speech)) {
       caller.lastStep = "ask_demo_email";
-
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
@@ -1535,11 +1231,10 @@ app.post("/handle-input", (req, res) => {
 
     if (isNegative(speech)) {
       caller.lastStep = "ask_demo_phone";
-
       buildSpeechGather(
         twiml,
         `${baseUrl}/handle-input`,
-        "Okay. What is a good number to reach you?"
+        "What is a good number to reach you?"
       );
       return res.type("text/xml").send(twiml.toString());
     }
@@ -1604,18 +1299,6 @@ app.post("/handle-input", (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "ask_quote_project") {
-    caller.projectType = cleanForSpeech(speech);
-    caller.lastStep = "confirm_quote_project";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I understand you are looking for a quote for ${caller.projectType}. Is that correct?`
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
   if (caller.lastStep === "confirm_quote_project") {
     if (isAffirmative(speech)) {
       caller.lastStep = "ask_name";
@@ -1646,73 +1329,15 @@ app.post("/handle-input", (req, res) => {
     return res.type("text/xml").send(twiml.toString());
   }
 
-  if (caller.lastStep === "ask_quote_timeline") {
-    caller.timeline = cleanForSpeech(speech);
-    caller.lastStep = "ask_quote_deadline";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "Do you have a deadline for receiving the proposal or estimate?"
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "ask_quote_deadline") {
-    caller.proposalDeadline = cleanForSpeech(speech);
-    caller.leadType = "quote_request";
-    caller.status = "new_quote_request";
-    caller.lastStep = "final_notes";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      "Before we hang up, are there any notes or details you'd like me to add to your service request?"
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "ask_emergency_name") {
-    caller.name = toTitleCase(cleanName(speech));
-    caller.firstName = getFirstName(caller.name);
-    caller.lastStep = "confirm_emergency_name";
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I have your name as ${caller.name}. Do I have that right?`
-    );
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  if (caller.lastStep === "confirm_emergency_name") {
-    if (isAffirmative(speech)) {
-      caller.lastStep = "ask_address";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "What is the address for the job?"
-      );
+  if (caller.lastStep === "final_notes") {
+    if (isEndCallPhrase(speech)) {
+      closeCall(twiml, caller);
       return res.type("text/xml").send(twiml.toString());
     }
 
-    if (isNegative(speech)) {
-      caller.name = null;
-      caller.firstName = null;
-      caller.lastStep = "ask_emergency_name";
-      buildSpeechGather(
-        twiml,
-        `${baseUrl}/handle-input`,
-        "I'm sorry about that. Can I get your name again?"
-      );
-      return res.type("text/xml").send(twiml.toString());
-    }
-
-    buildSpeechGather(
-      twiml,
-      `${baseUrl}/handle-input`,
-      `I have your name as ${caller.name || "your name"}. Do I have that right?`
-    );
+    caller.notes = cleanForSpeech(speech);
+    caller.additionalNeed = caller.notes;
+    closeCall(twiml, caller);
     return res.type("text/xml").send(twiml.toString());
   }
 
