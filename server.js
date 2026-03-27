@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V53-HUMAN-FLOW";
+const APP_VERSION = "VOICE-FLOW-V55-NAME-CAPTURE-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -77,17 +77,128 @@ function normalizeAddressInput(input) {
     .trim();
 }
 
+function cleanName(input) {
+  if (!input) return "";
+  return cleanForSpeech(input)
+    .replace(/^my name is\s+/i, "")
+    .replace(/^this is\s+/i, "")
+    .replace(/^it is\s+/i, "")
+    .replace(/^it's\s+/i, "")
+    .replace(/^i am\s+/i, "")
+    .replace(/^i'm\s+/i, "")
+    .replace(/^mr\.?\s+/i, "")
+    .replace(/^mrs\.?\s+/i, "")
+    .replace(/^ms\.?\s+/i, "")
+    .trim();
+}
+
 function toTitleCase(value) {
   if (!value) return "";
   return value
     .split(/\s+/)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
 }
 
 function getFirstName(fullName) {
   if (!fullName) return "";
-  return fullName.split(" ")[0];
+  return cleanForSpeech(fullName).split(/\s+/)[0] || "";
+}
+
+function normalizeNameCandidate(rawName) {
+  if (!rawName) return "";
+
+  const cleaned = cleanName(rawName);
+  const words = cleaned
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.replace(/[^a-zA-Z'-]/g, ""))
+    .filter(Boolean);
+
+  if (words.length < 2 || words.length > 4) return "";
+
+  const bannedWords = new Set([
+    "emergency",
+    "urgent",
+    "leak",
+    "leaking",
+    "flood",
+    "flooding",
+    "burst",
+    "broken",
+    "pipe",
+    "pipes",
+    "water",
+    "roof",
+    "ceiling",
+    "sink",
+    "faucet",
+    "drain",
+    "yard",
+    "outside",
+    "call",
+    "calling",
+    "demo",
+    "quote",
+    "estimate",
+    "project",
+  ]);
+
+  if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
+
+  return toTitleCase(words.join(" "));
+}
+
+function stripIssueLeadIn(text) {
+  if (!text) return "";
+  return cleanForSpeech(text)
+    .replace(/^(and\s+)?i\s+have\s+/i, "")
+    .replace(/^(and\s+)?i've\s+got\s+/i, "")
+    .replace(/^(and\s+)?i\s+need\s+/i, "")
+    .replace(/^calling\s+about\s+/i, "")
+    .replace(/^calling\s+with\s+/i, "")
+    .replace(/^calling\s+for\s+/i, "")
+    .replace(/^calling\s+regarding\s+/i, "")
+    .replace(/^about\s+/i, "")
+    .replace(/^with\s+/i, "")
+    .replace(/^regarding\s+/i, "")
+    .replace(/^because\s+/i, "")
+    .replace(/^for\s+/i, "")
+    .trim();
+}
+
+function extractOpeningNameAndIssue(text) {
+  const original = cleanSpeechText(text || "");
+  if (!original) return { name: null, issueText: "" };
+
+  const patterns = [
+    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
+    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})\s*,?\s+and\s+i\s+have\s+(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = original.match(pattern);
+    if (!match) continue;
+
+    const name = normalizeNameCandidate(match[1]);
+    const issueText = stripIssueLeadIn(match[2]);
+
+    if (name && issueText) {
+      return { name, issueText };
+    }
+  }
+
+  return { name: null, issueText: original };
 }
 
 function formatPhoneNumberForSpeech(phone) {
@@ -100,7 +211,7 @@ function formatPhoneNumberForSpeech(phone) {
 }
 
 function containsAny(text, phrases) {
-  return phrases.some(p => text.includes(p));
+  return phrases.some((p) => text.includes(p));
 }
 
 function normalizedText(text) {
@@ -109,31 +220,76 @@ function normalizedText(text) {
 
 function isAffirmative(text) {
   const t = normalizedText(text);
-  return containsAny(t, ["yes","yeah","yep","correct","right","ok","okay","sure"]);
+  return containsAny(t, [
+    "yes",
+    "yeah",
+    "yep",
+    "correct",
+    "right",
+    "ok",
+    "okay",
+    "sure",
+  ]);
 }
 
 function isNegative(text) {
   const t = normalizedText(text);
-  return containsAny(t, ["no","nope","nah"]);
+  return containsAny(t, ["no", "nope", "nah"]);
 }
 
 function isEndCallPhrase(text) {
   const t = normalizedText(text);
-  return containsAny(t, ["no","that's all","nothing else","i'm good","all set"]);
+  return containsAny(t, [
+    "no",
+    "that's all",
+    "that is all",
+    "nothing else",
+    "i'm good",
+    "im good",
+    "all set",
+    "no thank you",
+    "no thanks",
+  ]);
+}
+
+function isPricingQuestion(text) {
+  const t = normalizedText(text);
+  return (
+    t.includes("how much") ||
+    t.includes("price") ||
+    t.includes("pricing") ||
+    t.includes("cost") ||
+    t.includes("what is this going to cost") ||
+    t.includes("what's this going to cost") ||
+    t.includes("what will this cost") ||
+    t.includes("what will it cost") ||
+    t.includes("how much is this gonna cost") ||
+    t.includes("how much is this going to cost") ||
+    t.includes("how much do you charge") ||
+    t.includes("what do you charge") ||
+    t.includes("service fee") ||
+    t.includes("trip charge") ||
+    t.includes("diagnostic fee") ||
+    t.includes("estimate")
+  );
+}
+
+function pricingResponse() {
+  return "That is a great question. Pricing can vary depending on the job, so someone from the office will go over that with you when they call.";
 }
 
 function classifyIssue(issue) {
   const text = normalizedText(issue);
 
-  if (containsAny(text, ["burst pipe","pipe burst"])) {
+  if (containsAny(text, ["burst pipe", "pipe burst"])) {
     return { summary: "a burst pipe", urgency: "emergency" };
   }
 
-  if (containsAny(text, ["sewer backup","sewage backup"])) {
+  if (containsAny(text, ["sewer backup", "sewage backup"])) {
     return { summary: "a sewer backup", urgency: "emergency" };
   }
 
-  if (containsAny(text, ["flood","flooding"])) {
+  if (containsAny(text, ["flood", "flooding"])) {
     return { summary: "flooding", urgency: "emergency" };
   }
 
@@ -148,6 +304,10 @@ function classifyIssue(issue) {
     return { summary: "a roof leak", urgency: "non-emergency" };
   }
 
+  if (text.includes("ceiling") && text.includes("leak")) {
+    return { summary: "a ceiling leak", urgency: "non-emergency" };
+  }
+
   if ((text.includes("faucet") || text.includes("sink")) && text.includes("leak")) {
     return { summary: "a leaking faucet", urgency: "non-emergency" };
   }
@@ -156,7 +316,7 @@ function classifyIssue(issue) {
     return { summary: "a leaking water heater", urgency: "non-emergency" };
   }
 
-  if (containsAny(text, ["clog","clogged","drain"])) {
+  if (containsAny(text, ["clog", "clogged", "drain"])) {
     return { summary: "a clogged drain", urgency: "non-emergency" };
   }
 
@@ -178,7 +338,7 @@ function sendLeadToMake(caller) {
       address: caller.address,
       issueSummary: caller.issueSummary,
       emergency: caller.emergencyAlert,
-      notes: caller.notes
+      notes: caller.notes,
     });
 
     const url = new URL(MAKE_WEBHOOK_URL);
@@ -222,6 +382,24 @@ function buildAndSend(twiml, res, baseUrl, text) {
   return res.type("text/xml").send(twiml.toString());
 }
 
+function moveToNameOrPhoneStep(twiml, res, baseUrl, caller, normalPrompt, emergencyPrompt) {
+  if (caller.name && caller.firstName) {
+    caller.lastStep = "confirm_phone";
+    const prompt = caller.emergencyAlert
+      ? `${emergencyPrompt} Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      : `${normalPrompt} Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`;
+
+    return buildAndSend(twiml, res, baseUrl, prompt);
+  }
+
+  caller.lastStep = "ask_name";
+  const prompt = caller.emergencyAlert
+    ? `${emergencyPrompt} Can I start by getting your full name, please?`
+    : `${normalPrompt} Can I start by getting your full name, please?`;
+
+  return buildAndSend(twiml, res, baseUrl, prompt);
+}
+
 app.post("/incoming-call", (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const baseUrl = getBaseUrl(req);
@@ -253,59 +431,82 @@ app.post("/handle-input", (req, res) => {
   const caller = getOrCreateCaller(phone);
 
   if (caller.lastStep === "ask_issue") {
-    caller.issue = speech;
-    const classification = classifyIssue(speech);
+    const parsed = extractOpeningNameAndIssue(speech);
+
+    if (parsed.name) {
+      caller.name = parsed.name;
+      caller.firstName = getFirstName(parsed.name);
+    }
+
+    caller.issue = cleanForSpeech(parsed.issueText || speech);
+
+    const classification = classifyIssue(caller.issue);
     caller.issueSummary = classification.summary;
 
     if (classification.urgency === "emergency") {
       caller.emergencyAlert = true;
-      caller.lastStep = "ask_name";
-
-      return buildAndSend(
-        twiml, res, baseUrl,
-        `I'm sorry you're dealing with that. I have marked this as an emergency for ${caller.issueSummary} and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
+      return moveToNameOrPhoneStep(
+        twiml,
+        res,
+        baseUrl,
+        caller,
+        "",
+        `I'm sorry you're dealing with that. I have marked this as an emergency for ${caller.issueSummary} and will get this to our service team just as soon as I get all your information.`
       );
     }
 
     if (classification.urgency === "unclear") {
       caller.lastStep = "unclear_emergency";
       return buildAndSend(
-        twiml, res, baseUrl,
+        twiml,
+        res,
+        baseUrl,
         `Alright, so you have ${caller.issueSummary}. If you'd like, I can mark this as an emergency and have someone get back to you as soon as possible.`
       );
     }
 
-    caller.lastStep = "ask_name";
-    return buildAndSend(
-      twiml, res, baseUrl,
-      "Alright, I can definitely help you with that. Can I start by getting your full name, please?"
+    return moveToNameOrPhoneStep(
+      twiml,
+      res,
+      baseUrl,
+      caller,
+      "Alright, I can definitely help you with that.",
+      ""
     );
   }
 
   if (caller.lastStep === "unclear_emergency") {
-    caller.lastStep = "ask_name";
-
     if (isAffirmative(speech)) {
       caller.emergencyAlert = true;
-      return buildAndSend(
-        twiml, res, baseUrl,
-        "Alright, I've got this marked as an emergency. Can I start by getting your full name, please?"
+      return moveToNameOrPhoneStep(
+        twiml,
+        res,
+        baseUrl,
+        caller,
+        "",
+        "Alright, I've got this marked as an emergency."
       );
     }
 
-    return buildAndSend(
-      twiml, res, baseUrl,
-      "Alright, no problem. Can I start by getting your full name, please?"
+    return moveToNameOrPhoneStep(
+      twiml,
+      res,
+      baseUrl,
+      caller,
+      "Alright, no problem.",
+      ""
     );
   }
 
   if (caller.lastStep === "ask_name") {
-    caller.name = toTitleCase(speech);
+    caller.name = toTitleCase(cleanName(speech));
     caller.firstName = getFirstName(caller.name);
     caller.lastStep = "confirm_phone";
 
     return buildAndSend(
-      twiml, res, baseUrl,
+      twiml,
+      res,
+      baseUrl,
       `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
     );
   }
@@ -314,14 +515,18 @@ app.post("/handle-input", (req, res) => {
     if (isNegative(speech)) {
       caller.lastStep = "get_new_phone";
       return buildAndSend(
-        twiml, res, baseUrl,
+        twiml,
+        res,
+        baseUrl,
         "No problem. What's the best number to reach you?"
       );
     }
 
     caller.lastStep = "ask_address";
     return buildAndSend(
-      twiml, res, baseUrl,
+      twiml,
+      res,
+      baseUrl,
       "What is the service address?"
     );
   }
@@ -330,7 +535,9 @@ app.post("/handle-input", (req, res) => {
     caller.callbackNumber = speech;
     caller.lastStep = "ask_address";
     return buildAndSend(
-      twiml, res, baseUrl,
+      twiml,
+      res,
+      baseUrl,
       "What is the service address?"
     );
   }
@@ -340,12 +547,23 @@ app.post("/handle-input", (req, res) => {
     caller.lastStep = "ask_notes";
 
     return buildAndSend(
-      twiml, res, baseUrl,
+      twiml,
+      res,
+      baseUrl,
       "Before I submit this, are there any notes or details you'd like me to add for the technician?"
     );
   }
 
   if (caller.lastStep === "ask_notes") {
+    if (isPricingQuestion(speech)) {
+      return buildAndSend(
+        twiml,
+        res,
+        baseUrl,
+        `${pricingResponse()} Before I submit this, are there any notes or details you'd like me to add for the technician?`
+      );
+    }
+
     if (!isEndCallPhrase(speech)) {
       caller.notes = speech;
     }
@@ -360,8 +578,17 @@ app.post("/handle-input", (req, res) => {
   }
 
   if (caller.lastStep === "recap") {
+    if (isPricingQuestion(speech)) {
+      return buildAndSend(
+        twiml,
+        res,
+        baseUrl,
+        `${pricingResponse()} ${caller.emergencyAlert ? "Is there anything else I can do for you today?" : "Is there anything else I can add before I submit this?"}`
+      );
+    }
+
     if (!isEndCallPhrase(speech)) {
-      caller.notes = (caller.notes || "") + " " + speech;
+      caller.notes = caller.notes ? `${caller.notes} ${speech}` : speech;
     }
 
     sendLeadToMake(caller);
