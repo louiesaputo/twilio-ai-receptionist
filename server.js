@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V64-END-PHRASE-FIX";
+const APP_VERSION = "VOICE-FLOW-V65-LEAK-EMERGENCY-NAME-FLOW";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -576,7 +576,14 @@ function sayThenGather(twiml, res, actionUrl, prompt) {
   return res.type("text/xml").send(twiml.toString());
 }
 
-function moveToNameOrPhoneStep(twiml, res, baseUrl, caller) {
+function moveToNameOrPhoneStep(twiml, res, baseUrl, caller, options = {}) {
+  const {
+    emergencyKnownNamePrompt = null,
+    emergencyUnknownNamePrompt = null,
+    normalKnownNamePrompt = null,
+    normalUnknownNamePrompt = null,
+  } = options;
+
   if (caller.fullName && caller.firstName) {
     caller.lastStep = "confirm_phone";
 
@@ -585,7 +592,8 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller) {
         twiml,
         res,
         `${baseUrl}/handle-input`,
-        `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Let's start by confirming some information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+        emergencyKnownNamePrompt ||
+          `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
       );
     }
 
@@ -593,7 +601,8 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller) {
       twiml,
       res,
       `${baseUrl}/handle-input`,
-      `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Let's start by confirming some information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      normalKnownNamePrompt ||
+        `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
     );
   }
 
@@ -604,7 +613,8 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller) {
       twiml,
       res,
       `${baseUrl}/handle-input`,
-      `I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
+      emergencyUnknownNamePrompt ||
+        `I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
     );
   }
 
@@ -612,7 +622,8 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller) {
     twiml,
     res,
     `${baseUrl}/handle-input`,
-    `I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Can I start by getting your full name, please?`
+    normalUnknownNamePrompt ||
+      `I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Can I start by getting your full name, please?`
   );
 }
 
@@ -686,7 +697,7 @@ app.post("/handle-input", (req, res) => {
         twiml,
         res,
         `${baseUrl}/handle-input`,
-        "I heard that you're dealing with a leak. Should I mark this as an emergency for you, or can this wait until normal business hours?"
+        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Should I mark this as an emergency for you, or is this something that can be handled during normal business hours?`
       );
     }
 
@@ -702,7 +713,11 @@ app.post("/handle-input", (req, res) => {
       caller.urgency = "emergency";
       caller.leadType = "emergency";
       caller.leakNeedsEmergencyChoice = false;
-      return moveToNameOrPhoneStep(twiml, res, baseUrl, caller);
+
+      return moveToNameOrPhoneStep(twiml, res, baseUrl, caller, {
+        emergencyKnownNamePrompt: `Alright, ${caller.firstName}, I'm really sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
+        emergencyUnknownNamePrompt: `I'm really sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Can I start with your full name?`,
+      });
     }
 
     if (isNegative(speech)) {
@@ -710,14 +725,18 @@ app.post("/handle-input", (req, res) => {
       caller.urgency = "normal";
       caller.leadType = "service";
       caller.leakNeedsEmergencyChoice = false;
-      return moveToNameOrPhoneStep(twiml, res, baseUrl, caller);
+
+      return moveToNameOrPhoneStep(twiml, res, baseUrl, caller, {
+        normalKnownNamePrompt: `Alright, ${caller.firstName}, I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
+        normalUnknownNamePrompt: `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?`,
+      });
     }
 
     return sayThenGather(
       twiml,
       res,
       `${baseUrl}/handle-input`,
-      "Should I mark this as an emergency for you, or can this wait until normal business hours?"
+      "Should I mark this as an emergency for you, or is this something that can be handled during normal business hours?"
     );
   }
 
