@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V63-LEAK-BRANCH-HARDENED";
+const APP_VERSION = "VOICE-FLOW-V64-END-PHRASE-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -309,8 +309,8 @@ function isNegative(text) {
 
 function isEndCallPhrase(text) {
   const t = normalizedText(text);
-  return containsAny(t, [
-    "no",
+
+  if (containsAny(t, [
     "that's all",
     "that is all",
     "nothing else",
@@ -321,7 +321,39 @@ function isEndCallPhrase(text) {
     "no thanks",
     "that'll do it",
     "that will do it",
-  ]);
+    "that should do it",
+    "that's everything",
+    "that is everything",
+    "that's all i need",
+    "that is all i need",
+    "that's good",
+    "that is good",
+    "we're good",
+    "we are good",
+    "no that is all",
+    "no that's all",
+    "no that will do it",
+    "no that'll do it",
+    "no that should do it",
+  ])) {
+    return true;
+  }
+
+  const stripped = t.replace(/[^\w\s]/g, "").trim();
+
+  if (
+    stripped === "no" ||
+    stripped === "done" ||
+    stripped === "thats it" ||
+    stripped === "that is it" ||
+    stripped === "thatll do it" ||
+    stripped === "that will do it" ||
+    stripped === "that should do it"
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function isPricingQuestion(text) {
