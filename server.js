@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V59-NAME-CAPTURE-AND-INTRO-FIX";
+const APP_VERSION = "VOICE-FLOW-V60-LOCKED-SCHEMA";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -21,17 +21,26 @@ function getOrCreateCaller(phone) {
     const now = new Date().toISOString();
     callerStore[phone] = {
       phone,
-      name: null,
+      fullName: null,
       firstName: null,
       callbackNumber: null,
       address: null,
+
       issue: null,
       issueSummary: null,
+      urgency: "normal",
       emergencyAlert: false,
       unclearEmergency: false,
-      notes: null,
-      lastStep: null,
+
+      leadType: "service",
+      projectType: "",
+      timeline: "",
+      proposalDeadline: "",
+      demoEmail: "",
+
+      notes: "",
       makeSent: false,
+      lastStep: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -43,17 +52,26 @@ function getOrCreateCaller(phone) {
 
 function resetCallerForNewCall(caller, phone) {
   caller.phone = phone;
-  caller.name = null;
+  caller.fullName = null;
   caller.firstName = null;
   caller.callbackNumber = phone;
   caller.address = null;
+
   caller.issue = null;
   caller.issueSummary = null;
+  caller.urgency = "normal";
   caller.emergencyAlert = false;
   caller.unclearEmergency = false;
-  caller.notes = null;
-  caller.lastStep = "ask_issue";
+
+  caller.leadType = "service";
+  caller.projectType = "";
+  caller.timeline = "";
+  caller.proposalDeadline = "";
+  caller.demoEmail = "";
+
+  caller.notes = "";
   caller.makeSent = false;
+  caller.lastStep = "ask_issue";
 }
 
 function cleanSpeechText(input) {
@@ -86,7 +104,6 @@ function normalizeAddressInput(input) {
   });
 
   value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
-
   return value.trim();
 }
 
@@ -165,7 +182,6 @@ function normalizeNameCandidate(rawName) {
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
-
   return toTitleCase(words.join(" "));
 }
 
@@ -234,7 +250,10 @@ function extractOpeningNameAndIssue(text) {
       const sepIndex = afterMarkerLower.indexOf(separator);
       if (sepIndex === -1) continue;
 
-      const possibleNameRaw = afterMarker.slice(0, sepIndex).trim().replace(/^[,.-\s]+|[,.-\s]+$/g, "");
+      const possibleNameRaw = afterMarker
+        .slice(0, sepIndex)
+        .trim()
+        .replace(/^[,.-\s]+|[,.-\s]+$/g, "");
       const issueRaw = afterMarker.slice(sepIndex + separator.length).trim();
 
       const possibleName = normalizeNameCandidate(possibleNameRaw);
@@ -245,7 +264,6 @@ function extractOpeningNameAndIssue(text) {
       }
     }
 
-    // Fallback: "this is John Smith, leak in ceiling"
     const commaParts = afterMarker.split(",");
     if (commaParts.length >= 2) {
       const possibleName = normalizeNameCandidate(commaParts[0].trim());
@@ -362,37 +380,70 @@ function classifyIssue(issue) {
   }
 
   if (text.includes("roof") && text.includes("leak")) {
-    return { summary: "a roof leak", urgency: "non-emergency" };
+    return { summary: "a roof leak", urgency: "normal" };
   }
 
   if (text.includes("ceiling") && text.includes("leak")) {
-    return { summary: "a ceiling leak", urgency: "non-emergency" };
+    return { summary: "a ceiling leak", urgency: "normal" };
   }
 
   if ((text.includes("faucet") || text.includes("sink")) && text.includes("leak")) {
-    return { summary: "a leaking faucet", urgency: "non-emergency" };
+    return { summary: "a leaking faucet", urgency: "normal" };
   }
 
   if (text.includes("water heater") && text.includes("leak")) {
-    return { summary: "a leaking water heater", urgency: "non-emergency" };
+    return { summary: "a leaking water heater", urgency: "normal" };
   }
 
   if (containsAny(text, ["clog", "clogged", "drain"])) {
-    return { summary: "a clogged drain", urgency: "non-emergency" };
+    return { summary: "a clogged drain", urgency: "normal" };
   }
 
   if (text.includes("leak")) {
-    return { summary: "a water leak", urgency: "non-emergency" };
+    return { summary: "a water leak", urgency: "normal" };
   }
 
-  return { summary: "your service issue", urgency: "non-emergency" };
+  return { summary: "your service issue", urgency: "normal" };
+}
+
+function buildMakePayload(caller) {
+  return {
+    leadType: caller.leadType || (caller.emergencyAlert ? "emergency" : "service"),
+    fullName: caller.fullName || "",
+    firstName: caller.firstName || "",
+    phone: caller.phone || "",
+    callbackNumber: caller.callbackNumber || "",
+    address: caller.address || "",
+    issue: caller.issue || "",
+    issueSummary: caller.issueSummary || "",
+    urgency: caller.urgency || "normal",
+    emergencyAlert: caller.emergencyAlert === true,
+    projectType: caller.projectType || "",
+    timeline: caller.timeline || "",
+    proposalDeadline: caller.proposalDeadline || "",
+    demoEmail: caller.demoEmail || "",
+    notes: caller.notes || "",
+    source: "AI Receptionist",
+    timestamp: new Date().toISOString(),
+  };
 }
 
 function shouldSendToMake(caller) {
-  if (!caller.callbackNumber) return false;
-  if (!caller.issueSummary) return false;
-  if (!caller.name) return false;
-  return true;
+  const payload = buildMakePayload(caller);
+
+  if (payload.leadType === "service" || payload.leadType === "emergency") {
+    return Boolean(payload.fullName && payload.phone && payload.issueSummary);
+  }
+
+  if (payload.leadType === "quote") {
+    return Boolean(payload.fullName && payload.phone && payload.projectType);
+  }
+
+  if (payload.leadType === "demo") {
+    return Boolean(payload.fullName && (payload.phone || payload.demoEmail));
+  }
+
+  return false;
 }
 
 function sendLeadToMake(caller) {
@@ -403,19 +454,8 @@ function sendLeadToMake(caller) {
   }
 
   try {
-    const data = JSON.stringify({
-      timestamp: new Date().toISOString(),
-      phone: caller.phone,
-      callbackNumber: caller.callbackNumber,
-      name: caller.name,
-      firstName: caller.firstName,
-      address: caller.address,
-      issue: caller.issue,
-      issueSummary: caller.issueSummary,
-      emergency: caller.emergencyAlert,
-      notes: caller.notes || "",
-    });
-
+    const payload = buildMakePayload(caller);
+    const data = JSON.stringify(payload);
     const url = new URL(MAKE_WEBHOOK_URL);
 
     const options = {
@@ -464,22 +504,44 @@ function buildAndSend(twiml, res, baseUrl, text) {
   return res.type("text/xml").send(twiml.toString());
 }
 
-function moveToNameOrPhoneStep(twiml, res, baseUrl, caller, normalPrompt, emergencyPrompt) {
-  if (caller.name && caller.firstName) {
+function moveToNameOrPhoneStep(twiml, res, baseUrl, caller) {
+  if (caller.fullName && caller.firstName) {
     caller.lastStep = "confirm_phone";
-    const prompt = caller.emergencyAlert
-      ? `${emergencyPrompt} Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
-      : `${normalPrompt} Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`;
 
-    return buildAndSend(twiml, res, baseUrl, prompt.trim());
+    if (caller.emergencyAlert) {
+      return buildAndSend(
+        twiml,
+        res,
+        baseUrl,
+        `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Let's start by confirming some information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      );
+    }
+
+    return buildAndSend(
+      twiml,
+      res,
+      baseUrl,
+      `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Let's start by confirming some information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+    );
   }
 
   caller.lastStep = "ask_name";
-  const prompt = caller.emergencyAlert
-    ? `${emergencyPrompt} Can I start by getting your full name, please?`
-    : `${normalPrompt} Can I start by getting your full name, please?`;
 
-  return buildAndSend(twiml, res, baseUrl, prompt.trim());
+  if (caller.emergencyAlert) {
+    return buildAndSend(
+      twiml,
+      res,
+      baseUrl,
+      `I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
+    );
+  }
+
+  return buildAndSend(
+    twiml,
+    res,
+    baseUrl,
+    `I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Can I start by getting your full name, please?`
+  );
 }
 
 app.get("/", (req, res) => {
@@ -520,76 +582,67 @@ app.post("/handle-input", (req, res) => {
     const parsed = extractOpeningNameAndIssue(speech);
 
     if (parsed.name) {
-      caller.name = parsed.name;
+      caller.fullName = parsed.name;
       caller.firstName = getFirstName(parsed.name);
-      console.log("✅ Captured opening name:", caller.name);
+      console.log("✅ Captured opening name:", caller.fullName);
     } else {
       console.log("⚠️ No opening name captured");
     }
 
     caller.issue = cleanForSpeech(parsed.issueText || speech);
-
     const classification = classifyIssue(caller.issue);
     caller.issueSummary = classification.summary;
+    caller.urgency = classification.urgency;
 
     if (classification.urgency === "emergency") {
       caller.emergencyAlert = true;
-      return moveToNameOrPhoneStep(
-        twiml,
-        res,
-        baseUrl,
-        caller,
-        "",
-        `I'm sorry you're dealing with that. I have marked this as an emergency for ${caller.issueSummary} and will get this to our service team just as soon as I get all your information.`
-      );
+      caller.leadType = "emergency";
+      return moveToNameOrPhoneStep(twiml, res, baseUrl, caller);
     }
 
     if (classification.urgency === "unclear") {
       caller.lastStep = "unclear_emergency";
+      caller.unclearEmergency = true;
+
+      if (caller.fullName && caller.firstName) {
+        return buildAndSend(
+          twiml,
+          res,
+          baseUrl,
+          `Thank you, ${caller.firstName}. You mentioned ${caller.issueSummary}. If you'd like, I can mark this as an emergency and have someone get back to you as soon as possible.`
+        );
+      }
+
       return buildAndSend(
         twiml,
         res,
         baseUrl,
-        `Alright, so you have ${caller.issueSummary}. If you'd like, I can mark this as an emergency and have someone get back to you as soon as possible.`
+        `You mentioned ${caller.issueSummary}. If you'd like, I can mark this as an emergency and have someone get back to you as soon as possible.`
       );
     }
 
-    return moveToNameOrPhoneStep(
-      twiml,
-      res,
-      baseUrl,
-      caller,
-      "Alright, I can definitely help you with that.",
-      ""
-    );
+    caller.emergencyAlert = false;
+    caller.leadType = "service";
+    return moveToNameOrPhoneStep(twiml, res, baseUrl, caller);
   }
 
   if (caller.lastStep === "unclear_emergency") {
     if (isAffirmative(speech)) {
       caller.emergencyAlert = true;
-      return moveToNameOrPhoneStep(
-        twiml,
-        res,
-        baseUrl,
-        caller,
-        "",
-        "Alright, I've got this marked as an emergency."
-      );
+      caller.urgency = "emergency";
+      caller.leadType = "emergency";
+      return moveToNameOrPhoneStep(twiml, res, baseUrl, caller);
     }
 
-    return moveToNameOrPhoneStep(
-      twiml,
-      res,
-      baseUrl,
-      caller,
-      "Alright, no problem.",
-      ""
-    );
+    caller.emergencyAlert = false;
+    caller.urgency = "normal";
+    caller.leadType = "service";
+    return moveToNameOrPhoneStep(twiml, res, baseUrl, caller);
   }
 
   if (caller.lastStep === "ask_name") {
-    caller.name = toTitleCase(cleanName(speech));
-    caller.firstName = getFirstName(caller.name);
+    caller.fullName = toTitleCase(cleanName(speech));
+    caller.firstName = getFirstName(caller.fullName);
     caller.lastStep = "confirm_phone";
 
     return buildAndSend(
