@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V58-NAME-PARSER-FIX";
+const APP_VERSION = "VOICE-FLOW-V59-NAME-CAPTURE-AND-INTRO-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -32,7 +32,6 @@ function getOrCreateCaller(phone) {
       notes: null,
       lastStep: null,
       makeSent: false,
-      demoIntroPlayed: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -161,6 +160,8 @@ function normalizeNameCandidate(rawName) {
     "project",
     "have",
     "need",
+    "issue",
+    "problem",
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -190,54 +191,68 @@ function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
-  // Remove greeting to Alex first
   let normalized = original
     .replace(/^(hi|hello|hey)\s*,?\s*alex\s*,?\s*/i, "")
     .replace(/^(hi|hello|hey)\s*,?\s*/i, "")
     .trim();
 
-  const directPatterns = [
-    /^this is\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
-    /^my name is\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
-    /^i am\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
-    /^i'm\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
-    /^this is\s+(.+?)\s*,\s*(.+)$/i,
-    /^my name is\s+(.+?)\s*,\s*(.+)$/i,
-    /^i am\s+(.+?)\s*,\s*(.+)$/i,
-    /^i'm\s+(.+?)\s*,\s*(.+)$/i,
+  const markerPatterns = [
+    "this is",
+    "my name is",
+    "i am",
+    "i'm",
+    "it is",
+    "it's",
   ];
 
-  for (const pattern of directPatterns) {
-    const match = normalized.match(pattern);
-    if (!match) continue;
+  const issueSeparators = [
+    " and i have ",
+    " and i've got ",
+    " and i need ",
+    ", i have ",
+    ", i've got ",
+    ", i need ",
+    " i have ",
+    " i've got ",
+    " i need ",
+    " calling about ",
+    " calling with ",
+    " calling for ",
+    " calling regarding ",
+  ];
 
-    const possibleName = normalizeNameCandidate(match[1]);
-    const issueText = stripIssueLeadIn(match[2]);
+  const lower = normalized.toLowerCase();
 
-    if (possibleName && issueText) {
-      return { name: possibleName, issueText };
+  for (const marker of markerPatterns) {
+    const markerIndex = lower.indexOf(marker);
+    if (markerIndex === -1) continue;
+
+    const afterMarker = normalized.slice(markerIndex + marker.length).trim();
+    const afterMarkerLower = afterMarker.toLowerCase();
+
+    for (const separator of issueSeparators) {
+      const sepIndex = afterMarkerLower.indexOf(separator);
+      if (sepIndex === -1) continue;
+
+      const possibleNameRaw = afterMarker.slice(0, sepIndex).trim().replace(/^[,.-\s]+|[,.-\s]+$/g, "");
+      const issueRaw = afterMarker.slice(sepIndex + separator.length).trim();
+
+      const possibleName = normalizeNameCandidate(possibleNameRaw);
+      const issueText = stripIssueLeadIn(issueRaw);
+
+      if (possibleName && issueText) {
+        return { name: possibleName, issueText };
+      }
     }
-  }
 
-  // Fallback regex set
-  const patterns = [
-    /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (!match) continue;
-
-    const name = normalizeNameCandidate(match[1]);
-    const issueText = stripIssueLeadIn(match[2]);
-
-    if (name && issueText) {
-      return { name, issueText };
+    // Fallback: "this is John Smith, leak in ceiling"
+    const commaParts = afterMarker.split(",");
+    if (commaParts.length >= 2) {
+      const possibleName = normalizeNameCandidate(commaParts[0].trim());
+      const issueText = stripIssueLeadIn(commaParts.slice(1).join(",").trim());
+      if (possibleName && issueText) {
+        return { name: possibleName, issueText };
+      }
     }
   }
 
@@ -481,7 +496,7 @@ app.post("/incoming-call", (req, res) => {
 
   twiml.say(
     { voice: "alice" },
-    "Thank you for calling Blue Caller Automation. This is Alex, our automated receptionist demo. Please speak to me just like one of your customers would if they were calling to book a service call or request a quote. Let's get this demo started."
+    "Thank you for calling Blue Caller Automation. Hi, this is Alex, and I could be your AI receptionist. Please speak to me just like one of your customers would if they were calling your business for service, an emergency, or a quote. Let's start the demo."
   );
 
   twiml.pause({ length: 1 });
@@ -507,6 +522,9 @@ app.post("/handle-input", (req, res) => {
     if (parsed.name) {
       caller.name = parsed.name;
       caller.firstName = getFirstName(parsed.name);
+      console.log("✅ Captured opening name:", caller.name);
+    } else {
+      console.log("⚠️ No opening name captured");
     }
 
     caller.issue = cleanForSpeech(parsed.issueText || speech);
