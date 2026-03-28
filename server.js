@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V57-STABLE-OLD-PATHS";
+const APP_VERSION = "VOICE-FLOW-V58-NAME-PARSER-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -79,7 +79,6 @@ function normalizeAddressInput(input) {
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  // Fix "2 248 lake street" -> "248 lake street"
   value = value.replace(/^(\d)\s+(\d{2,})(\b.*)$/i, (match, first, second, rest) => {
     if (second.startsWith(first)) {
       return `${second}${rest}`;
@@ -87,7 +86,6 @@ function normalizeAddressInput(input) {
     return match;
   });
 
-  // Fix "248 248 lake street" -> "248 lake street"
   value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
 
   return value.trim();
@@ -161,6 +159,8 @@ function normalizeNameCandidate(rawName) {
     "quote",
     "estimate",
     "project",
+    "have",
+    "need",
   ]);
 
   if (words.some((word) => bannedWords.has(word.toLowerCase()))) return "";
@@ -190,27 +190,47 @@ function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
-  const patterns = [
-    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*alex\s*,?\s*i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+  // Remove greeting to Alex first
+  let normalized = original
+    .replace(/^(hi|hello|hey)\s*,?\s*alex\s*,?\s*/i, "")
+    .replace(/^(hi|hello|hey)\s*,?\s*/i, "")
+    .trim();
 
-    /^(?:hi|hello|hey)\s*,?\s*this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
+  const directPatterns = [
+    /^this is\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
+    /^my name is\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
+    /^i am\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
+    /^i'm\s+(.+?)\s+(?:and\s+)?i\s+(?:have|need)\s+(.+)$/i,
+    /^this is\s+(.+?)\s*,\s*(.+)$/i,
+    /^my name is\s+(.+?)\s*,\s*(.+)$/i,
+    /^i am\s+(.+?)\s*,\s*(.+)$/i,
+    /^i'm\s+(.+?)\s*,\s*(.+)$/i,
+  ];
+
+  for (const pattern of directPatterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+
+    const possibleName = normalizeNameCandidate(match[1]);
+    const issueText = stripIssueLeadIn(match[2]);
+
+    if (possibleName && issueText) {
+      return { name: possibleName, issueText };
+    }
+  }
+
+  // Fallback regex set
+  const patterns = [
     /^this is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^it(?:'s| is)\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^my name is\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
-    /^(?:hi|hello|hey)\s*,?\s*i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^i am\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^i'm\s+([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})[\s,.-]+(.+)$/i,
     /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})\s+calling\s+(?:about|with|for|regarding)\s+(.+)$/i,
-    /^([a-zA-Z'-]+(?:\s+[a-zA-Z'-]+){1,3})\s*,?\s+and\s+i\s+have\s+(.+)$/i,
   ];
 
   for (const pattern of patterns) {
-    const match = original.match(pattern);
+    const match = normalized.match(pattern);
     if (!match) continue;
 
     const name = normalizeNameCandidate(match[1]);
