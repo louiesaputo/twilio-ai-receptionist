@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V65-LEAK-EMERGENCY-NAME-FLOW";
+const APP_VERSION = "VOICE-FLOW-V66-LEAK-REDUNDANCY-FIX";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -715,8 +715,8 @@ app.post("/handle-input", (req, res) => {
       caller.leakNeedsEmergencyChoice = false;
 
       return moveToNameOrPhoneStep(twiml, res, baseUrl, caller, {
-        emergencyKnownNamePrompt: `Alright, ${caller.firstName}, I'm really sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
-        emergencyUnknownNamePrompt: `I'm really sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Can I start with your full name?`,
+        emergencyKnownNamePrompt: `Alright, ${caller.firstName}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
+        emergencyUnknownNamePrompt: `Alright. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Can I start with your full name?`,
       });
     }
 
@@ -727,8 +727,8 @@ app.post("/handle-input", (req, res) => {
       caller.leakNeedsEmergencyChoice = false;
 
       return moveToNameOrPhoneStep(twiml, res, baseUrl, caller, {
-        normalKnownNamePrompt: `Alright, ${caller.firstName}, I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
-        normalUnknownNamePrompt: `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?`,
+        normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
+        normalUnknownNamePrompt: `Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?`,
       });
     }
 
