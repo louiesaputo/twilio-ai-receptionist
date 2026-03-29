@@ -8,7 +8,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V66-LEAK-REDUNDANCY-FIX";
+const APP_VERSION = "VOICE-FLOW-V67-NAME-FIX-LEAK-FLOW";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -149,17 +149,39 @@ function getFirstName(fullName) {
   return cleanForSpeech(fullName).split(/\s+/)[0] || "";
 }
 
+function hasFullName(name) {
+  if (!name) return false;
+  return cleanForSpeech(name).split(/\s+/).filter(Boolean).length >= 2;
+}
+
 function normalizeNameCandidate(rawName) {
   if (!rawName) return "";
 
-  const cleaned = cleanName(rawName);
+  const cleaned = cleanName(rawName).toLowerCase();
+
+  const stopWords = new Set([
+    "and",
+    "i",
+    "have",
+    "need",
+    "calling",
+    "about",
+    "with",
+    "for",
+    "regarding",
+    "because",
+    "alex",
+  ]);
+
   const words = cleaned
     .split(/\s+/)
     .filter(Boolean)
+    .filter((word) => !stopWords.has(word))
     .map((word) => word.replace(/[^a-zA-Z'-]/g, ""))
     .filter(Boolean);
 
-  if (words.length < 2 || words.length > 4) return "";
+  if (words.length === 0 || words.length > 4) return "";
+
   return toTitleCase(words.join(" "));
 }
 
@@ -274,37 +296,69 @@ function normalizedText(text) {
 
 function isAffirmative(text) {
   const t = normalizedText(text);
-  return containsAny(t, [
-    "yes",
-    "yeah",
-    "yep",
-    "correct",
-    "right",
-    "ok",
-    "okay",
-    "sure",
-    "emergency",
-    "mark it emergency",
-    "make it emergency",
-    "urgent",
-    "as soon as possible",
-  ]);
+
+  if (t.includes("not an emergency")) return false;
+  if (t.includes("not emergency")) return false;
+  if (t.includes("non emergency")) return false;
+  if (t.includes("non-emergency")) return false;
+  if (t.includes("not urgent")) return false;
+  if (t.includes("non urgent")) return false;
+  if (t.includes("non-urgent")) return false;
+
+  return (
+    t === "yes" ||
+    t === "yeah" ||
+    t === "yep" ||
+    t === "correct" ||
+    t === "right" ||
+    t === "ok" ||
+    t === "okay" ||
+    t === "sure" ||
+    t.includes("mark it emergency") ||
+    t.includes("make it emergency") ||
+    t.includes("this is an emergency") ||
+    t.includes("it's an emergency") ||
+    t.includes("it is an emergency") ||
+    t.includes("urgent") ||
+    t.includes("as soon as possible") ||
+    t.includes("right away") ||
+    t.includes("immediately")
+  );
 }
 
 function isNegative(text) {
   const t = normalizedText(text);
-  return containsAny(t, [
-    "no",
-    "nope",
-    "nah",
-    "standard",
-    "normal",
-    "regular",
-    "during business hours",
-    "normal business hours",
-    "not emergency",
-    "standard call",
-  ]);
+
+  return (
+    t === "no" ||
+    t === "nope" ||
+    t === "nah" ||
+    t.includes("not an emergency") ||
+    t.includes("not emergency") ||
+    t.includes("non emergency") ||
+    t.includes("non-emergency") ||
+    t.includes("not urgent") ||
+    t.includes("non urgent") ||
+    t.includes("non-urgent") ||
+    t.includes("standard") ||
+    t.includes("normal") ||
+    t.includes("regular") ||
+    t.includes("during business hours") ||
+    t.includes("normal business hours") ||
+    t.includes("standard call") ||
+    t.includes("not right away") ||
+    t.includes("not immediately") ||
+    t.includes("can wait") ||
+    t.includes("whenever is fine") ||
+    t.includes("no whenever is fine") ||
+    t.includes("whenever works") ||
+    t.includes("any time is fine") ||
+    t.includes("anytime is fine") ||
+    t.includes("no rush") ||
+    t.includes("sometime this week") ||
+    t.includes("during the week is fine") ||
+    t.includes("business hours is fine")
+  );
 }
 
 function isEndCallPhrase(text) {
@@ -582,7 +636,18 @@ function moveToNameOrPhoneStep(twiml, res, baseUrl, caller, options = {}) {
     emergencyUnknownNamePrompt = null,
     normalKnownNamePrompt = null,
     normalUnknownNamePrompt = null,
+    askLastNamePrompt = null,
   } = options;
+
+  if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
+    caller.lastStep = "ask_last_name";
+    return sayThenGather(
+      twiml,
+      res,
+      `${baseUrl}/handle-input`,
+      askLastNamePrompt || `Thank you, ${caller.firstName}. Can I get your last name as well?`
+    );
+  }
 
   if (caller.fullName && caller.firstName) {
     caller.lastStep = "confirm_phone";
@@ -641,16 +706,11 @@ app.post("/incoming-call", (req, res) => {
 
   twiml.say(
     { voice: "alice" },
-    "Thank you for calling Blue Caller Automation. Hi, this is Alex, and I could be your AI receptionist. Please speak to me just like one of your customers would if they were calling your business for service, an emergency, or a quote. Let's start the demo."
+    "Thank you for calling Blue Caller Automation. Hi, this is Alex, your virtual receptionist. This is a demonstration line, so you can experience how I would answer calls for your business. You can speak to me just like one of your customers would when calling for service, an emergency, or a quote. How can I help you today?"
   );
   twiml.pause({ length: 1 });
-
-  return sayThenGather(
-    twiml,
-    res,
-    `${baseUrl}/handle-input`,
-    "Thank you for calling Blue Caller Automation, this is Alex. How can I help you today?"
-  );
+  gatherOnly(twiml, `${baseUrl}/handle-input`);
+  return res.type("text/xml").send(twiml.toString());
 });
 
 app.post("/handle-input", (req, res) => {
@@ -717,6 +777,7 @@ app.post("/handle-input", (req, res) => {
       return moveToNameOrPhoneStep(twiml, res, baseUrl, caller, {
         emergencyKnownNamePrompt: `Alright, ${caller.firstName}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
         emergencyUnknownNamePrompt: `Alright. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Can I start with your full name?`,
+        askLastNamePrompt: `Alright, ${caller.firstName}. I've got this marked as an emergency. Before I go any further, can I get your last name as well?`,
       });
     }
 
@@ -729,6 +790,7 @@ app.post("/handle-input", (req, res) => {
       return moveToNameOrPhoneStep(twiml, res, baseUrl, caller, {
         normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
         normalUnknownNamePrompt: `Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?`,
+        askLastNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`,
       });
     }
 
@@ -743,13 +805,36 @@ app.post("/handle-input", (req, res) => {
   if (caller.lastStep === "ask_name") {
     caller.fullName = toTitleCase(cleanName(speech));
     caller.firstName = getFirstName(caller.fullName);
+
+    if (!hasFullName(caller.fullName)) {
+      caller.lastStep = "ask_last_name";
+      return sayThenGather(
+        twiml,
+        res,
+        `${baseUrl}/handle-input`,
+        `Thank you, ${caller.firstName}. Can I get your last name as well?`
+      );
+    }
+
+    caller.lastStep = "confirm_phone";
+    return sayThenGather(
+      twiml,
+      res,
+      `${baseUrl}/handle-input`,
+      `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+    );
+  }
+
+  if (caller.lastStep === "ask_last_name") {
+    const lastName = cleanName(speech);
+    caller.fullName = toTitleCase(`${caller.firstName} ${lastName}`);
     caller.lastStep = "confirm_phone";
 
     return sayThenGather(
       twiml,
       res,
       `${baseUrl}/handle-input`,
-      `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
     );
   }
 
