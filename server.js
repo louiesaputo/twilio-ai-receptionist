@@ -1,18 +1,18 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V70
+ VERSION: V71
  DATE: 2026-03-28
  NOTES:
- - Added silence retry handling
- - Improved name-only opening handling
- - Fixed leak emergency yes/no wording
- - Fixed "not an emergency" and non-urgent phrases
- - Added schedule vs callback flow
- - Added appointment date/time capture
- - Intro now says "virtual receptionist"
+ - Added first-available / earliest-available scheduling flow
+ - Added Make calendar availability check
+ - Added confirmation step for first available slot
+ - Keeps silence retry handling
+ - Keeps name-only opening handling
+ - Keeps leak emergency logic
+ - Keeps schedule vs callback flow
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V70 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V71 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -22,7 +22,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V70";
+const APP_VERSION = "VOICE-FLOW-V71";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -56,6 +56,8 @@ function getOrCreateCaller(phone) {
       status: "new_lead",
       appointmentDate: "",
       appointmentTime: "",
+      pendingOfferedDate: "",
+      pendingOfferedTime: "",
 
       makeSent: false,
       lastStep: "ask_issue",
@@ -93,6 +95,8 @@ function resetCallerForNewCall(caller, phone) {
   caller.status = "new_lead";
   caller.appointmentDate = "";
   caller.appointmentTime = "";
+  caller.pendingOfferedDate = "";
+  caller.pendingOfferedTime = "";
 
   caller.makeSent = false;
   caller.lastStep = "ask_issue";
@@ -332,7 +336,12 @@ function isAffirmative(text) {
     t.includes("urgent") ||
     t.includes("as soon as possible") ||
     t.includes("right away") ||
-    t.includes("immediately")
+    t.includes("immediately") ||
+    t.includes("that works") ||
+    t.includes("that would work") ||
+    t.includes("that works for me") ||
+    t.includes("that'll work") ||
+    t.includes("that will work")
   );
 }
 
@@ -367,7 +376,9 @@ function isNegative(text) {
     t.includes("no rush") ||
     t.includes("sometime this week") ||
     t.includes("during the week is fine") ||
-    t.includes("business hours is fine")
+    t.includes("business hours is fine") ||
+    t.includes("that doesn't work") ||
+    t.includes("that does not work")
   );
 }
 
@@ -437,10 +448,6 @@ function isPricingQuestion(text) {
   );
 }
 
-function pricingResponse() {
-  return "That is a great question. Pricing can vary depending on the job, so someone from the office will go over that with you when they call.";
-}
-
 function callerSaysNotToldProblem(text) {
   const t = normalizedText(text);
   return (
@@ -478,6 +485,30 @@ function isLeakLikeIssue(text) {
     "drip",
     "dripping"
   ]);
+}
+
+function isAvailabilityRequest(text) {
+  const t = normalizedText(text);
+  return (
+    t.includes("first available") ||
+    t.includes("earliest available") ||
+    t.includes("soonest available") ||
+    t.includes("next available") ||
+    t.includes("first opening") ||
+    t.includes("next opening") ||
+    t.includes("earliest opening") ||
+    t.includes("when is your next opening") ||
+    t.includes("when is the soonest") ||
+    t.includes("what's your first available") ||
+    t.includes("whats your first available") ||
+    t.includes("what is your first available") ||
+    t.includes("what's the first available") ||
+    t.includes("what is the first available") ||
+    t.includes("how soon can someone come") ||
+    t.includes("how soon can someone come out") ||
+    t.includes("how soon can you come") ||
+    t.includes("when can someone come out")
+  );
 }
 
 function classifyIssue(issue) {
@@ -624,6 +655,56 @@ function sendLeadToMake(caller) {
   }
 }
 
+function checkCalendarAvailability(caller) {
+  return new Promise((resolve) => {
+    try {
+      const payload = JSON.stringify({
+        action: "check_availability",
+        phone: caller.phone,
+        fullName: caller.fullName || "",
+        firstName: caller.firstName || "",
+        issueSummary: caller.issueSummary || "",
+        address: caller.address || ""
+      });
+
+      const url = new URL(MAKE_WEBHOOK_URL);
+
+      const options = {
+        hostname: url.hostname,
+        path: `${url.pathname}${url.search || ""}`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload)
+        }
+      };
+
+      const req = https.request(options, (makeRes) => {
+        let body = "";
+
+        makeRes.on("data", (chunk) => {
+          body += chunk;
+        });
+
+        makeRes.on("end", () => {
+          try {
+            const parsed = JSON.parse(body || "{}");
+            resolve(parsed);
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      });
+
+      req.on("error", () => resolve(null));
+      req.write(payload);
+      req.end();
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
 function sayThenGather(twiml, res, actionUrl, prompt) {
   twiml.say({ voice: "alice" }, prompt);
   twiml.pause({ length: 1 });
@@ -733,7 +814,7 @@ app.post("/incoming-call", (req, res) => {
   res.type("text/xml").send(twiml.toString());
 });
 
-app.post("/handle-input", (req, res) => {
+app.post("/handle-input", async (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const phone = req.body.From || "unknown";
   const speech = cleanSpeechText(req.body.SpeechResult || "");
@@ -985,12 +1066,37 @@ app.post("/handle-input", (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to schedule a service appointment now, or would you prefer someone from the office to call you to schedule it?"
+      "Would you like to schedule a service appointment now, would you prefer someone from the office to call you to schedule it, or would you like the first available appointment?"
     );
   }
 
   if (caller.lastStep === "schedule_or_callback") {
     const t = normalizedText(speech);
+
+    if (isAvailabilityRequest(t)) {
+      const availability = await checkCalendarAvailability(caller);
+
+      if (availability && availability.date && availability.time) {
+        caller.pendingOfferedDate = availability.date;
+        caller.pendingOfferedTime = availability.time;
+        caller.lastStep = "confirm_first_available";
+
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          `The first available appointment I have is ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would you like me to schedule that for you?`
+        );
+      }
+
+      caller.lastStep = "ask_appointment_day";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "I'm sorry, I wasn't able to pull the calendar right now. What day works best for you?"
+      );
+    }
 
     if (
       t.includes("schedule") ||
@@ -1028,11 +1134,65 @@ app.post("/handle-input", (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to schedule now, or would you prefer someone from the office to call you to schedule it?"
+      "Would you like to schedule now, would you prefer someone from the office to call you, or would you like the first available appointment?"
+    );
+  }
+
+  if (caller.lastStep === "confirm_first_available") {
+    if (isAffirmative(speech)) {
+      caller.appointmentDate = caller.pendingOfferedDate;
+      caller.appointmentTime = caller.pendingOfferedTime;
+      caller.status = "scheduled";
+      caller.lastStep = "ask_notes";
+
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `Perfect. I've got you down for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, are there any notes or details you'd like me to add for the technician?`
+      );
+    }
+
+    if (isNegative(speech)) {
+      caller.pendingOfferedDate = "";
+      caller.pendingOfferedTime = "";
+      caller.status = "scheduling";
+      caller.lastStep = "ask_appointment_day";
+
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "No problem. What day works better for you?"
+      );
+    }
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Would you like me to schedule that first available appointment for you?"
     );
   }
 
   if (caller.lastStep === "ask_appointment_day") {
+    if (isAvailabilityRequest(speech)) {
+      const availability = await checkCalendarAvailability(caller);
+
+      if (availability && availability.date && availability.time) {
+        caller.pendingOfferedDate = availability.date;
+        caller.pendingOfferedTime = availability.time;
+        caller.lastStep = "confirm_first_available";
+
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          `The first available appointment I have is ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would you like me to schedule that for you?`
+        );
+      }
+    }
+
     caller.appointmentDate = cleanForSpeech(speech);
     caller.lastStep = "ask_appointment_time";
     return sayThenGather(
