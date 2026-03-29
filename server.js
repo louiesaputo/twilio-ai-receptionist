@@ -1,18 +1,17 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V71
+ VERSION: V72
  DATE: 2026-03-28
  NOTES:
- - Added first-available / earliest-available scheduling flow
- - Added Make calendar availability check
- - Added confirmation step for first available slot
+ - Fixed vague scheduling phrases like "morning"
+ - Splits date + time preference when both are spoken together
+ - Stops fake bookings like "booked at morning"
+ - Keeps first-available / calendar lookup flow
  - Keeps silence retry handling
- - Keeps name-only opening handling
- - Keeps leak emergency logic
- - Keeps schedule vs callback flow
+ - Keeps leak emergency flow
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V71 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V72 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -22,7 +21,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V71";
+const APP_VERSION = "VOICE-FLOW-V72";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -340,7 +339,7 @@ function isAffirmative(text) {
     t.includes("that works") ||
     t.includes("that would work") ||
     t.includes("that works for me") ||
-    t.includes("that'll work") ||
+    t.includes("thatll work") ||
     t.includes("that will work")
   );
 }
@@ -448,6 +447,10 @@ function isPricingQuestion(text) {
   );
 }
 
+function pricingResponse() {
+  return "That is a great question. Pricing can vary depending on the job, so someone from the office will go over that with you when they call.";
+}
+
 function callerSaysNotToldProblem(text) {
   const t = normalizedText(text);
   return (
@@ -509,6 +512,62 @@ function isAvailabilityRequest(text) {
     t.includes("how soon can you come") ||
     t.includes("when can someone come out")
   );
+}
+
+function detectTimePreference(text) {
+  const t = normalizedText(text);
+
+  if (containsAny(t, ["morning", "mornings", "early morning"])) {
+    return "Morning preferred";
+  }
+
+  if (containsAny(t, ["afternoon", "afternoons", "later in the day"])) {
+    return "Afternoon preferred";
+  }
+
+  if (containsAny(t, ["evening", "evenings", "tonight"])) {
+    return "Evening preferred";
+  }
+
+  if (containsAny(t, ["any time", "anytime", "whenever"])) {
+    return "Any time preferred";
+  }
+
+  return "";
+}
+
+function isSpecificTime(text) {
+  const t = normalizedText(text);
+
+  return (
+    /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t) ||
+    /\b(noon|midnight)\b/i.test(t) ||
+    /\bbetween\s+\d{1,2}\s*(am|pm)?\s+and\s+\d{1,2}\s*(am|pm)?\b/i.test(t) ||
+    /\b\d{1,2}:\d{2}\b/i.test(t)
+  );
+}
+
+function extractDatePart(text) {
+  let value = cleanForSpeech(text || "");
+  if (!value) return "";
+
+  value = value
+    .replace(/^let'?s say\s+/i, "")
+    .replace(/^how about\s+/i, "")
+    .replace(/^maybe\s+/i, "")
+    .replace(/^for\s+/i, "")
+    .replace(/\bdo you have anything.*$/i, "")
+    .replace(/\bwhat do you have.*$/i, "")
+    .replace(/\banything in the .*$/i, "")
+    .replace(/\bin the mornings?\b.*$/i, "")
+    .replace(/\bin the afternoon\b.*$/i, "")
+    .replace(/\bin the evenings?\b.*$/i, "")
+    .trim();
+
+  value = value.split("?")[0].trim();
+  value = value.split(".")[0].trim();
+
+  return value;
 }
 
 function classifyIssue(issue) {
@@ -1089,12 +1148,16 @@ app.post("/handle-input", async (req, res) => {
         );
       }
 
-      caller.lastStep = "ask_appointment_day";
+      caller.status = "callback_requested";
+      caller.appointmentDate = "First available requested";
+      caller.appointmentTime = "";
+      caller.lastStep = "ask_notes";
+
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        "I'm sorry, I wasn't able to pull the calendar right now. What day works best for you?"
+        "I'm sorry, I wasn't able to pull the calendar right now. I'll note that you'd like the first available appointment, and someone from the office will reach out to confirm the exact day and time. Before I submit this, are there any notes you'd like me to add?"
       );
     }
 
@@ -1191,6 +1254,35 @@ app.post("/handle-input", async (req, res) => {
           `The first available appointment I have is ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would you like me to schedule that for you?`
         );
       }
+
+      caller.status = "callback_requested";
+      caller.appointmentDate = "First available requested";
+      caller.appointmentTime = "";
+      caller.lastStep = "ask_notes";
+
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "I'm sorry, I wasn't able to pull the calendar right now. I'll note that you'd like the first available appointment, and someone from the office will reach out to confirm the exact day and time. Before I submit this, are there any notes you'd like me to add?"
+      );
+    }
+
+    const timePreference = detectTimePreference(speech);
+    const datePart = extractDatePart(speech);
+
+    if (datePart && timePreference) {
+      caller.appointmentDate = datePart;
+      caller.appointmentTime = timePreference;
+      caller.status = "callback_requested";
+      caller.lastStep = "ask_notes";
+
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()} on ${caller.appointmentDate}, and someone from the office will confirm the exact appointment time with you. Before I submit this, are there any notes you'd like me to add?`
+      );
     }
 
     caller.appointmentDate = cleanForSpeech(speech);
@@ -1204,6 +1296,21 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_appointment_time") {
+    const timePreference = detectTimePreference(speech);
+
+    if (timePreference && !isSpecificTime(speech)) {
+      caller.appointmentTime = timePreference;
+      caller.status = "callback_requested";
+      caller.lastStep = "ask_notes";
+
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()}, and someone from the office will confirm the exact appointment time with you. Before I submit this, are there any notes or details you'd like me to add for the technician?`
+      );
+    }
+
     caller.appointmentTime = cleanForSpeech(speech);
     caller.status = "scheduled";
     caller.lastStep = "ask_notes";
@@ -1235,7 +1342,9 @@ app.post("/handle-input", async (req, res) => {
       ? `Perfect. I am marking this as an emergency for ${caller.issueSummary}, and I am submitting it for review now. Someone from our service team will contact you shortly.`
       : caller.status === "scheduled"
         ? `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested appointment on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`
-        : `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
+        : caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime
+          ? `Perfect. I'm submitting your service request for ${caller.issueSummary} with your preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact appointment time.`
+          : `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
 
     twiml.say({ voice: "alice" }, recap);
     twiml.pause({ length: 1 });
