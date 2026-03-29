@@ -17,6 +17,7 @@ const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope
 // ======== MIDDLEWARE ========
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+app.use(express.static("public"));
 
 // This allows us to host a webpage for browser calling
 app.use(express.static("public"));
@@ -151,6 +152,27 @@ app.get("/twilio-token", (req, res) => {
 });
 
 // ======== SERVER START ========
+// ===== BROWSER TOKEN ROUTE =====
+app.get("/twilio-token", (req, res) => {
+  const AccessToken = twilio.jwt.AccessToken;
+  const VoiceGrant = AccessToken.VoiceGrant;
+
+  const token = new AccessToken(
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_API_KEY_SID,
+    process.env.TWILIO_API_KEY_SECRET,
+    { identity: "browser-user" }
+  );
+
+  const voiceGrant = new VoiceGrant({
+    outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID,
+    incomingAllow: false,
+  });
+
+  token.addGrant(voiceGrant);
+
+  res.json({ token: token.toJwt() });
+});
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📦 Version: ${APP_VERSION}`);
