@@ -1,7 +1,12 @@
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blue Caller AI Test</title>
+</head>
 <body>
-  <h2>Call AI Receptionist</h2>
+  <h2>Blue Caller AI Test Call</h2>
   <button onclick="makeCall()">Call</button>
   <button onclick="hangup()">Hang Up</button>
   <p id="status">Loading...</p>
@@ -12,25 +17,36 @@
     let call;
 
     async function setup() {
-      const res = await fetch("/twilio-token");
-      const data = await res.json();
+      try {
+        const res = await fetch("/twilio-token");
+        const data = await res.json();
 
-      device = new Twilio.Device(data.token);
+        device = new Twilio.Device(data.token);
 
-      device.on("registered", () => {
-        document.getElementById("status").innerText = "Ready";
-      });
+        device.on("registered", () => {
+          document.getElementById("status").innerText = "Ready";
+        });
 
-      device.on("error", (err) => {
-        document.getElementById("status").innerText = err.message;
-      });
+        device.on("error", (err) => {
+          document.getElementById("status").innerText = "Device error: " + err.message;
+          console.error(err);
+        });
 
-      await device.register();
+        await device.register();
+      } catch (err) {
+        document.getElementById("status").innerText = "Setup error: " + err.message;
+        console.error(err);
+      }
     }
 
     async function makeCall() {
-      call = await device.connect();
-      document.getElementById("status").innerText = "Calling...";
+      try {
+        call = await device.connect();
+        document.getElementById("status").innerText = "Calling...";
+      } catch (err) {
+        document.getElementById("status").innerText = "Call error: " + err.message;
+        console.error(err);
+      }
     }
 
     function hangup() {
