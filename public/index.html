@@ -11,17 +11,31 @@
   <button onclick="hangup()">Hang Up</button>
   <p id="status">Loading...</p>
 
-  <script src="https://sdk.twilio.com/js/voice/releases/2.10.0/twilio.min.js"></script>
+  <script src="https://sdk.twilio.com/js/voice/releases/2.12.3/twilio.min.js"></script>
   <script>
     let device;
     let call;
 
     async function setup() {
       try {
-        const res = await fetch("/twilio-token");
-        const data = await res.json();
+        if (typeof Twilio === "undefined") {
+          document.getElementById("status").innerText = "Setup error: Twilio SDK failed to load";
+          return;
+        }
 
-        device = new Twilio.Device(data.token);
+        const res = await fetch("/twilio-token");
+        const text = await res.text();
+
+        if (!res.ok) {
+          document.getElementById("status").innerText = text;
+          return;
+        }
+
+        const data = JSON.parse(text);
+
+        device = new Twilio.Device(data.token, {
+          logLevel: 1
+        });
 
         device.on("registered", () => {
           document.getElementById("status").innerText = "Ready";
@@ -41,6 +55,11 @@
 
     async function makeCall() {
       try {
+        if (!device) {
+          document.getElementById("status").innerText = "Call error: device not ready";
+          return;
+        }
+
         call = await device.connect();
         document.getElementById("status").innerText = "Calling...";
       } catch (err) {
@@ -50,7 +69,9 @@
     }
 
     function hangup() {
-      if (call) call.disconnect();
+      if (call) {
+        call.disconnect();
+      }
       document.getElementById("status").innerText = "Hung up";
     }
 
