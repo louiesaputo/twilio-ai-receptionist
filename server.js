@@ -1,17 +1,16 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V73
- DATE: 2026-03-28
+ VERSION: V74
+ DATE: 2026-03-29
  NOTES:
- - Reviewed and tightened full call flow
- - Added quote detection and quote flow
- - Preserved working service/emergency wording
- - Improved scheduling/date/time preference handling
+ - Removed awkward "Hi" from intro
+ - Tightened quote flow wording to remove repetition
+ - Preserved current service / emergency / scheduling logic
+ - Keeps quote detection
  - Keeps first-available / calendar lookup flow
- - Keeps silence retry handling
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V73 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V74 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -21,7 +20,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V73";
+const APP_VERSION = "VOICE-FLOW-V74";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -952,7 +951,7 @@ function moveToQuoteNameOrPhoneStep(twiml, res, caller, options = {}) {
       twiml,
       res,
       "/handle-input",
-      quoteAskLastNamePrompt || `Absolutely, ${caller.firstName}. Before I go any further, can I get your last name as well?`
+      quoteAskLastNamePrompt || `Thank you, ${caller.firstName}. Can I get your last name as well?`
     );
   }
 
@@ -963,7 +962,7 @@ function moveToQuoteNameOrPhoneStep(twiml, res, caller, options = {}) {
       res,
       "/handle-input",
       quoteKnownNamePrompt ||
-        `Absolutely, ${caller.firstName}. I'd be happy to help with that quote request. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+        `Absolutely, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
     );
   }
 
@@ -973,7 +972,7 @@ function moveToQuoteNameOrPhoneStep(twiml, res, caller, options = {}) {
     res,
     "/handle-input",
     quoteUnknownNamePrompt ||
-      "Absolutely. I'd be happy to help with that quote request. Can I start by getting your full name, please?"
+      "Absolutely. Can I start by getting your full name, please?"
   );
 }
 
@@ -990,7 +989,7 @@ app.post("/incoming-call", (req, res) => {
 
   twiml.say(
     { voice: "alice" },
-    "Thank you for calling Blue Caller Automation. Hi, this is Alex, your virtual receptionist. This is a demonstration line, so you can experience how I would answer calls for your business. You can speak to me just like one of your customers would when calling for service, an emergency, or a quote. How can I help you today?"
+    "Thank you for calling Blue Caller Automation. This is Alex, your virtual receptionist. This is a demonstration line, so you can experience how I would answer calls for your business. You can speak to me just like one of your customers would when calling for service, an emergency, or a quote. How can I help you today?"
   );
   twiml.pause({ length: 1 });
 
@@ -1201,7 +1200,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          `Absolutely, ${caller.firstName}. Before I go any further, can I get your last name as well?`
+          `Thank you, ${caller.firstName}. Can I get your last name as well?`
         );
       }
 
@@ -1220,7 +1219,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Absolutely, ${caller.firstName}. I'd be happy to help with that quote request. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+        `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
       );
     }
 
@@ -1242,7 +1241,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+        `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
       );
     }
 
@@ -1347,7 +1346,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Do you have a deadline for the proposal or estimate?"
+      "Do you have a timeline in mind for this project?"
     );
   }
 
