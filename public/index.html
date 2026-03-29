@@ -1,1 +1,44 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Call AI Receptionist</h2>
+  <button onclick="makeCall()">Call</button>
+  <button onclick="hangup()">Hang Up</button>
+  <p id="status">Loading...</p>
 
+  <script src="https://sdk.twilio.com/js/voice/releases/2.10.0/twilio.min.js"></script>
+  <script>
+    let device;
+    let call;
+
+    async function setup() {
+      const res = await fetch("/twilio-token");
+      const data = await res.json();
+
+      device = new Twilio.Device(data.token);
+
+      device.on("registered", () => {
+        document.getElementById("status").innerText = "Ready";
+      });
+
+      device.on("error", (err) => {
+        document.getElementById("status").innerText = err.message;
+      });
+
+      await device.register();
+    }
+
+    async function makeCall() {
+      call = await device.connect();
+      document.getElementById("status").innerText = "Calling...";
+    }
+
+    function hangup() {
+      if (call) call.disconnect();
+      document.getElementById("status").innerText = "Hung up";
+    }
+
+    setup();
+  </script>
+</body>
+</html>
