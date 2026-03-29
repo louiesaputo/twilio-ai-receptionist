@@ -1,17 +1,17 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V72
+ VERSION: V73
  DATE: 2026-03-28
  NOTES:
- - Fixed vague scheduling phrases like "morning"
- - Splits date + time preference when both are spoken together
- - Stops fake bookings like "booked at morning"
+ - Reviewed and tightened full call flow
+ - Added quote detection and quote flow
+ - Preserved working service/emergency wording
+ - Improved scheduling/date/time preference handling
  - Keeps first-available / calendar lookup flow
  - Keeps silence retry handling
- - Keeps leak emergency flow
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V72 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V73 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -21,7 +21,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V72";
+const APP_VERSION = "VOICE-FLOW-V73";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -490,6 +490,75 @@ function isLeakLikeIssue(text) {
   ]);
 }
 
+function isQuoteIntent(text) {
+  const t = normalizedText(text);
+
+  if (containsAny(t, ["quote", "estimate", "proposal", "bid"])) {
+    return true;
+  }
+
+  if (containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) {
+    return true;
+  }
+
+  if (
+    containsAny(t, ["install", "installation", "replace", "replacement", "new "]) &&
+    containsAny(t, [
+      "water heater",
+      "toilet",
+      "sink",
+      "faucet",
+      "shower",
+      "tub",
+      "bathroom",
+      "kitchen",
+      "garbage disposal"
+    ]) &&
+    !containsAny(t, ["leak", "leaking", "clog", "clogged", "repair", "fix", "burst", "gushing", "pouring"])
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function classifyProjectType(text) {
+  const t = normalizedText(text);
+
+  if (containsAny(t, ["bathroom", "bath"]) && containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) {
+    return "a bathroom remodel";
+  }
+
+  if (t.includes("kitchen") && containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) {
+    return "a kitchen remodel";
+  }
+
+  if (t.includes("water heater") && containsAny(t, ["install", "installation", "replace", "replacement", "new"])) {
+    return "a water heater installation";
+  }
+
+  if (t.includes("toilet") && containsAny(t, ["install", "installation", "replace", "replacement", "new"])) {
+    return "a toilet installation";
+  }
+
+  if (t.includes("faucet") && containsAny(t, ["install", "installation", "replace", "replacement", "new"])) {
+    return "a faucet installation";
+  }
+
+  if (containsAny(t, ["quote", "estimate", "proposal", "bid"])) {
+    return cleanForSpeech(text)
+      .replace(/\b(i'?m|i am|we're|we are|looking to|want to|would like to|get a|need a)\b/gi, "")
+      .replace(/\bquote\b/gi, "")
+      .replace(/\bestimate\b/gi, "")
+      .replace(/\bproposal\b/gi, "")
+      .replace(/\bbid\b/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() || "this project";
+  }
+
+  return cleanForSpeech(text) || "this project";
+}
+
 function isAvailabilityRequest(text) {
   const t = normalizedText(text);
   return (
@@ -561,13 +630,38 @@ function extractDatePart(text) {
     .replace(/\banything in the .*$/i, "")
     .replace(/\bin the mornings?\b.*$/i, "")
     .replace(/\bin the afternoon\b.*$/i, "")
+    .replace(/\bin the afternoons\b.*$/i, "")
     .replace(/\bin the evenings?\b.*$/i, "")
+    .replace(/\bmornings?\b$/i, "")
+    .replace(/\bafternoons?\b$/i, "")
+    .replace(/\bevenings?\b$/i, "")
+    .replace(/\bany time\b$/i, "")
+    .replace(/\banytime\b$/i, "")
+    .replace(/\bwhenever\b$/i, "")
     .trim();
 
-  value = value.split("?")[0].trim();
-  value = value.split(".")[0].trim();
-
+  value = value.replace(/[?.!,]+$/g, "").trim();
   return value;
+}
+
+function hasUsableProblemText(text) {
+  if (!text) return false;
+
+  const t = normalizedText(text);
+  const wordCount = cleanForSpeech(text).split(/\s+/).filter(Boolean).length;
+
+  if (wordCount >= 2) return true;
+
+  if (
+    isQuoteIntent(text) ||
+    isHardEmergency(text) ||
+    isLeakLikeIssue(text) ||
+    containsAny(t, ["clog", "clogged", "drain", "faucet", "sink", "toilet", "roof", "ceiling", "water heater"])
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function classifyIssue(issue) {
@@ -723,7 +817,9 @@ function checkCalendarAvailability(caller) {
         fullName: caller.fullName || "",
         firstName: caller.firstName || "",
         issueSummary: caller.issueSummary || "",
-        address: caller.address || ""
+        address: caller.address || "",
+        appointmentDate: caller.appointmentDate || "",
+        appointmentTime: caller.appointmentTime || ""
       });
 
       const url = new URL(MAKE_WEBHOOK_URL);
@@ -772,7 +868,7 @@ function sayThenGather(twiml, res, actionUrl, prompt) {
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: "auto",
+    speechTimeout: 1,
     timeout: 5,
     actionOnEmptyResult: true,
     language: "en-US"
@@ -843,6 +939,44 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
   );
 }
 
+function moveToQuoteNameOrPhoneStep(twiml, res, caller, options = {}) {
+  const {
+    quoteKnownNamePrompt = null,
+    quoteUnknownNamePrompt = null,
+    quoteAskLastNamePrompt = null
+  } = options;
+
+  if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
+    caller.lastStep = "ask_last_name";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      quoteAskLastNamePrompt || `Absolutely, ${caller.firstName}. Before I go any further, can I get your last name as well?`
+    );
+  }
+
+  if (caller.fullName && caller.firstName) {
+    caller.lastStep = "confirm_phone";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      quoteKnownNamePrompt ||
+        `Absolutely, ${caller.firstName}. I'd be happy to help with that quote request. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+    );
+  }
+
+  caller.lastStep = "ask_name";
+  return sayThenGather(
+    twiml,
+    res,
+    "/handle-input",
+    quoteUnknownNamePrompt ||
+      "Absolutely. I'd be happy to help with that quote request. Can I start by getting your full name, please?"
+  );
+}
+
 app.get("/", (req, res) => {
   res.send(`Server running - ${APP_VERSION}`);
 });
@@ -864,7 +998,7 @@ app.post("/incoming-call", (req, res) => {
     input: "speech",
     action: "/handle-input",
     method: "POST",
-    speechTimeout: "auto",
+    speechTimeout: 1,
     timeout: 5,
     actionOnEmptyResult: true,
     language: "en-US"
@@ -931,7 +1065,7 @@ app.post("/handle-input", async (req, res) => {
       console.log("⚠️ No opening name captured");
     }
 
-    if (!parsed.issueText || parsed.issueText.split(" ").filter(Boolean).length < 3) {
+    if (!hasUsableProblemText(parsed.issueText)) {
       caller.lastStep = "ask_issue_again";
       return sayThenGather(
         twiml,
@@ -952,6 +1086,15 @@ app.post("/handle-input", async (req, res) => {
       caller.leadType = "emergency";
       caller.status = "new_emergency";
       return moveToNameOrPhoneStep(twiml, res, caller);
+    }
+
+    if (isQuoteIntent(caller.issue)) {
+      caller.leadType = "quote";
+      caller.projectType = classifyProjectType(caller.issue);
+      caller.status = "quote_request";
+      caller.urgency = "normal";
+      caller.emergencyAlert = false;
+      return moveToQuoteNameOrPhoneStep(twiml, res, caller);
     }
 
     if (isLeakLikeIssue(caller.issue)) {
@@ -981,6 +1124,15 @@ app.post("/handle-input", async (req, res) => {
       caller.leadType = "emergency";
       caller.status = "new_emergency";
       return moveToNameOrPhoneStep(twiml, res, caller);
+    }
+
+    if (isQuoteIntent(caller.issue)) {
+      caller.leadType = "quote";
+      caller.projectType = classifyProjectType(caller.issue);
+      caller.status = "quote_request";
+      caller.urgency = "normal";
+      caller.emergencyAlert = false;
+      return moveToQuoteNameOrPhoneStep(twiml, res, caller);
     }
 
     if (isLeakLikeIssue(caller.issue)) {
@@ -1043,6 +1195,16 @@ app.post("/handle-input", async (req, res) => {
 
     if (!hasFullName(caller.fullName)) {
       caller.lastStep = "ask_last_name";
+
+      if (caller.leadType === "quote") {
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          `Absolutely, ${caller.firstName}. Before I go any further, can I get your last name as well?`
+        );
+      }
+
       return sayThenGather(
         twiml,
         res,
@@ -1052,6 +1214,16 @@ app.post("/handle-input", async (req, res) => {
     }
 
     caller.lastStep = "confirm_phone";
+
+    if (caller.leadType === "quote") {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `Absolutely, ${caller.firstName}. I'd be happy to help with that quote request. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      );
+    }
+
     return sayThenGather(
       twiml,
       res,
@@ -1064,6 +1236,15 @@ app.post("/handle-input", async (req, res) => {
     const lastName = cleanName(speech);
     caller.fullName = toTitleCase(`${caller.firstName} ${lastName}`);
     caller.lastStep = "confirm_phone";
+
+    if (caller.leadType === "quote") {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      );
+    }
 
     return sayThenGather(
       twiml,
@@ -1087,6 +1268,16 @@ app.post("/handle-input", async (req, res) => {
 
     caller.callbackConfirmed = true;
     caller.lastStep = "ask_address";
+
+    if (caller.leadType === "quote") {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "What is the project address?"
+      );
+    }
+
     return sayThenGather(
       twiml,
       res,
@@ -1099,6 +1290,16 @@ app.post("/handle-input", async (req, res) => {
     caller.callbackNumber = cleanForSpeech(speech);
     caller.callbackConfirmed = true;
     caller.lastStep = "ask_address";
+
+    if (caller.leadType === "quote") {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "What is the project address?"
+      );
+    }
+
     return sayThenGather(
       twiml,
       res,
@@ -1109,6 +1310,16 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "ask_address") {
     caller.address = normalizeAddressInput(speech);
+
+    if (caller.leadType === "quote") {
+      caller.lastStep = "ask_project_timeline";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Do you have a timeline in mind for this project?"
+      );
+    }
 
     if (caller.emergencyAlert) {
       caller.lastStep = "ask_notes";
@@ -1126,6 +1337,35 @@ app.post("/handle-input", async (req, res) => {
       res,
       "/handle-input",
       "Would you like to schedule a service appointment now, would you prefer someone from the office to call you to schedule it, or would you like the first available appointment?"
+    );
+  }
+
+  if (caller.lastStep === "ask_project_timeline") {
+    caller.timeline = cleanForSpeech(speech);
+    caller.lastStep = "ask_proposal_deadline";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Do you have a deadline for the proposal or estimate?"
+    );
+  }
+
+  if (caller.lastStep === "ask_proposal_deadline") {
+    const t = normalizedText(speech);
+
+    if (t === "no" || t === "nope" || t === "not really" || t === "not sure" || t.includes("no deadline")) {
+      caller.proposalDeadline = "";
+    } else {
+      caller.proposalDeadline = cleanForSpeech(speech);
+    }
+
+    caller.lastStep = "ask_notes";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Before I submit this quote request, are there any notes or details you'd like me to add?"
     );
   }
 
@@ -1271,6 +1511,15 @@ app.post("/handle-input", async (req, res) => {
     const timePreference = detectTimePreference(speech);
     const datePart = extractDatePart(speech);
 
+    if (timePreference && !datePart) {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "I can certainly note a time preference. What day works best for you?"
+      );
+    }
+
     if (datePart && timePreference) {
       caller.appointmentDate = datePart;
       caller.appointmentTime = timePreference;
@@ -1324,6 +1573,15 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "ask_notes") {
     if (isPricingQuestion(speech)) {
+      if (caller.leadType === "quote") {
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          `${pricingResponse()} Before I submit this quote request, are there any notes or details you'd like me to add?`
+        );
+      }
+
       return sayThenGather(
         twiml,
         res,
@@ -1338,16 +1596,31 @@ app.post("/handle-input", async (req, res) => {
 
     caller.lastStep = "final_question";
 
-    const recap = caller.emergencyAlert
-      ? `Perfect. I am marking this as an emergency for ${caller.issueSummary}, and I am submitting it for review now. Someone from our service team will contact you shortly.`
-      : caller.status === "scheduled"
-        ? `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested appointment on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`
-        : caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime
-          ? `Perfect. I'm submitting your service request for ${caller.issueSummary} with your preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact appointment time.`
-          : `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
+    let recap = "";
+
+    if (caller.emergencyAlert) {
+      recap = `Perfect. I am marking this as an emergency for ${caller.issueSummary}, and I am submitting it for review now. Someone from our service team will contact you shortly.`;
+    } else if (caller.leadType === "quote") {
+      recap = `Perfect. I'm submitting your quote request for ${caller.projectType || "this project"} now, and someone from the office will contact you shortly.`;
+    } else if (caller.status === "scheduled") {
+      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested appointment on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`;
+    } else if (caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime) {
+      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact appointment time.`;
+    } else {
+      recap = `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
+    }
 
     twiml.say({ voice: "alice" }, recap);
     twiml.pause({ length: 1 });
+
+    if (caller.leadType === "quote") {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Is there anything else you'd like me to add before I submit this quote request?"
+      );
+    }
 
     return sayThenGather(
       twiml,
@@ -1361,6 +1634,15 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "final_question") {
     if (isPricingQuestion(speech)) {
+      if (caller.leadType === "quote") {
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          `${pricingResponse()} Is there anything else you'd like me to add before I submit this quote request?`
+        );
+      }
+
       return sayThenGather(
         twiml,
         res,
