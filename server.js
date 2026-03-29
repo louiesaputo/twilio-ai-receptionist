@@ -2,6 +2,7 @@
  BLUE CALLER AUTOMATION - VOICE SERVER
  VERSION: V76
  DATE: 2026-03-29
+
  NOTES:
  - Restores calendar-driven scheduling flow
  - Passes requested date / time preference / raw query to Make
@@ -15,6 +16,7 @@ console.log("🔥 BLUE CALLER SERVER V76 LOADED 🔥");
 const express = require("express");
 const twilio = require("twilio");
 const https = require("https");
+const path = require("path");
 
 const app = express();
 app.set("trust proxy", true);
@@ -25,6 +27,7 @@ const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+app.use(express.static("public"));
 
 const callerStore = {};
 
@@ -303,7 +306,6 @@ function normalizeAddressInput(input) {
   );
 
   value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
-
   return value.trim();
 }
 
@@ -425,7 +427,6 @@ function isEndCallPhrase(text) {
   }
 
   const stripped = t.replace(/[^\w\s]/g, "").trim();
-
   return (
     stripped === "no" ||
     stripped === "done" ||
@@ -1706,6 +1707,45 @@ app.post("/handle-input", async (req, res) => {
   twiml.say({ voice: "alice" }, "Sorry, something went wrong. Please call back.");
   twiml.hangup();
   return res.type("text/xml").send(twiml.toString());
+});
+
+app.get("/twilio-token", (req, res) => {
+  try {
+    const AccessToken = twilio.jwt.AccessToken;
+    const VoiceGrant = AccessToken.VoiceGrant;
+
+    if (!process.env.TWILIO_ACCOUNT_SID) {
+      throw new Error("Missing TWILIO_ACCOUNT_SID");
+    }
+    if (!process.env.TWILIO_API_KEY_SID) {
+      throw new Error("Missing TWILIO_API_KEY_SID");
+    }
+    if (!process.env.TWILIO_API_KEY_SECRET) {
+      throw new Error("Missing TWILIO_API_KEY_SECRET");
+    }
+    if (!process.env.TWILIO_TWIML_APP_SID) {
+      throw new Error("Missing TWILIO_TWIML_APP_SID");
+    }
+
+    const token = new AccessToken(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_API_KEY_SID,
+      process.env.TWILIO_API_KEY_SECRET,
+      { identity: "browser-user" }
+    );
+
+    const voiceGrant = new VoiceGrant({
+      outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID,
+      incomingAllow: false,
+    });
+
+    token.addGrant(voiceGrant);
+
+    res.json({ token: token.toJwt() });
+  } catch (err) {
+    console.error("TOKEN ERROR:", err);
+    res.status(500).send("Token error: " + err.message);
+  }
 });
 
 app.listen(PORT, () => {
