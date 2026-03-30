@@ -1,6 +1,6 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V76-PC-CALL
+ VERSION: V78-PC-CALL-FLOW-CLEANUP
  DATE: 2026-03-29
 
  NOTES:
@@ -10,9 +10,13 @@
  - Keeps quote routing as quote_request
  - Keeps emergency / leak / silence handling
  - Adds browser / PC call support
+ - Cleans quote project type for spoken recap + Make payload
+ - Simplifies leak emergency prompt to yes/no
+ - Improves emergency wording
+ - Fixes phone confirmation to always read callback number or caller phone
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V76-PC-CALL LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V78-PC-CALL-FLOW-CLEANUP LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -23,7 +27,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V76-PC-CALL";
+const APP_VERSION = "VOICE-FLOW-V78-PC-CALL-FLOW-CLEANUP";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -525,8 +529,42 @@ function isQuoteIntent(text) {
   return false;
 }
 
+function cleanQuoteProjectText(text) {
+  if (!text) return "";
+
+  return cleanForSpeech(text)
+    .replace(/^hi[, ]*/i, "")
+    .replace(/^hello[, ]*/i, "")
+    .replace(/^hey[, ]*/i, "")
+    .replace(/^this is [a-zA-Z' -]+[, ]*/i, "")
+    .replace(/^my name is [a-zA-Z' -]+[, ]*/i, "")
+    .replace(/^i(?:'d| would)? like to /i, "")
+    .replace(/^i wanted to /i, "")
+    .replace(/^i want to /i, "")
+    .replace(/^i need to /i, "")
+    .replace(/^get /i, "")
+    .replace(/^a /i, "a ")
+    .replace(/^an /i, "an ")
+    .replace(/^quote (on|for)\s+/i, "")
+    .replace(/^estimate (on|for)\s+/i, "")
+    .replace(/^proposal (on|for)\s+/i, "")
+    .replace(/^bid (on|for)\s+/i, "")
+    .replace(/^a quote (on|for)\s+/i, "")
+    .replace(/^an estimate (on|for)\s+/i, "")
+    .replace(/^a proposal (on|for)\s+/i, "")
+    .replace(/^a bid (on|for)\s+/i, "")
+    .replace(/^remodel of\s+/i, "")
+    .replace(/^remodel for\s+/i, "")
+    .replace(/^quote request for\s+/i, "")
+    .replace(/^quote request on\s+/i, "")
+    .replace(/^pricing for\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function classifyProjectType(text) {
-  const t = normalizedText(text);
+  const raw = cleanQuoteProjectText(text);
+  const t = normalizedText(raw);
 
   if (containsAny(t, ["bathroom", "bath"]) && containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) {
     return "a bathroom remodel";
@@ -548,7 +586,21 @@ function classifyProjectType(text) {
     return "a faucet installation";
   }
 
-  return cleanForSpeech(text) || "this project";
+  if (containsAny(t, ["bathroom", "bath"]) && containsAny(t, ["quote", "estimate", "proposal", "bid", "remodel"])) {
+    return "a bathroom remodel";
+  }
+
+  if (t.includes("kitchen") && containsAny(t, ["quote", "estimate", "proposal", "bid", "remodel"])) {
+    return "a kitchen remodel";
+  }
+
+  if (containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) {
+    if (t.includes("bathroom") || t.includes("bath")) return "a bathroom remodel";
+    if (t.includes("kitchen")) return "a kitchen remodel";
+    return "a remodeling project";
+  }
+
+  return raw || "this project";
 }
 
 function classifyIssue(issue) {
@@ -703,6 +755,16 @@ function buildMakePayload(caller) {
       ? (caller.projectType || caller.issueSummary || "")
       : (caller.issueSummary || "");
 
+  const effectiveIssue =
+    caller.leadType === "quote"
+      ? (caller.projectType || caller.issueSummary || caller.issue || "")
+      : (caller.issue || "");
+
+  const effectiveNotes =
+    caller.leadType === "quote" && caller.issue && caller.projectType && caller.issue !== caller.projectType
+      ? `${caller.notes ? caller.notes + " " : ""}Original caller request: ${caller.issue}`.trim()
+      : (caller.notes || "");
+
   return {
     leadType: effectiveLeadType,
     fullName: caller.fullName || "",
@@ -711,7 +773,7 @@ function buildMakePayload(caller) {
     callbackNumber: caller.callbackNumber || "",
     callbackConfirmed: caller.callbackConfirmed === true,
     address: caller.address || "",
-    issue: caller.issue || "",
+    issue: effectiveIssue,
     issueSummary: effectiveIssueSummary,
     urgency: caller.urgency || "normal",
     emergencyAlert: caller.emergencyAlert === true,
@@ -719,7 +781,7 @@ function buildMakePayload(caller) {
     timeline: caller.timeline || "",
     proposalDeadline: caller.proposalDeadline || "",
     demoEmail: caller.demoEmail || "",
-    notes: caller.notes || "",
+    notes: effectiveNotes,
     status: effectiveStatus,
     appointmentDate: caller.appointmentDate || "",
     appointmentTime: caller.appointmentTime || "",
@@ -840,7 +902,7 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
 
 function sayThenGather(twiml, res, actionUrl, prompt) {
   twiml.say({ voice: "alice" }, prompt);
-  twiml.pause({ length: 1 });
+  twiml.pause({ length: 1.5 });
 
   twiml.gather({
     input: "speech",
@@ -883,7 +945,7 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
         res,
         "/handle-input",
         emergencyKnownNamePrompt ||
-          `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+          `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
       );
     }
 
@@ -892,7 +954,7 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
       res,
       "/handle-input",
       normalKnownNamePrompt ||
-        `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+        `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
     );
   }
 
@@ -937,7 +999,7 @@ function moveToQuoteNameOrPhoneStep(twiml, res, caller) {
       twiml,
       res,
       "/handle-input",
-      `Absolutely, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      `Absolutely, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
     );
   }
 
@@ -959,7 +1021,7 @@ function resetPendingAvailability(caller) {
 }
 
 app.get("/", (req, res) => {
-  res.send(`Server running - ${APP_VERSION}`);
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.post("/incoming-call", (req, res) => {
@@ -1120,7 +1182,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Should I mark this as an emergency for you, or is this something that can be handled during normal business hours?`
+        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Do you want me to mark this as an emergency?`
       );
     }
 
@@ -1139,9 +1201,9 @@ app.post("/handle-input", async (req, res) => {
       caller.leakNeedsEmergencyChoice = false;
 
       return moveToNameOrPhoneStep(twiml, res, caller, {
-        emergencyKnownNamePrompt: `Alright, ${caller.firstName}. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
-        emergencyUnknownNamePrompt: `Alright. I've got this marked as an emergency. I just need to gather a few details so someone can reach out to you as soon as possible. Can I start with your full name?`,
-        askLastNamePrompt: `Alright, ${caller.firstName}. I've got this marked as an emergency. Before I go any further, can I get your last name as well?`
+        emergencyKnownNamePrompt: `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`,
+        emergencyUnknownNamePrompt: "Alright. I'm going to mark this as an emergency so our service team can review it right away. I just need to gather a few details from you. Can I start with your full name?",
+        askLastNamePrompt: `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`
       });
     }
 
@@ -1153,8 +1215,8 @@ app.post("/handle-input", async (req, res) => {
       caller.leakNeedsEmergencyChoice = false;
 
       return moveToNameOrPhoneStep(twiml, res, caller, {
-        normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?``,
-        normalUnknownNamePrompt: `Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?`,
+        normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`,
+        normalUnknownNamePrompt: "Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?",
         askLastNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
       });
     }
@@ -1163,7 +1225,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Should I mark this as an emergency for you, or is this something that can be handled during normal business hours?"
+      "Do you want me to mark this as an emergency?"
     );
   }
 
@@ -1186,7 +1248,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
     );
   }
 
@@ -1199,7 +1261,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`
+      `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
     );
   }
 
@@ -1304,7 +1366,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Do you have a deadline for the proposal or estimate?"
+      "Do you have a timeline for this project?"
     );
   }
 
@@ -1748,9 +1810,7 @@ app.get("/twilio-token", (req, res) => {
     res.status(500).send("Token error: " + err.message);
   }
 });
-app.get("/", (req, res) => {
-  res.send("Blue Caller AI Server Running");
-});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
 });
