@@ -1748,7 +1748,9 @@ app.get("/twilio-token", (req, res) => {
     res.status(500).send("Token error: " + err.message);
   }
 });
-
+app.get("/", (req, res) => {
+  res.send("Blue Caller AI Server Running");
+});
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
 });
