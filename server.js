@@ -1,7 +1,7 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V81-STABILITY-FIX
- DATE: 2026-03-29
+ VERSION: V82-APPLIANCE-DEMO-PROMPTS
+ DATE: 2026-03-30
 
  NOTES:
  - Keeps browser / PC call support
@@ -12,9 +12,12 @@
  - Fixes emergency leads being sent correctly
  - Adds real demo flow
  - Sends leads to Make before the post-submit closing question
+ - Adds appliance issue recognition without changing service flow
+ - Fixes quote timeline -> proposal deadline wording
+ - Updates non-demo notes prompt and non-demo post-submit demo feedback prompt
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V81 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V82 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -25,7 +28,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V81-STABILITY-FIX";
+const APP_VERSION = "VOICE-FLOW-V82-APPLIANCE-DEMO-PROMPTS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -665,6 +668,17 @@ function classifyProjectType(text) {
 function classifyIssue(issue) {
   const text = normalizedText(issue);
 
+  const applianceMappings = [
+    { keywords: ["refrigerator", "fridge"], summary: "an issue with your refrigerator" },
+    { keywords: ["dishwasher"], summary: "an issue with your dishwasher" },
+    { keywords: ["stove", "oven", "range"], summary: "an issue with your stove" },
+    { keywords: ["washer", "washing machine"], summary: "an issue with your washer" },
+    { keywords: ["dryer"], summary: "an issue with your dryer" },
+    { keywords: ["microwave"], summary: "an issue with your microwave" },
+    { keywords: ["ice maker", "icemaker"], summary: "an issue with your ice maker" },
+    { keywords: ["garbage disposal", "disposal"], summary: "an issue with your garbage disposal" }
+  ];
+
   if (
     containsAny(text, ["yard", "front yard", "back yard", "lawn", "outside"]) &&
     containsAny(text, ["leak", "water", "pooling", "drip", "dripping"])
@@ -681,6 +695,13 @@ function classifyIssue(issue) {
   if (containsAny(text, ["sewer", "sewage"])) return { summary: "a sewer backup" };
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
   if (containsAny(text, ["no water"])) return { summary: "no water service" };
+
+  for (const appliance of applianceMappings) {
+    if (containsAny(text, appliance.keywords)) {
+      return { summary: appliance.summary };
+    }
+  }
+
   if (containsAny(text, ["leak", "leaking", "drip", "dripping"])) return { summary: "a water leak" };
 
   return { summary: "your service issue" };
@@ -698,7 +719,28 @@ function hasUsableProblemText(text) {
     isDemoIntent(text) ||
     isHardEmergency(text) ||
     isLeakLikeIssue(text) ||
-    containsAny(t, ["clog", "clogged", "drain", "faucet", "sink", "toilet", "roof", "ceiling", "water heater"])
+    containsAny(t, [
+      "clog",
+      "clogged",
+      "drain",
+      "faucet",
+      "sink",
+      "toilet",
+      "roof",
+      "ceiling",
+      "water heater",
+      "refrigerator",
+      "fridge",
+      "dishwasher",
+      "stove",
+      "oven",
+      "range",
+      "washer",
+      "dryer",
+      "microwave",
+      "ice maker",
+      "garbage disposal"
+    ])
   );
 }
 
@@ -797,6 +839,20 @@ function parseAvailabilityRequest(text) {
     requestedDate: datePart || "",
     requestedTimePreference: convertPreferenceToMakeValue(timePref)
   };
+}
+
+function nonDemoNotesPrompt(caller) {
+  if (caller.leadType === "quote") {
+    return "Before I submit this quote request, are there any notes or details you'd like me to add?";
+  }
+  return "Before I submit this, is there anything else you'd like me to note for the technician?";
+}
+
+function postSubmitFollowupPrompt(caller) {
+  if (caller.leadType === "demo") {
+    return "Is there anything else I can help you with today?";
+  }
+  return "How did you enjoy the demo? If you'd like, I can have someone from our team contact you to discuss how this could work for your company.";
 }
 
 function buildMakePayload(caller) {
@@ -1252,7 +1308,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Do you want me to mark this as an emergency?`
+        `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`
       );
     }
 
@@ -1298,7 +1354,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Do you want me to mark this as an emergency?`
+        `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`
       );
     }
 
@@ -1493,7 +1549,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "Before I submit this, are there any notes or details you'd like me to add for the technician?"
+        nonDemoNotesPrompt(caller)
       );
     }
 
@@ -1515,7 +1571,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Do you have a timeline for this project?"
+      "Do you have a deadline for the proposal or estimate?"
     );
   }
 
@@ -1536,7 +1592,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Before I submit this quote request, are there any notes or details you'd like me to add?"
+      nonDemoNotesPrompt(caller)
     );
   }
 
@@ -1575,7 +1631,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, are there any notes you'd like me to add?"
+        "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, is there anything else you'd like me to note for the technician?"
       );
     }
 
@@ -1607,7 +1663,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "Perfect. Someone from the office will call you to get this scheduled. Before I submit this, are there any notes you'd like me to add?"
+        "Perfect. Someone from the office will call you to get this scheduled. Before I submit this, is there anything else you'd like me to note for the technician?"
       );
     }
 
@@ -1631,7 +1687,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Perfect. I've got you down for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, are there any notes or details you'd like me to add for the technician?`
+        `Perfect. I've got you down for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -1690,7 +1746,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, are there any notes you'd like me to add?"
+        "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, is there anything else you'd like me to note for the technician?"
       );
     }
 
@@ -1742,7 +1798,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()} on ${caller.appointmentDate}, and someone from the office will confirm the exact appointment time with you. Before I submit this, are there any notes you'd like me to add?`
+        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()} on ${caller.appointmentDate}, and someone from the office will confirm the exact appointment time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -1794,7 +1850,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()}, and someone from the office will confirm the exact appointment time with you. Before I submit this, are there any notes or details you'd like me to add for the technician?`
+        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()}, and someone from the office will confirm the exact appointment time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -1805,7 +1861,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Got it. Before I submit this, are there any notes or details you'd like me to add for the technician?"
+      "Got it. Before I submit this, is there anything else you'd like me to note for the technician?"
     );
   }
 
@@ -1826,7 +1882,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          `${pricingResponse()} Before I submit this quote request, are there any notes or details you'd like me to add?`
+          `${pricingResponse()} ${nonDemoNotesPrompt(caller)}`
         );
       }
 
@@ -1843,7 +1899,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `${pricingResponse()} Before I submit this, are there any notes or details you'd like me to add for the technician?`
+        `${pricingResponse()} ${nonDemoNotesPrompt(caller)}`
       );
     }
 
@@ -1879,7 +1935,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Is there anything else I can help you with today?"
+      postSubmitFollowupPrompt(caller)
     );
   }
 
@@ -1889,7 +1945,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `${pricingResponse()} Is there anything else I can help you with today?`
+        `${pricingResponse()} ${postSubmitFollowupPrompt(caller)}`
       );
     }
 
