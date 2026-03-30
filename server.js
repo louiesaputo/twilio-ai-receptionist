@@ -1081,7 +1081,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Should I mark this as an emergency for you, or is this something that can be handled during normal business hours?`
+        `I'm sorry you're dealing with this ${caller.issueSummary.replace(/^a\s+/i, "").replace(/^an\s+/i, "")}. Do you want me to mark this as an emergency?`
       );
     }
 
@@ -1153,7 +1153,7 @@ app.post("/handle-input", async (req, res) => {
       caller.leakNeedsEmergencyChoice = false;
 
       return moveToNameOrPhoneStep(twiml, res, caller, {
-        normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber)} a good number to reach you?`,
+        normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?``,
         normalUnknownNamePrompt: `Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?`,
         askLastNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
       });
