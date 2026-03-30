@@ -1,6 +1,6 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V76
+ VERSION: V76-PC-CALL
  DATE: 2026-03-29
 
  NOTES:
@@ -9,9 +9,10 @@
  - Fixes quote timeline -> proposal deadline sequence
  - Keeps quote routing as quote_request
  - Keeps emergency / leak / silence handling
+ - Adds browser / PC call support
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V76 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V76-PC-CALL LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -22,7 +23,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V76";
+const APP_VERSION = "VOICE-FLOW-V76-PC-CALL";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -1736,7 +1737,7 @@ app.get("/twilio-token", (req, res) => {
 
     const voiceGrant = new VoiceGrant({
       outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID,
-      incomingAllow: false,
+      incomingAllow: false
     });
 
     token.addGrant(voiceGrant);
