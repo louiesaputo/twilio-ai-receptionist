@@ -17,7 +17,7 @@
  - Updates non-demo notes prompt and non-demo post-submit demo feedback prompt
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V82 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V83 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -665,19 +665,35 @@ function classifyProjectType(text) {
   return raw || "this project";
 }
 
+function detectApplianceSummary(issue) {
+  const text = normalizedText(issue)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const appliancePatterns = [
+    { pattern: / (fridge|freezer|refrigerat[a-z]*) /, summary: "an issue with your refrigerator" },
+    { pattern: / (dishwasher|dish washer) /, summary: "an issue with your dishwasher" },
+    { pattern: / (stove|oven|range|cooktop) /, summary: "an issue with your stove" },
+    { pattern: / (washer|washing machine) /, summary: "an issue with your washer" },
+    { pattern: / (dryer|clothes dryer) /, summary: "an issue with your dryer" },
+    { pattern: / (microwave) /, summary: "an issue with your microwave" },
+    { pattern: / (ice maker|icemaker) /, summary: "an issue with your ice maker" },
+    { pattern: / (garbage disposal|disposal) /, summary: "an issue with your garbage disposal" }
+  ];
+
+  for (const appliance of appliancePatterns) {
+    if (appliance.pattern.test(text)) {
+      return appliance.summary;
+    }
+  }
+
+  return "";
+}
+
 function classifyIssue(issue) {
   const text = normalizedText(issue);
-
-  const applianceMappings = [
-    { keywords: ["refrigerator", "fridge"], summary: "an issue with your refrigerator" },
-    { keywords: ["dishwasher"], summary: "an issue with your dishwasher" },
-    { keywords: ["stove", "oven", "range"], summary: "an issue with your stove" },
-    { keywords: ["washer", "washing machine"], summary: "an issue with your washer" },
-    { keywords: ["dryer"], summary: "an issue with your dryer" },
-    { keywords: ["microwave"], summary: "an issue with your microwave" },
-    { keywords: ["ice maker", "icemaker"], summary: "an issue with your ice maker" },
-    { keywords: ["garbage disposal", "disposal"], summary: "an issue with your garbage disposal" }
-  ];
+  const applianceSummary = detectApplianceSummary(issue);
 
   if (
     containsAny(text, ["yard", "front yard", "back yard", "lawn", "outside"]) &&
@@ -695,13 +711,7 @@ function classifyIssue(issue) {
   if (containsAny(text, ["sewer", "sewage"])) return { summary: "a sewer backup" };
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
   if (containsAny(text, ["no water"])) return { summary: "no water service" };
-
-  for (const appliance of applianceMappings) {
-    if (containsAny(text, appliance.keywords)) {
-      return { summary: appliance.summary };
-    }
-  }
-
+  if (applianceSummary) return { summary: applianceSummary };
   if (containsAny(text, ["leak", "leaking", "drip", "dripping"])) return { summary: "a water leak" };
 
   return { summary: "your service issue" };
