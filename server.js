@@ -1,6 +1,6 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V82-APPLIANCE-DEMO-PROMPTS
+ VERSION: V84-APPLIANCE-DETAIL-FLOW
  DATE: 2026-03-30
 
  NOTES:
@@ -17,7 +17,7 @@
  - Updates non-demo notes prompt and non-demo post-submit demo feedback prompt
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V83 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V84 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -28,7 +28,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V82-APPLIANCE-DEMO-PROMPTS";
+const APP_VERSION = "VOICE-FLOW-V84-APPLIANCE-DETAIL-FLOW";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -58,6 +58,10 @@ function getOrCreateCaller(phone) {
       timeline: "",
       proposalDeadline: "",
       demoEmail: "",
+      applianceType: "",
+      applianceWarranty: "",
+      pendingIssueItem: "",
+      pendingIssuePrompt: "",
 
       notes: "",
       status: "new_lead",
@@ -101,6 +105,10 @@ function resetCallerForNewCall(caller, phone) {
   caller.timeline = "";
   caller.proposalDeadline = "";
   caller.demoEmail = "";
+  caller.applianceType = "";
+  caller.applianceWarranty = "";
+  caller.pendingIssueItem = "";
+  caller.pendingIssuePrompt = "";
 
   caller.notes = "";
   caller.status = "new_lead";
@@ -665,30 +673,156 @@ function classifyProjectType(text) {
   return raw || "this project";
 }
 
-function detectApplianceSummary(issue) {
+function detectServiceItem(issue) {
   const text = normalizedText(issue)
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  const appliancePatterns = [
-    { pattern: / (fridge|freezer|refrigerat[a-z]*) /, summary: "an issue with your refrigerator" },
-    { pattern: / (dishwasher|dish washer) /, summary: "an issue with your dishwasher" },
-    { pattern: / (stove|oven|range|cooktop) /, summary: "an issue with your stove" },
-    { pattern: / (washer|washing machine) /, summary: "an issue with your washer" },
-    { pattern: / (dryer|clothes dryer) /, summary: "an issue with your dryer" },
-    { pattern: / (microwave) /, summary: "an issue with your microwave" },
-    { pattern: / (ice maker|icemaker) /, summary: "an issue with your ice maker" },
-    { pattern: / (garbage disposal|disposal) /, summary: "an issue with your garbage disposal" }
+  const items = [
+    { pattern: /\b(refrigerator|refrigerators|fridge|fridges|freezer|freezers)\b/, label: "refrigerator", prompt: "your refrigerator", category: "appliance" },
+    { pattern: /\b(dishwasher|dish washer)\b/, label: "dishwasher", prompt: "your dishwasher", category: "appliance" },
+    { pattern: /\b(stove|oven|range|cooktop)\b/, label: "stove", prompt: "your stove", category: "appliance" },
+    { pattern: /\b(washer|washing machine)\b/, label: "washer", prompt: "your washer", category: "appliance" },
+    { pattern: /\b(dryer|clothes dryer)\b/, label: "dryer", prompt: "your dryer", category: "appliance" },
+    { pattern: /\b(microwave)\b/, label: "microwave", prompt: "your microwave", category: "appliance" },
+    { pattern: /\b(ice maker|icemaker)\b/, label: "ice maker", prompt: "your ice maker", category: "appliance" },
+    { pattern: /\b(garbage disposal|disposal)\b/, label: "garbage disposal", prompt: "your garbage disposal", category: "appliance" },
+    { pattern: /\b(faucet|tap)\b/, label: "faucet", prompt: "your faucet", category: "fixture" },
+    { pattern: /\b(sink)\b/, label: "sink", prompt: "your sink", category: "fixture" },
+    { pattern: /\b(toilet)\b/, label: "toilet", prompt: "your toilet", category: "fixture" },
+    { pattern: /\b(water heater)\b/, label: "water heater", prompt: "your water heater", category: "fixture" }
   ];
 
-  for (const appliance of appliancePatterns) {
-    if (appliance.pattern.test(text)) {
-      return appliance.summary;
-    }
+  for (const item of items) {
+    if (item.pattern.test(text)) return item;
   }
 
-  return "";
+  return null;
+}
+
+function detectApplianceSummary(issue) {
+  const item = detectServiceItem(issue);
+  if (!item || item.category !== "appliance") return "";
+  return `an issue with ${item.prompt}`;
+}
+
+function hasSpecificProblemDetail(issue) {
+  const text = normalizedText(issue);
+
+  return containsAny(text, [
+    "not working",
+    "isn't working",
+    "isnt working",
+    "stopped working",
+    "won't work",
+    "wont work",
+    "not cooling",
+    "isn't cooling",
+    "isnt cooling",
+    "not heating",
+    "isn't heating",
+    "isnt heating",
+    "not drying",
+    "isn't drying",
+    "isnt drying",
+    "not draining",
+    "won't drain",
+    "wont drain",
+    "not turning on",
+    "won't turn on",
+    "wont turn on",
+    "not starting",
+    "won't start",
+    "wont start",
+    "stopped",
+    "broken",
+    "cracked",
+    "loose",
+    "leak",
+    "leaking",
+    "drip",
+    "dripping",
+    "clog",
+    "clogged",
+    "overflow",
+    "overflowing",
+    "backed up",
+    "backing up",
+    "making noise",
+    "noisy",
+    "noise",
+    "sparking",
+    "smoke",
+    "smoking",
+    "burning smell",
+    "gas smell",
+    "water everywhere",
+    "flooding",
+    "freezing",
+    "too warm",
+    "too hot",
+    "not igniting",
+    "pilot",
+    "not flushing",
+    "running constantly",
+    "won't stop running",
+    "wont stop running",
+    "not responding"
+  ]);
+}
+
+function detectMissingProblemItem(issue) {
+  const item = detectServiceItem(issue);
+  if (!item) return null;
+  if (hasSpecificProblemDetail(issue)) return null;
+  if (isQuoteIntent(issue) || isDemoIntent(issue) || isHardEmergency(issue) || isLeakLikeIssue(issue)) return null;
+  return item;
+}
+
+function combineItemAndDetail(item, detail) {
+  const safeItem = cleanForSpeech(item || "");
+  const safeDetail = cleanForSpeech(detail || "");
+  return `${safeItem} ${safeDetail}`.trim();
+}
+
+function parseWarrantyStatus(text) {
+  const t = normalizedText(text).replace(/[^\w\s]/g, "").trim();
+
+  if (containsAny(t, [
+    "i dont know",
+    "i do not know",
+    "not sure",
+    "unsure",
+    "maybe"
+  ])) return "unknown";
+
+  if (
+    t === "yes" ||
+    t === "yeah" ||
+    t === "yep" ||
+    t === "probably" ||
+    t === "i think so" ||
+    t === "it should be" ||
+    t === "it is" ||
+    t.includes("still under") ||
+    t.includes("under warranty")
+  ) return "yes";
+
+  if (
+    t === "no" ||
+    t === "nope" ||
+    t.includes("not anymore") ||
+    t.includes("out of warranty") ||
+    t.includes("not under warranty") ||
+    t.includes("expired")
+  ) return "no";
+
+  return "unknown";
+}
+
+function applianceSchedulingPrompt() {
+  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to schedule a service appointment now, would you prefer someone from the office to call you to schedule it, or would you like the first available appointment?";
 }
 
 function classifyIssue(issue) {
@@ -894,10 +1028,17 @@ function buildMakePayload(caller) {
       ? (caller.issue || caller.issueSummary || "demo request")
       : (caller.issue || "");
 
-  const effectiveNotes =
+  let effectiveNotes =
     caller.leadType === "quote" && caller.issue && caller.projectType && caller.issue !== caller.projectType
       ? `${caller.notes ? caller.notes + " " : ""}Original caller request: ${caller.issue}`.trim()
       : (caller.notes || "");
+
+  const applianceNoteParts = [];
+  if (caller.applianceType) applianceNoteParts.push(`Appliance: ${caller.applianceType}`);
+  if (caller.applianceWarranty) applianceNoteParts.push(`Warranty: ${caller.applianceWarranty}`);
+  if (applianceNoteParts.length) {
+    effectiveNotes = `${effectiveNotes ? effectiveNotes + " " : ""}${applianceNoteParts.join(". ")}.`.trim();
+  }
 
   return {
     leadType: effectiveLeadType,
@@ -912,6 +1053,8 @@ function buildMakePayload(caller) {
     urgency: caller.urgency || "normal",
     emergencyAlert: caller.emergencyAlert === true,
     projectType: caller.projectType || "",
+    applianceType: caller.applianceType || "",
+    applianceWarranty: caller.applianceWarranty || "",
     timeline: caller.timeline || "",
     proposalDeadline: caller.proposalDeadline || "",
     demoEmail: caller.demoEmail || "",
@@ -1285,6 +1428,8 @@ app.post("/handle-input", async (req, res) => {
 
     caller.issue = cleanForSpeech(parsed.issueText);
     caller.issueSummary = classifyIssue(caller.issue).summary;
+    const detectedServiceItem = detectServiceItem(caller.issue);
+    caller.applianceType = detectedServiceItem && detectedServiceItem.category === "appliance" ? detectedServiceItem.label : "";
 
     if (isHardEmergency(caller.issue)) {
       caller.emergencyAlert = true;
@@ -1322,6 +1467,20 @@ app.post("/handle-input", async (req, res) => {
       );
     }
 
+    const missingProblemItem = detectMissingProblemItem(caller.issue);
+    if (missingProblemItem) {
+      caller.pendingIssueItem = missingProblemItem.label;
+      caller.pendingIssuePrompt = missingProblemItem.prompt;
+      if (missingProblemItem.category === "appliance") caller.applianceType = missingProblemItem.label;
+      caller.lastStep = "ask_item_issue_detail";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `What seems to be going on with ${missingProblemItem.prompt}?`
+      );
+    }
+
     caller.leadType = "service";
     caller.urgency = "normal";
     caller.emergencyAlert = false;
@@ -1331,6 +1490,8 @@ app.post("/handle-input", async (req, res) => {
   if (caller.lastStep === "ask_issue_again") {
     caller.issue = cleanForSpeech(speech);
     caller.issueSummary = classifyIssue(caller.issue).summary;
+    const detectedServiceItem = detectServiceItem(caller.issue);
+    caller.applianceType = detectedServiceItem && detectedServiceItem.category === "appliance" ? detectedServiceItem.label : "";
 
     if (isHardEmergency(caller.issue)) {
       caller.emergencyAlert = true;
@@ -1355,6 +1516,51 @@ app.post("/handle-input", async (req, res) => {
       caller.urgency = "normal";
       caller.emergencyAlert = false;
       return moveToQuoteNameOrPhoneStep(twiml, res, caller);
+    }
+
+    if (isLeakLikeIssue(caller.issue)) {
+      caller.leakNeedsEmergencyChoice = true;
+      caller.lastStep = "leak_emergency_choice";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`
+      );
+    }
+
+    const missingProblemItem = detectMissingProblemItem(caller.issue);
+    if (missingProblemItem) {
+      caller.pendingIssueItem = missingProblemItem.label;
+      caller.pendingIssuePrompt = missingProblemItem.prompt;
+      if (missingProblemItem.category === "appliance") caller.applianceType = missingProblemItem.label;
+      caller.lastStep = "ask_item_issue_detail";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `What seems to be going on with ${missingProblemItem.prompt}?`
+      );
+    }
+
+    caller.leadType = "service";
+    caller.urgency = "normal";
+    caller.emergencyAlert = false;
+    return moveToNameOrPhoneStep(twiml, res, caller);
+  }
+
+  if (caller.lastStep === "ask_item_issue_detail") {
+    caller.issue = combineItemAndDetail(caller.pendingIssueItem, speech);
+    caller.issueSummary = classifyIssue(caller.issue).summary;
+    caller.pendingIssueItem = "";
+    caller.pendingIssuePrompt = "";
+
+    if (isHardEmergency(caller.issue)) {
+      caller.emergencyAlert = true;
+      caller.urgency = "emergency";
+      caller.leadType = "emergency";
+      caller.status = "new_emergency";
+      return moveToNameOrPhoneStep(twiml, res, caller);
     }
 
     if (isLeakLikeIssue(caller.issue)) {
@@ -1563,12 +1769,33 @@ app.post("/handle-input", async (req, res) => {
       );
     }
 
+    if (caller.applianceType) {
+      caller.lastStep = "ask_appliance_warranty";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Do you know whether the appliance is still under the manufacturer's warranty?"
+      );
+    }
+
     caller.lastStep = "schedule_or_callback";
     return sayThenGather(
       twiml,
       res,
       "/handle-input",
       "Would you like to schedule a service appointment now, would you prefer someone from the office to call you to schedule it, or would you like the first available appointment?"
+    );
+  }
+
+  if (caller.lastStep === "ask_appliance_warranty") {
+    caller.applianceWarranty = parseWarrantyStatus(speech);
+    caller.lastStep = "schedule_or_callback";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      applianceSchedulingPrompt()
     );
   }
 
