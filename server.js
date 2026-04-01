@@ -9,7 +9,7 @@
  - Fixes exact-time callback availability handling
  - Preserves requested day when asking for another option
  - Improves acceptance of natural yes-style replies
- - Sends current local date/time to availability scenario to prevent day/time drift
+ - Sends current local date/time to availability scenario to prevent day drift
  - Removes "it's / it is" from opening name parsing
  - Prevents false names like "Not"
  - Removes the hidden "Nice to meet you" fallback path
