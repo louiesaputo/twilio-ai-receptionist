@@ -1,23 +1,25 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V84-APPLIANCE-DETAIL-FLOW
- DATE: 2026-03-30
+ VERSION: V85-CALENDAR-PARSER-DEMO-CONTACT
+ DATE: 2026-03-31
 
  NOTES:
  - Keeps browser / PC call support
  - Keeps calendar-driven scheduling flow
+ - Fixes availability requests being treated like appointment text
+ - Adds safer calendar webhook logging + timeout
+ - Removes "it's / it is" from opening name parsing
+ - Prevents false names like "Not"
+ - Removes the "Nice to meet you" fallback path
+ - Keeps oven separate from stove / range / cooktop
+ - Improves appliance issue summaries
+ - Keeps appliance drain issues classified as appliance issues
+ - Adds demo follow-up contact confirmation + corrected contact capture
  - Keeps quote routing as quote_request
- - Keeps quote cleanup for spoken recap + Make payload
- - Fixes leak emergency yes/no loop
- - Fixes emergency leads being sent correctly
- - Adds real demo flow
- - Sends leads to Make before the post-submit closing question
- - Adds appliance issue recognition without changing service flow
- - Fixes quote timeline -> proposal deadline wording
- - Updates non-demo notes prompt and non-demo post-submit demo feedback prompt
+ - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V84 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V85 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -28,7 +30,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V84-APPLIANCE-DETAIL-FLOW";
+const APP_VERSION = "VOICE-FLOW-V85-CALENDAR-PARSER-DEMO-CONTACT";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -73,6 +75,12 @@ function getOrCreateCaller(phone) {
       pendingOfferedDate: "",
       pendingOfferedTime: "",
       pendingAvailabilityQuery: "",
+
+      demoFollowupRequested: false,
+      demoFollowupSent: false,
+      demoFollowupContactName: "",
+      demoFollowupCallbackNumber: "",
+      demoFollowupEmail: "",
 
       makeSent: false,
       lastStep: "ask_issue",
@@ -120,6 +128,12 @@ function resetCallerForNewCall(caller, phone) {
   caller.pendingOfferedDate = "";
   caller.pendingOfferedTime = "";
   caller.pendingAvailabilityQuery = "";
+
+  caller.demoFollowupRequested = false;
+  caller.demoFollowupSent = false;
+  caller.demoFollowupContactName = "";
+  caller.demoFollowupCallbackNumber = "";
+  caller.demoFollowupEmail = "";
 
   caller.makeSent = false;
   caller.lastStep = "ask_issue";
@@ -198,7 +212,44 @@ function normalizeNameCandidate(rawName) {
     "for",
     "regarding",
     "because",
-    "alex"
+    "alex",
+    "my",
+    "name",
+    "is",
+    "this",
+    "am",
+    "im"
+  ]);
+
+  const blockedNameWords = new Set([
+    "not",
+    "no",
+    "issue",
+    "problem",
+    "service",
+    "schedule",
+    "scheduling",
+    "appointment",
+    "someone",
+    "heating",
+    "cooling",
+    "draining",
+    "working",
+    "broken",
+    "leaking",
+    "burning",
+    "stove",
+    "oven",
+    "range",
+    "cooktop",
+    "dishwasher",
+    "refrigerator",
+    "washer",
+    "dryer",
+    "microwave",
+    "icemaker",
+    "ice",
+    "maker"
   ]);
 
   const words = cleaned
@@ -209,8 +260,14 @@ function normalizeNameCandidate(rawName) {
     .filter(Boolean);
 
   if (words.length === 0 || words.length > 4) return "";
+  if (blockedNameWords.has(words[0])) return "";
+  if (words.some((word) => blockedNameWords.has(word))) return "";
 
   return toTitleCase(words.join(" "));
+}
+
+function parseFullNameFromSpeech(rawName) {
+  return normalizeNameCandidate(rawName);
 }
 
 function stripIssueLeadIn(text) {
@@ -249,9 +306,7 @@ function extractOpeningNameAndIssue(text) {
     "this is",
     "my name is",
     "i am",
-    "i'm",
-    "it is",
-    "it's"
+    "i'm"
   ];
 
   const issueSeparators = [
@@ -286,10 +341,9 @@ function extractOpeningNameAndIssue(text) {
   const lower = normalized.toLowerCase();
 
   for (const marker of markerPatterns) {
-    const markerIndex = lower.indexOf(marker);
-    if (markerIndex === -1) continue;
+    if (!lower.startsWith(marker)) continue;
 
-    const afterMarker = normalized.slice(markerIndex + marker.length).trim();
+    const afterMarker = normalized.slice(marker.length).trim();
     const afterMarkerLower = afterMarker.toLowerCase();
 
     for (const separator of issueSeparators) {
@@ -376,15 +430,16 @@ function isAffirmative(text) {
     t === "please do" ||
     t === "go ahead" ||
     t === "do that" ||
-    t === "mark it emergency" ||
-    t === "make it emergency" ||
-    t === "this is an emergency" ||
-    t === "its an emergency" ||
-    t === "it is an emergency" ||
+    t === "that works" ||
+    t === "that would work" ||
+    t === "works for me" ||
     t.includes("mark this as an emergency") ||
     t.includes("make this an emergency") ||
     t.includes("yes mark it as an emergency") ||
     t.includes("yes make it an emergency") ||
+    t.includes("this is an emergency") ||
+    t.includes("its an emergency") ||
+    t.includes("it is an emergency") ||
     t.includes("urgent") ||
     t.includes("as soon as possible") ||
     t.includes("right away") ||
@@ -601,6 +656,37 @@ function isDemoIntent(text) {
   );
 }
 
+function isDemoFollowupInterest(text) {
+  const t = normalizedText(text);
+  if (isNegative(t) || isEndCallPhrase(t)) return false;
+
+  return (
+    isAffirmative(t) ||
+    containsAny(t, [
+      "contact me",
+      "have someone contact me",
+      "have someone call me",
+      "have somebody call me",
+      "have someone reach out",
+      "have somebody reach out",
+      "reach out to me",
+      "call me about it",
+      "discuss how this works",
+      "discuss how it works",
+      "discuss how this could work",
+      "for my company",
+      "for my business",
+      "tell me more",
+      "learn more",
+      "i'd like to talk to someone",
+      "id like to talk to someone",
+      "i would like to talk to someone",
+      "yes please",
+      "that would be great"
+    ])
+  );
+}
+
 function cleanQuoteProjectText(text) {
   if (!text) return "";
 
@@ -682,11 +768,14 @@ function detectServiceItem(issue) {
   const items = [
     { pattern: /\b(refrigerator|refrigerators|fridge|fridges|freezer|freezers)\b/, label: "refrigerator", prompt: "your refrigerator", category: "appliance" },
     { pattern: /\b(dishwasher|dish washer)\b/, label: "dishwasher", prompt: "your dishwasher", category: "appliance" },
-    { pattern: /\b(stove|oven|range|cooktop)\b/, label: "stove", prompt: "your stove", category: "appliance" },
+    { pattern: /\b(ice maker|icemaker)\b/, label: "ice maker", prompt: "your ice maker", category: "appliance" },
+    { pattern: /\b(oven|wall oven|double oven)\b/, label: "oven", prompt: "your oven", category: "appliance" },
+    { pattern: /\b(cooktop|cook top)\b/, label: "cooktop", prompt: "your cooktop", category: "appliance" },
+    { pattern: /\b(range)\b/, label: "range", prompt: "your range", category: "appliance" },
+    { pattern: /\b(stove|stovetop|stove top|burner|burners)\b/, label: "stove", prompt: "your stove", category: "appliance" },
     { pattern: /\b(washer|washing machine)\b/, label: "washer", prompt: "your washer", category: "appliance" },
     { pattern: /\b(dryer|clothes dryer)\b/, label: "dryer", prompt: "your dryer", category: "appliance" },
     { pattern: /\b(microwave)\b/, label: "microwave", prompt: "your microwave", category: "appliance" },
-    { pattern: /\b(ice maker|icemaker)\b/, label: "ice maker", prompt: "your ice maker", category: "appliance" },
     { pattern: /\b(garbage disposal|disposal)\b/, label: "garbage disposal", prompt: "your garbage disposal", category: "appliance" },
     { pattern: /\b(faucet|tap)\b/, label: "faucet", prompt: "your faucet", category: "fixture" },
     { pattern: /\b(sink)\b/, label: "sink", prompt: "your sink", category: "fixture" },
@@ -699,12 +788,6 @@ function detectServiceItem(issue) {
   }
 
   return null;
-}
-
-function detectApplianceSummary(issue) {
-  const item = detectServiceItem(issue);
-  if (!item || item.category !== "appliance") return "";
-  return `an issue with ${item.prompt}`;
 }
 
 function hasSpecificProblemDetail(issue) {
@@ -735,6 +818,16 @@ function hasSpecificProblemDetail(issue) {
     "not starting",
     "won't start",
     "wont start",
+    "not igniting",
+    "not making ice",
+    "not producing ice",
+    "ice production",
+    "making too much ice",
+    "overproducing",
+    "won't stop",
+    "wont stop",
+    "won't stop making ice",
+    "wont stop making ice",
     "stopped",
     "broken",
     "cracked",
@@ -762,14 +855,100 @@ function hasSpecificProblemDetail(issue) {
     "freezing",
     "too warm",
     "too hot",
-    "not igniting",
     "pilot",
     "not flushing",
     "running constantly",
-    "won't stop running",
-    "wont stop running",
-    "not responding"
+    "not responding",
+    "burner",
+    "burners"
   ]);
+}
+
+function buildApplianceIssueSummary(issue, item) {
+  const t = normalizedText(issue);
+
+  if (!item || item.category !== "appliance") return "";
+
+  if ((item.label === "stove" || item.label === "range" || item.label === "cooktop") && containsAny(t, [
+    "burner",
+    "burners",
+    "not turning on",
+    "won't turn on",
+    "wont turn on",
+    "not igniting",
+    "won't ignite",
+    "wont ignite"
+  ])) {
+    return `a ${item.label} burner that is not turning on`;
+  }
+
+  if (item.label === "oven" && containsAny(t, ["not heating", "isn't heating", "isnt heating"])) {
+    return "an oven that is not heating properly";
+  }
+
+  if (item.label === "refrigerator" && containsAny(t, ["not cooling", "isn't cooling", "isnt cooling", "too warm"])) {
+    return "a refrigerator that is not cooling";
+  }
+
+  if (item.label === "dishwasher" && containsAny(t, ["not draining", "won't drain", "wont drain"])) {
+    return "a dishwasher that is not draining";
+  }
+
+  if (item.label === "washer" && containsAny(t, ["not draining", "won't drain", "wont drain"])) {
+    return "a washer that is not draining";
+  }
+
+  if (item.label === "dryer" && containsAny(t, ["not heating", "isn't heating", "isnt heating", "not drying"])) {
+    return "a dryer that is not heating properly";
+  }
+
+  if (item.label === "ice maker" && containsAny(t, [
+    "not making ice",
+    "not producing ice",
+    "ice production",
+    "making too much ice",
+    "overproducing",
+    "won't stop",
+    "wont stop"
+  ])) {
+    return "an ice maker issue";
+  }
+
+  if (containsAny(t, ["not turning on", "won't turn on", "wont turn on"])) {
+    return `a ${item.label} that is not turning on`;
+  }
+
+  if (containsAny(t, ["not working", "isn't working", "isnt working", "stopped working"])) {
+    return `a ${item.label} that is not working`;
+  }
+
+  if (containsAny(t, ["not cooling", "isn't cooling", "isnt cooling"])) {
+    return `a ${item.label} that is not cooling`;
+  }
+
+  if (containsAny(t, ["not heating", "isn't heating", "isnt heating"])) {
+    return `a ${item.label} that is not heating properly`;
+  }
+
+  if (containsAny(t, ["not draining", "won't drain", "wont drain"])) {
+    return `a ${item.label} that is not draining`;
+  }
+
+  if (containsAny(t, ["making noise", "noisy", "noise"])) {
+    return `a noisy ${item.label}`;
+  }
+
+  if (containsAny(t, ["leak", "leaking", "drip", "dripping"])) {
+    return `a leaking ${item.label}`;
+  }
+
+  return `an issue with ${item.prompt}`;
+}
+
+function detectApplianceSummary(issue) {
+  const item = detectServiceItem(issue);
+  if (!item || item.category !== "appliance") return "";
+  return buildApplianceIssueSummary(issue, item);
 }
 
 function detectMissingProblemItem(issue) {
@@ -827,7 +1006,12 @@ function applianceSchedulingPrompt() {
 
 function classifyIssue(issue) {
   const text = normalizedText(issue);
+  const serviceItem = detectServiceItem(issue);
   const applianceSummary = detectApplianceSummary(issue);
+
+  if (serviceItem && serviceItem.category === "appliance" && applianceSummary) {
+    return { summary: applianceSummary };
+  }
 
   if (
     containsAny(text, ["yard", "front yard", "back yard", "lawn", "outside"]) &&
@@ -845,8 +1029,11 @@ function classifyIssue(issue) {
   if (containsAny(text, ["sewer", "sewage"])) return { summary: "a sewer backup" };
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
   if (containsAny(text, ["no water"])) return { summary: "no water service" };
-  if (applianceSummary) return { summary: applianceSummary };
   if (containsAny(text, ["leak", "leaking", "drip", "dripping"])) return { summary: "a water leak" };
+
+  if (serviceItem && serviceItem.category === "fixture") {
+    return { summary: `an issue with ${serviceItem.prompt}` };
+  }
 
   return { summary: "your service issue" };
 }
@@ -879,6 +1066,7 @@ function hasUsableProblemText(text) {
       "stove",
       "oven",
       "range",
+      "cooktop",
       "washer",
       "dryer",
       "microwave",
@@ -898,6 +1086,10 @@ function isAvailabilityRequest(text) {
     t.includes("first opening") ||
     t.includes("next opening") ||
     t.includes("earliest opening") ||
+    t.includes("available opening") ||
+    t.includes("available appointment") ||
+    t.includes("available time") ||
+    t.includes("available slot") ||
     t.includes("when is your next opening") ||
     t.includes("when is the soonest") ||
     t.includes("what's your first available") ||
@@ -905,11 +1097,14 @@ function isAvailabilityRequest(text) {
     t.includes("what is your first available") ||
     t.includes("what's the first available") ||
     t.includes("what is the first available") ||
+    t.includes("what's your next available") ||
+    t.includes("what is your next available") ||
     t.includes("how soon can someone come") ||
     t.includes("how soon can someone come out") ||
     t.includes("how soon can you come") ||
     t.includes("when can someone come out") ||
     t.includes("do you have anything available") ||
+    t.includes("what do you have available") ||
     t.includes("what do you have for") ||
     t.includes("do you have anything for")
   );
@@ -935,6 +1130,15 @@ function convertPreferenceToMakeValue(pref) {
   return pref;
 }
 
+function formatPreferenceForSpeech(pref) {
+  if (!pref) return "";
+  if (pref === "morning" || pref === "Morning preferred") return "morning";
+  if (pref === "afternoon" || pref === "Afternoon preferred") return "afternoon";
+  if (pref === "evening" || pref === "Evening preferred") return "evening";
+  if (pref === "anytime" || pref === "Any time preferred") return "any time";
+  return cleanForSpeech(pref).toLowerCase();
+}
+
 function isSpecificTime(text) {
   const t = normalizedText(text);
 
@@ -955,6 +1159,12 @@ function extractDatePart(text) {
     .replace(/^how about\s+/i, "")
     .replace(/^maybe\s+/i, "")
     .replace(/^for\s+/i, "")
+    .replace(/\bwhat('?s| is)\s+(your\s+)?first available( appointment)?\b.*$/i, "")
+    .replace(/\bwhat('?s| is)\s+the first available( appointment)?\b.*$/i, "")
+    .replace(/\bwhat('?s| is)\s+(your\s+)?next available( appointment)?\b.*$/i, "")
+    .replace(/\b(first|next|soonest|earliest)\s+(available\s+)?(appointment|opening|slot|time)\b.*$/i, "")
+    .replace(/\bdo you have anything available\b.*$/i, "")
+    .replace(/\bwhat do you have available\b.*$/i, "")
     .replace(/\bdo you have anything.*$/i, "")
     .replace(/\bwhat do you have.*$/i, "")
     .replace(/\banything in the .*$/i, "")
@@ -973,16 +1183,34 @@ function extractDatePart(text) {
   return value.replace(/[?.!,]+$/g, "").trim();
 }
 
-function parseAvailabilityRequest(text) {
+function parseAvailabilityRequest(text, existingDate = "") {
   const raw = cleanForSpeech(text || "");
-  const datePart = extractDatePart(raw);
+  let datePart = extractDatePart(raw);
   const timePref = detectTimePreference(raw);
+
+  if (!datePart && existingDate && !containsAny(normalizedText(existingDate), [
+    "first available requested",
+    "availability requested"
+  ])) {
+    datePart = cleanForSpeech(existingDate);
+  }
 
   return {
     rawQuery: raw,
     requestedDate: datePart || "",
     requestedTimePreference: convertPreferenceToMakeValue(timePref)
   };
+}
+
+function normalizeAvailabilityResponse(response) {
+  if (!response || typeof response !== "object") return null;
+
+  const date = cleanForSpeech(response.date || response.nextAvailableDate || "");
+  const time = cleanForSpeech(response.time || response.nextAvailableTime || "");
+
+  if (!date || !time) return null;
+
+  return { date, time };
 }
 
 function nonDemoNotesPrompt(caller) {
@@ -1067,6 +1295,43 @@ function buildMakePayload(caller) {
   };
 }
 
+function buildDemoFollowupPayload(caller) {
+  const fullName = caller.demoFollowupContactName || caller.fullName || "";
+  const firstName = getFirstName(fullName) || caller.firstName || "";
+  const callbackNumber = caller.demoFollowupCallbackNumber || caller.callbackNumber || caller.phone || "";
+  const demoEmail = caller.demoFollowupEmail || caller.demoEmail || "";
+
+  let notes = "Interested in a Blue Caller Automation follow-up after testing the demo line.";
+  if (caller.issueSummary) notes += ` Original demo scenario: ${caller.issueSummary}.`;
+  if (caller.notes) notes += ` Original notes: ${caller.notes}`;
+
+  return {
+    leadType: "demo",
+    fullName,
+    firstName,
+    phone: callbackNumber,
+    callbackNumber,
+    callbackConfirmed: true,
+    address: caller.address || "",
+    issue: "demo follow-up request",
+    issueSummary: "demo follow-up request",
+    urgency: "normal",
+    emergencyAlert: false,
+    projectType: "",
+    applianceType: "",
+    applianceWarranty: "",
+    timeline: "",
+    proposalDeadline: "",
+    demoEmail,
+    notes: notes.trim(),
+    status: "demo_followup_request",
+    appointmentDate: "",
+    appointmentTime: "",
+    source: "AI Receptionist",
+    timestamp: new Date().toISOString()
+  };
+}
+
 function shouldSendToMake(caller) {
   const payload = buildMakePayload(caller);
 
@@ -1085,15 +1350,8 @@ function shouldSendToMake(caller) {
   return false;
 }
 
-function sendLeadToMake(caller) {
-  if (caller.makeSent) return;
-  if (!shouldSendToMake(caller)) {
-    console.log("⚠️ Skipping Make webhook — missing minimum required data");
-    return;
-  }
-
+function postJsonToMake(payload, onComplete) {
   try {
-    const payload = buildMakePayload(caller);
     const data = JSON.stringify(payload);
     const url = new URL(MAKE_WEBHOOK_URL);
 
@@ -1109,25 +1367,52 @@ function sendLeadToMake(caller) {
 
     const makeReq = https.request(options, (makeRes) => {
       console.log(`[MAKE] Status: ${makeRes.statusCode}`);
+      if (onComplete) onComplete();
     });
 
     makeReq.on("error", (err) => {
       console.error("[MAKE ERROR]", err.message);
+      if (onComplete) onComplete(err);
     });
 
     makeReq.write(data);
     makeReq.end();
-
-    caller.makeSent = true;
   } catch (err) {
     console.error("[MAKE ERROR]", err.message);
+    if (onComplete) onComplete(err);
   }
+}
+
+function sendLeadToMake(caller) {
+  if (caller.makeSent) return;
+  if (!shouldSendToMake(caller)) {
+    console.log("⚠️ Skipping Make webhook — missing minimum required data");
+    return;
+  }
+
+  const payload = buildMakePayload(caller);
+
+  postJsonToMake(payload);
+  caller.makeSent = true;
+}
+
+function sendDemoFollowupToMake(caller) {
+  if (caller.demoFollowupSent) return;
+
+  const payload = buildDemoFollowupPayload(caller);
+  if (!payload.fullName || (!payload.phone && !payload.demoEmail)) {
+    console.log("⚠️ Skipping demo follow-up webhook — missing contact info");
+    return;
+  }
+
+  postJsonToMake(payload);
+  caller.demoFollowupSent = true;
 }
 
 function checkCalendarAvailability(caller, requestDetails = {}) {
   return new Promise((resolve) => {
     try {
-      const payload = JSON.stringify({
+      const payloadObject = {
         action: "check_availability",
         phone: caller.phone,
         fullName: caller.fullName || "",
@@ -1137,8 +1422,9 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
         requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
         requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
         availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || ""
-      });
+      };
 
+      const payload = JSON.stringify(payloadObject);
       const url = new URL(MAKE_WEBHOOK_URL);
 
       const options = {
@@ -1151,6 +1437,8 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
         }
       };
 
+      console.log("[CALENDAR CHECK REQUEST]", payloadObject);
+
       const req = https.request(options, (makeRes) => {
         let body = "";
 
@@ -1159,19 +1447,32 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
         });
 
         makeRes.on("end", () => {
+          console.log("[CALENDAR CHECK RAW RESPONSE]", body || "(empty)");
           try {
             const parsed = JSON.parse(body || "{}");
             resolve(parsed);
-          } catch {
+          } catch (err) {
+            console.error("[CALENDAR CHECK PARSE ERROR]", err.message);
             resolve(null);
           }
         });
       });
 
-      req.on("error", () => resolve(null));
+      req.setTimeout(8000, () => {
+        console.error("[CALENDAR CHECK ERROR] Request timed out");
+        req.destroy();
+        resolve(null);
+      });
+
+      req.on("error", (err) => {
+        console.error("[CALENDAR CHECK ERROR]", err.message);
+        resolve(null);
+      });
+
       req.write(payload);
       req.end();
-    } catch {
+    } catch (err) {
+      console.error("[CALENDAR CHECK ERROR]", err.message);
       resolve(null);
     }
   });
@@ -1331,6 +1632,49 @@ function resetPendingAvailability(caller) {
   caller.pendingAvailabilityQuery = "";
 }
 
+async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
+  if (!isAvailabilityRequest(speech)) return false;
+
+  const requestDetails = parseAvailabilityRequest(
+    speech,
+    options.existingDate || ""
+  );
+
+  caller.requestedDate = requestDetails.requestedDate;
+  caller.requestedTimePreference = requestDetails.requestedTimePreference;
+  caller.pendingAvailabilityQuery = requestDetails.rawQuery;
+
+  const availabilityRaw = await checkCalendarAvailability(caller, requestDetails);
+  const availability = normalizeAvailabilityResponse(availabilityRaw);
+
+  if (availability && availability.date && availability.time) {
+    caller.pendingOfferedDate = availability.date;
+    caller.pendingOfferedTime = availability.time;
+    caller.lastStep = "confirm_first_available";
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would that work for you?`
+    );
+  }
+
+  caller.status = "callback_requested";
+  caller.appointmentDate = requestDetails.requestedDate || "First available requested";
+  caller.appointmentTime = requestDetails.requestedTimePreference
+    ? `${formatPreferenceForSpeech(requestDetails.requestedTimePreference)} preferred`
+    : "";
+  caller.lastStep = "ask_notes";
+
+  return sayThenGather(
+    twiml,
+    res,
+    "/handle-input",
+    "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, is there anything else you'd like me to note for the technician?"
+  );
+}
+
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
@@ -1420,9 +1764,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        caller.firstName
-          ? `Nice to meet you, ${caller.firstName}. What can I help you with today?`
-          : "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?"
+        "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?"
       );
     }
 
@@ -1620,7 +1962,18 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_name") {
-    caller.fullName = toTitleCase(cleanName(speech));
+    const parsedName = parseFullNameFromSpeech(speech);
+
+    if (!parsedName) {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "I'm sorry, I didn't quite catch the name. Could you please say your full name?"
+      );
+    }
+
+    caller.fullName = parsedName;
     caller.firstName = getFirstName(caller.fullName);
 
     if (!hasFullName(caller.fullName)) {
@@ -1643,8 +1996,19 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_last_name") {
-    const lastName = cleanName(speech);
-    caller.fullName = toTitleCase(`${caller.firstName} ${lastName}`);
+    const possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${speech}`);
+
+    if (!possibleFullName || !hasFullName(possibleFullName)) {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "I'm sorry, I didn't quite catch the last name. Could you please repeat it?"
+      );
+    }
+
+    caller.fullName = possibleFullName;
+    caller.firstName = getFirstName(caller.fullName);
     caller.lastStep = "confirm_phone";
 
     return sayThenGather(
@@ -1834,43 +2198,10 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "schedule_or_callback") {
+    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech);
+    if (availabilityHandled) return availabilityHandled;
+
     const t = normalizedText(speech);
-
-    if (isAvailabilityRequest(t)) {
-      const requestDetails = parseAvailabilityRequest(speech);
-      caller.requestedDate = requestDetails.requestedDate;
-      caller.requestedTimePreference = requestDetails.requestedTimePreference;
-      caller.pendingAvailabilityQuery = requestDetails.rawQuery;
-
-      const availability = await checkCalendarAvailability(caller, requestDetails);
-
-      if (availability && availability.date && availability.time) {
-        caller.pendingOfferedDate = availability.date;
-        caller.pendingOfferedTime = availability.time;
-        caller.lastStep = "confirm_first_available";
-
-        return sayThenGather(
-          twiml,
-          res,
-          "/handle-input",
-          `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would that work for you?`
-        );
-      }
-
-      caller.status = "callback_requested";
-      caller.appointmentDate = requestDetails.requestedDate || "First available requested";
-      caller.appointmentTime = requestDetails.requestedTimePreference
-        ? `${requestDetails.requestedTimePreference} preferred`
-        : "";
-      caller.lastStep = "ask_notes";
-
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, is there anything else you'd like me to note for the technician?"
-      );
-    }
 
     if (
       t.includes("schedule") ||
@@ -1951,41 +2282,8 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_appointment_day") {
-    if (isAvailabilityRequest(speech)) {
-      const requestDetails = parseAvailabilityRequest(speech);
-      caller.requestedDate = requestDetails.requestedDate;
-      caller.requestedTimePreference = requestDetails.requestedTimePreference;
-      caller.pendingAvailabilityQuery = requestDetails.rawQuery;
-
-      const availability = await checkCalendarAvailability(caller, requestDetails);
-
-      if (availability && availability.date && availability.time) {
-        caller.pendingOfferedDate = availability.date;
-        caller.pendingOfferedTime = availability.time;
-        caller.lastStep = "confirm_first_available";
-
-        return sayThenGather(
-          twiml,
-          res,
-          "/handle-input",
-          `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would that work for you?`
-        );
-      }
-
-      caller.status = "callback_requested";
-      caller.appointmentDate = requestDetails.requestedDate || "Availability requested";
-      caller.appointmentTime = requestDetails.requestedTimePreference
-        ? `${requestDetails.requestedTimePreference} preferred`
-        : "";
-      caller.lastStep = "ask_notes";
-
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, is there anything else you'd like me to note for the technician?"
-      );
-    }
+    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech);
+    if (availabilityHandled) return availabilityHandled;
 
     const timePreference = detectTimePreference(speech);
     const datePart = extractDatePart(speech);
@@ -2011,7 +2309,7 @@ app.post("/handle-input", async (req, res) => {
       caller.requestedTimePreference = requestDetails.requestedTimePreference;
       caller.pendingAvailabilityQuery = requestDetails.rawQuery;
 
-      const availability = await checkCalendarAvailability(caller, requestDetails);
+      const availability = normalizeAvailabilityResponse(await checkCalendarAvailability(caller, requestDetails));
 
       if (availability && availability.date && availability.time) {
         caller.pendingOfferedDate = availability.date;
@@ -2027,7 +2325,7 @@ app.post("/handle-input", async (req, res) => {
       }
 
       caller.appointmentDate = datePart;
-      caller.appointmentTime = `${timePreference}`;
+      caller.appointmentTime = `${formatPreferenceForSpeech(timePreference)}`;
       caller.status = "callback_requested";
       caller.lastStep = "ask_notes";
 
@@ -2035,7 +2333,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()} on ${caller.appointmentDate}, and someone from the office will confirm the exact appointment time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
+        `Got it. I'll note that you'd prefer ${formatPreferenceForSpeech(timePreference)} on ${caller.appointmentDate}, and someone from the office will confirm the exact appointment time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -2050,31 +2348,10 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_appointment_time") {
-    if (isAvailabilityRequest(speech)) {
-      const requestDetails = parseAvailabilityRequest(speech);
-      if (!requestDetails.requestedDate && caller.appointmentDate) {
-        requestDetails.requestedDate = caller.appointmentDate;
-      }
-
-      caller.requestedDate = requestDetails.requestedDate;
-      caller.requestedTimePreference = requestDetails.requestedTimePreference;
-      caller.pendingAvailabilityQuery = requestDetails.rawQuery;
-
-      const availability = await checkCalendarAvailability(caller, requestDetails);
-
-      if (availability && availability.date && availability.time) {
-        caller.pendingOfferedDate = availability.date;
-        caller.pendingOfferedTime = availability.time;
-        caller.lastStep = "confirm_first_available";
-
-        return sayThenGather(
-          twiml,
-          res,
-          "/handle-input",
-          `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would that work for you?`
-        );
-      }
-    }
+    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, {
+      existingDate: caller.appointmentDate
+    });
+    if (availabilityHandled) return availabilityHandled;
 
     const timePreference = detectTimePreference(speech);
 
@@ -2186,11 +2463,105 @@ app.post("/handle-input", async (req, res) => {
       );
     }
 
+    if (caller.leadType !== "demo" && isDemoFollowupInterest(speech)) {
+      caller.demoFollowupRequested = true;
+      caller.lastStep = "confirm_demo_followup_info";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Before I submit that, is the information you gave me during the demo the best contact information for you?"
+      );
+    }
+
     const goodbye = caller.emergencyAlert
       ? "Thank you for calling. Take care."
       : "Perfect. Thank you for calling, and have a great day.";
 
     twiml.say({ voice: "alice" }, goodbye);
+    twiml.hangup();
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  if (caller.lastStep === "confirm_demo_followup_info") {
+    if (isAffirmative(speech)) {
+      caller.demoFollowupContactName = caller.fullName || "";
+      caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
+      caller.demoFollowupEmail = caller.demoEmail || "";
+      caller.lastStep = "ask_demo_followup_email_optional";
+
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Perfect. If you'd like, what is the best email address for us to use regarding this demo? You can also say skip."
+      );
+    }
+
+    if (isNegative(speech)) {
+      caller.lastStep = "ask_demo_followup_contact_name";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "What is the best contact name for us to use regarding this demo?"
+      );
+    }
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Before I submit that, is the information you gave me during the demo the best contact information for you? Please say yes or no."
+    );
+  }
+
+  if (caller.lastStep === "ask_demo_followup_contact_name") {
+    const parsedName = parseFullNameFromSpeech(speech);
+
+    if (!parsedName) {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "I'm sorry, I didn't quite catch the contact name. What is the best contact name for us to use regarding this demo?"
+      );
+    }
+
+    caller.demoFollowupContactName = parsedName;
+    caller.lastStep = "ask_demo_followup_phone";
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "What is the best callback number for us to use regarding this demo?"
+    );
+  }
+
+  if (caller.lastStep === "ask_demo_followup_phone") {
+    caller.demoFollowupCallbackNumber = cleanForSpeech(speech);
+    caller.lastStep = "ask_demo_followup_email_optional";
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "If you'd like, what is the best email address for us to use regarding this demo? You can also say skip."
+    );
+  }
+
+  if (caller.lastStep === "ask_demo_followup_email_optional") {
+    if (!isSkipResponse(speech)) {
+      caller.demoFollowupEmail = cleanForSpeech(speech);
+    }
+
+    sendDemoFollowupToMake(caller);
+
+    twiml.say(
+      { voice: "alice" },
+      "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling, and have a great day."
+    );
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
