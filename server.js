@@ -1004,7 +1004,7 @@ function parseWarrantyStatus(text) {
 }
 
 function applianceSchedulingPrompt() {
-  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to choose a callback date and time now, or would you prefer the first available callback?";
+  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to choose a callback time now, would you prefer someone from the office to call you, or would you like the first available callback time?";
 }
 
 function classifyIssue(issue) {
@@ -1658,7 +1658,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
       twiml,
       res,
       "/handle-input",
-      `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would that work for you?`
+      `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime} for a callback. Would that callback time work for you?`
     );
   }
 
@@ -1673,7 +1673,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
     twiml,
     res,
     "/handle-input",
-    "I'm sorry, I wasn't able to pull the calendar right now. I'll note your scheduling request, and someone from the office will reach out to confirm the exact appointment time. Before I submit this, is there anything else you'd like me to note for the technician?"
+    "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. Before I submit this, is there anything else you'd like me to note for the technician?"
   );
 }
 
@@ -2245,6 +2245,9 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "confirm_first_available") {
+    const alternateAvailabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech);
+    if (alternateAvailabilityHandled) return alternateAvailabilityHandled;
+
     if (isAffirmative(speech)) {
       caller.appointmentDate = caller.pendingOfferedDate;
       caller.appointmentTime = caller.pendingOfferedTime;
@@ -2270,7 +2273,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "No problem. What day works better for you?"
+        "No problem. What day works better for a callback?"
       );
     }
 
@@ -2278,7 +2281,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would that appointment work for you?"
+      "Would that callback time work for you?"
     );
   }
 
@@ -2321,7 +2324,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime}. Would that work for you?`
+          `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime} for a callback. Would that callback time work for you?`
         );
       }
 
@@ -2334,7 +2337,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Got it. I'll note that you'd prefer ${formatPreferenceForSpeech(timePreference)} on ${caller.appointmentDate}, and someone from the office will confirm the exact appointment time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
+        `Got it. I'll note that you'd prefer a ${formatPreferenceForSpeech(timePreference)} callback on ${caller.appointmentDate}, and someone from the office will confirm the exact callback time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -2344,7 +2347,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "What time works best for you?"
+      "What callback time works best for you?"
     );
   }
 
@@ -2365,7 +2368,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Got it. I'll note that you'd prefer ${timePreference.toLowerCase()}, and someone from the office will confirm the exact appointment time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
+        `Got it. I'll note that you'd prefer ${formatPreferenceForSpeech(timePreference)}, and someone from the office will confirm the exact callback time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -2431,9 +2434,9 @@ app.post("/handle-input", async (req, res) => {
     } else if (caller.leadType === "demo") {
       recap = "Perfect. I'm submitting your demo request now, and someone from the office will contact you shortly.";
     } else if (caller.status === "scheduled") {
-      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested appointment on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`;
+      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`;
     } else if (caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime) {
-      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your callback preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact appointment time.`;
+      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your callback preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact callback time.`;
     } else {
       recap = `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
     }
