@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V88-AVAILABILITY-WEBHOOK-SPLIT
+ VERSION: V89-AVAILABILITY-WEBHOOK-FIXED
  DATE: 2026-04-01
 
  NOTES:
@@ -21,7 +21,7 @@
  - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V88 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V89 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -32,7 +32,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V88-AVAILABILITY-WEBHOOK-SPLIT";
+const APP_VERSION = "VOICE-FLOW-V89-AVAILABILITY-WEBHOOK-FIXED";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 
@@ -1356,7 +1356,7 @@ function shouldSendToMake(caller) {
 function postJsonToMake(payload, onComplete) {
   try {
     const data = JSON.stringify(payload);
-    const url = new URL(AVAILABILITY_WEBHOOK_URL);
+    const url = new URL(MAKE_WEBHOOK_URL);
 
     const options = {
       hostname: url.hostname,
@@ -1428,7 +1428,7 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
       };
 
       const payload = JSON.stringify(payloadObject);
-      const url = new URL(MAKE_WEBHOOK_URL);
+      const url = new URL(AVAILABILITY_WEBHOOK_URL);
 
       const options = {
         hostname: url.hostname,
