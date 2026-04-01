@@ -24,7 +24,7 @@
  - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V93 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V94 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -35,7 +35,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V93-CALENDAR-TONE-APPLIANCE-REFINED";
+const APP_VERSION = "VOICE-FLOW-V94-CALENDAR-DATETIME-ANCHOR";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 
@@ -164,13 +164,33 @@ function normalizedText(text) {
   return cleanForSpeech(text || "").toLowerCase();
 }
 
-function currentDateInEastern() {
-  return new Intl.DateTimeFormat("en-CA", {
+function currentEasternParts() {
+  const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
     month: "2-digit",
-    day: "2-digit"
-  }).format(new Date());
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+
+  const out = {};
+  for (const p of fmt.formatToParts(new Date())) {
+    if (p.type !== "literal") out[p.type] = p.value;
+  }
+  return out;
+}
+
+function currentDateInEastern() {
+  const p = currentEasternParts();
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function currentDateTimeInEastern() {
+  const p = currentEasternParts();
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
 }
 
 function containsAny(text, phrases) {
@@ -478,6 +498,16 @@ function isAffirmative(text) {
     t.includes("that is okay") ||
     t.includes("thats okay") ||
     t.includes("thats perfect") ||
+    t.includes("that is perfect") ||
+    t.includes("perfect ill take it") ||
+    t.includes("perfect i will take it") ||
+    t.includes("ill take it") ||
+    t.includes("i will take it") ||
+    t.includes("ill take that") ||
+    t.includes("i will take that") ||
+    t.includes("thatll work") ||
+    t.includes("that will work") ||
+    t.includes("that works") ||
     t.includes("that is perfect") ||
     t.includes("sounds good") ||
     t.includes("ill take it") ||
@@ -1522,7 +1552,8 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
         requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
         requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
         availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || "",
-        currentDateLocal: currentDateInEastern()
+        currentDateLocal: currentDateInEastern(),
+        currentDateTimeLocal: currentDateTimeInEastern()
       };
 
       const payload = JSON.stringify(payloadObject);
@@ -2729,4 +2760,3 @@ app.get("/twilio-token", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
 });
-
