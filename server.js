@@ -1,6 +1,6 @@
 /*************************************************
  BLUE CALLER AUTOMATION - VOICE SERVER
- VERSION: V85-CALENDAR-PARSER-DEMO-CONTACT
+ VERSION: V86-CALENDAR-PARSER-DEMO-CONTACT
  DATE: 2026-03-31
 
  NOTES:
@@ -15,11 +15,13 @@
  - Improves appliance issue summaries
  - Keeps appliance drain issues classified as appliance issues
  - Adds demo follow-up contact confirmation + corrected contact capture
+ - Updates intro wording to flow more naturally
+ - Updates post-submit demo follow-up question to a direct yes/no ask
  - Keeps quote routing as quote_request
  - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V85 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V86 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -30,7 +32,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V85-CALENDAR-PARSER-DEMO-CONTACT";
+const APP_VERSION = "VOICE-FLOW-V86-CALENDAR-PARSER-DEMO-CONTACT";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 
 app.use(express.urlencoded({ extended: false }));
@@ -1001,7 +1003,7 @@ function parseWarrantyStatus(text) {
 }
 
 function applianceSchedulingPrompt() {
-  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to schedule a service appointment now, would you prefer someone from the office to call you to schedule it, or would you like the first available appointment?";
+  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to choose a callback date and time now, or would you prefer the first available callback?";
 }
 
 function classifyIssue(issue) {
@@ -1224,7 +1226,7 @@ function postSubmitFollowupPrompt(caller) {
   if (caller.leadType === "demo") {
     return "Is there anything else I can help you with today?";
   }
-  return "How did you enjoy the demo? If you'd like, I can have someone from our team contact you to discuss how this could work for your company.";
+  return "How did you enjoy the demo? If you'd like, I can have someone from our team contact you to discuss how this could work for your company. Would you like me to do that?";
 }
 
 function buildMakePayload(caller) {
@@ -1688,7 +1690,7 @@ app.post("/incoming-call", (req, res) => {
 
   twiml.say(
     { voice: "alice" },
-    "Thank you for calling Blue Caller Automation. This is Alex, your virtual receptionist. This is a demonstration line, so you can experience how I would answer calls for your business. You can speak to me just like one of your customers would when calling for service, an emergency, or a quote. How can I help you today?"
+    "Thank you for calling Blue Caller Automation. This is Alex, your virtual receptionist. This is a demonstration line so you can experience how I would answer calls for your business. Talk to me just like your customers would if they were calling for a quote, a service call, or emergency service. How can I help you today?"
   );
   twiml.pause({ length: 1 });
 
@@ -2148,7 +2150,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to schedule a service appointment now, would you prefer someone from the office to call you to schedule it, or would you like the first available appointment?"
+      "Would you like to choose a callback date and time now, or would you prefer the first available callback?"
     );
   }
 
@@ -2231,7 +2233,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "Perfect. Someone from the office will call you to get this scheduled. Before I submit this, is there anything else you'd like me to note for the technician?"
+        "Alright. Someone from the office will call you to arrange the next available time. Before I submit this, is there anything else you'd like me to note for the technician?"
       );
     }
 
@@ -2239,7 +2241,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to schedule now, would you prefer someone from the office to call you, or would you like the first available appointment?"
+      "Would you like to choose a callback date and time now, or would you prefer the first available callback?"
     );
   }
 
@@ -2255,7 +2257,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Perfect. I've got you down for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, is there anything else you'd like me to note for the technician?`
+        `Alright. I've got you down for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -2432,7 +2434,7 @@ app.post("/handle-input", async (req, res) => {
     } else if (caller.status === "scheduled") {
       recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested appointment on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`;
     } else if (caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime) {
-      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact appointment time.`;
+      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your callback preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact appointment time.`;
     } else {
       recap = `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
     }
@@ -2463,15 +2465,26 @@ app.post("/handle-input", async (req, res) => {
       );
     }
 
-    if (caller.leadType !== "demo" && isDemoFollowupInterest(speech)) {
-      caller.demoFollowupRequested = true;
-      caller.lastStep = "confirm_demo_followup_info";
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        "Before I submit that, is the information you gave me during the demo the best contact information for you?"
-      );
+    if (caller.leadType !== "demo") {
+      if (isDemoFollowupInterest(speech)) {
+        caller.demoFollowupRequested = true;
+        caller.lastStep = "confirm_demo_followup_info";
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          "Before I submit that, is the information you gave me during the demo the best contact information for you?"
+        );
+      }
+
+      if (!isNegative(speech) && !isEndCallPhrase(speech)) {
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          "If you'd like, I can have someone from our team contact you to discuss how this could work for your company. Would you like me to do that?"
+        );
+      }
     }
 
     const goodbye = caller.emergencyAlert
