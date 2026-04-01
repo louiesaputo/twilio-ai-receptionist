@@ -436,6 +436,35 @@ function isAffirmative(text) {
     t === "that works" ||
     t === "that would work" ||
     t === "works for me" ||
+    t === "that will work" ||
+    t === "thatll work" ||
+    t === "that is fine" ||
+    t === "thats fine" ||
+    t === "that is okay" ||
+    t === "thats okay" ||
+    t === "that should work" ||
+    t === "that should be fine" ||
+    t === "sounds good" ||
+    t === "sounds fine" ||
+    t === "ill take it" ||
+    t === "i will take it" ||
+    t === "ill take that" ||
+    t === "i will take that" ||
+    t.includes("if thats the soonest ill take it") ||
+    t.includes("if that is the soonest i will take it") ||
+    t.includes("if thats the soonest") ||
+    t.includes("if that is the soonest") ||
+    t.includes("that works for me") ||
+    t.includes("that will work") ||
+    t.includes("thats fine") ||
+    t.includes("that is fine") ||
+    t.includes("that is okay") ||
+    t.includes("thats okay") ||
+    t.includes("sounds good") ||
+    t.includes("ill take it") ||
+    t.includes("i will take it") ||
+    t.includes("ill take that") ||
+    t.includes("i will take that") ||
     t.includes("mark this as an emergency") ||
     t.includes("make this an emergency") ||
     t.includes("yes mark it as an emergency") ||
@@ -1113,6 +1142,24 @@ function isAvailabilityRequest(text) {
   );
 }
 
+function isAlternateAvailabilityRequest(text) {
+  const t = normalizedText(text);
+  return (
+    t.includes("what else do you have") ||
+    t.includes("anything else do you have") ||
+    t.includes("do you have anything else") ||
+    t.includes("another option") ||
+    t.includes("something else") ||
+    t.includes("anything later") ||
+    t.includes("any other times") ||
+    t.includes("anything tomorrow") ||
+    t.includes("anything else tomorrow") ||
+    t.includes("what else do you have tomorrow") ||
+    t.includes("what else is available") ||
+    t.includes("what else is open")
+  );
+}
+
 function detectTimePreference(text) {
   const t = normalizedText(text);
 
@@ -1635,7 +1682,7 @@ function resetPendingAvailability(caller) {
 }
 
 async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
-  if (!isAvailabilityRequest(speech)) return false;
+  if (!isAvailabilityRequest(speech) && !isAlternateAvailabilityRequest(speech)) return false;
 
   const requestDetails = parseAvailabilityRequest(
     speech,
