@@ -1,27 +1,30 @@
 /*************************************************
- VERSION: V89-AVAILABILITY-WEBHOOK-FIXED
+ VERSION: V93-CALENDAR-TONE-APPLIANCE-REFINED
  DATE: 2026-04-01
 
  NOTES:
  - Keeps browser / PC call support
  - Keeps calendar-driven scheduling flow
- - Fixes availability requests being treated like appointment text
- - Adds safer calendar webhook logging + timeout
+ - Uses dedicated Make availability webhook
+ - Fixes exact-time callback availability handling
+ - Preserves requested day when asking for another option
+ - Improves acceptance of natural yes-style replies
+ - Sends current local date to availability scenario to prevent day drift
  - Removes "it's / it is" from opening name parsing
  - Prevents false names like "Not"
- - Removes the "Nice to meet you" fallback path
- - Keeps oven separate from stove / range / cooktop
+ - Removes the hidden "Nice to meet you" fallback path
+ - Expands major appliance detection and aliases
+ - Adds better unknown-item fallback summaries
  - Improves appliance issue summaries
  - Keeps appliance drain issues classified as appliance issues
  - Adds demo follow-up contact confirmation + corrected contact capture
  - Updates intro wording to flow more naturally
- - Updates post-submit demo follow-up question to a direct yes/no ask
- - Splits availability checks to a dedicated Make webhook
+ - Updates callback wording to match callback scheduling
  - Keeps quote routing as quote_request
  - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V89 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V93 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -32,7 +35,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V90-BROWSER-ENABLED";
+const APP_VERSION = "VOICE-FLOW-V93-CALENDAR-TONE-APPLIANCE-REFINED";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 
@@ -159,6 +162,15 @@ function cleanForSpeech(input) {
 
 function normalizedText(text) {
   return cleanForSpeech(text || "").toLowerCase();
+}
+
+function currentDateInEastern() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
 }
 
 function containsAny(text, phrases) {
@@ -430,6 +442,7 @@ function isAffirmative(text) {
     t === "ok" ||
     t === "okay" ||
     t === "sure" ||
+    t === "perfect" ||
     t === "please do" ||
     t === "go ahead" ||
     t === "do that" ||
@@ -442,6 +455,8 @@ function isAffirmative(text) {
     t === "thats fine" ||
     t === "that is okay" ||
     t === "thats okay" ||
+    t === "that is perfect" ||
+    t === "thats perfect" ||
     t === "that should work" ||
     t === "that should be fine" ||
     t === "sounds good" ||
@@ -450,6 +465,8 @@ function isAffirmative(text) {
     t === "i will take it" ||
     t === "ill take that" ||
     t === "i will take that" ||
+    t === "ill take the soonest" ||
+    t === "i will take the soonest" ||
     t.includes("if thats the soonest ill take it") ||
     t.includes("if that is the soonest i will take it") ||
     t.includes("if thats the soonest") ||
@@ -460,6 +477,8 @@ function isAffirmative(text) {
     t.includes("that is fine") ||
     t.includes("that is okay") ||
     t.includes("thats okay") ||
+    t.includes("thats perfect") ||
+    t.includes("that is perfect") ||
     t.includes("sounds good") ||
     t.includes("ill take it") ||
     t.includes("i will take it") ||
@@ -799,15 +818,22 @@ function detectServiceItem(issue) {
 
   const items = [
     { pattern: /\b(refrigerator|refrigerators|fridge|fridges|freezer|freezers)\b/, label: "refrigerator", prompt: "your refrigerator", category: "appliance" },
-    { pattern: /\b(dishwasher|dish washer)\b/, label: "dishwasher", prompt: "your dishwasher", category: "appliance" },
+    { pattern: /\b(wine fridge|wine refrigerator|wine cooler|wine coolers|wine chiller|wine chillers)\b/, label: "wine cooler", prompt: "your wine cooler", category: "appliance" },
+    { pattern: /\b(beverage center|beverage centres|beverage fridge|beverage refrigerator|beverage refrigerators|beverage cooler|beverage coolers|drink fridge|drink refrigerator|soda fridge|soda refrigerator)\b/, label: "beverage center", prompt: "your beverage center", category: "appliance" },
+    { pattern: /\b(dishwasher|dish washer|dishdrawer|dish drawer)\b/, label: "dishwasher", prompt: "your dishwasher", category: "appliance" },
     { pattern: /\b(ice maker|icemaker)\b/, label: "ice maker", prompt: "your ice maker", category: "appliance" },
+    { pattern: /\b(ice machine|icemachine)\b/, label: "ice machine", prompt: "your ice machine", category: "appliance" },
+    { pattern: /\b(range hood|hood vent|vent hood|oven hood|stove hood|hood)\b/, label: "range hood", prompt: "your range hood", category: "appliance" },
     { pattern: /\b(oven|wall oven|double oven)\b/, label: "oven", prompt: "your oven", category: "appliance" },
     { pattern: /\b(cooktop|cook top)\b/, label: "cooktop", prompt: "your cooktop", category: "appliance" },
     { pattern: /\b(range)\b/, label: "range", prompt: "your range", category: "appliance" },
     { pattern: /\b(stove|stovetop|stove top|burner|burners)\b/, label: "stove", prompt: "your stove", category: "appliance" },
+    { pattern: /\b(deep fryer|built in fryer|built in deep fryer|fryer)\b/, label: "deep fryer", prompt: "your deep fryer", category: "appliance" },
+    { pattern: /\b(warming drawer)\b/, label: "warming drawer", prompt: "your warming drawer", category: "appliance" },
+    { pattern: /\b(trash compactor|compactor)\b/, label: "trash compactor", prompt: "your trash compactor", category: "appliance" },
     { pattern: /\b(washer|washing machine)\b/, label: "washer", prompt: "your washer", category: "appliance" },
     { pattern: /\b(dryer|clothes dryer)\b/, label: "dryer", prompt: "your dryer", category: "appliance" },
-    { pattern: /\b(microwave)\b/, label: "microwave", prompt: "your microwave", category: "appliance" },
+    { pattern: /\b(microwave|built in microwave)\b/, label: "microwave", prompt: "your microwave", category: "appliance" },
     { pattern: /\b(garbage disposal|disposal)\b/, label: "garbage disposal", prompt: "your garbage disposal", category: "appliance" },
     { pattern: /\b(faucet|tap)\b/, label: "faucet", prompt: "your faucet", category: "fixture" },
     { pattern: /\b(sink)\b/, label: "sink", prompt: "your sink", category: "fixture" },
@@ -1036,6 +1062,30 @@ function applianceSchedulingPrompt() {
   return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to choose a callback time now, would you prefer someone from the office to call you, or would you like the first available callback time?";
 }
 
+function buildUnknownIssueSummary(issue) {
+  const cleaned = cleanForSpeech(issue || "");
+  if (!cleaned) return "the issue you described";
+
+  const lower = cleaned.toLowerCase();
+  const myMatch = lower.match(/\bmy\s+([a-z0-9\s-]{2,40})/i);
+  if (myMatch && myMatch[1]) {
+    const phrase = myMatch[1]
+      .replace(/\b(is|isn'?t|won'?t|not|that|because|and)\b.*$/i, "")
+      .trim();
+    if (phrase) return `an issue with your ${phrase}`;
+  }
+
+  const theMatch = lower.match(/\bthe\s+([a-z0-9\s-]{2,40})/i);
+  if (theMatch && theMatch[1]) {
+    const phrase = theMatch[1]
+      .replace(/\b(is|isn'?t|won'?t|not|that|because|and)\b.*$/i, "")
+      .trim();
+    if (phrase) return `an issue with the ${phrase}`;
+  }
+
+  return cleaned.length <= 80 ? cleaned : `${cleaned.slice(0, 77).trim()}...`;
+}
+
 function classifyIssue(issue) {
   const text = normalizedText(issue);
   const serviceItem = detectServiceItem(issue);
@@ -1067,7 +1117,7 @@ function classifyIssue(issue) {
     return { summary: `an issue with ${serviceItem.prompt}` };
   }
 
-  return { summary: "your service issue" };
+  return { summary: buildUnknownIssueSummary(issue) };
 }
 
 function hasUsableProblemText(text) {
@@ -1471,7 +1521,8 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
         address: caller.address || "",
         requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
         requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
-        availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || ""
+        availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || "",
+        currentDateLocal: currentDateInEastern()
       };
 
       const payload = JSON.stringify(payloadObject);
@@ -2292,7 +2343,10 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "confirm_first_available") {
-    const alternateAvailabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech);
+    const alternateAvailabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, {
+      existingDate: caller.requestedDate || caller.pendingOfferedDate || "",
+      existingTimePreference: caller.requestedTimePreference || ""
+    });
     if (alternateAvailabilityHandled) return alternateAvailabilityHandled;
 
     if (isAffirmative(speech)) {
@@ -2306,7 +2360,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Alright. I've got you down for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, is there anything else you'd like me to note for the technician?`
+        `Alright. I've got your callback set for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -2328,7 +2382,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would that callback time work for you?"
+      "Would that callback time work for you? You can also ask for another time."
     );
   }
 
@@ -2376,7 +2430,7 @@ app.post("/handle-input", async (req, res) => {
       }
 
       caller.appointmentDate = datePart;
-      caller.appointmentTime = `${formatPreferenceForSpeech(timePreference)}`;
+      caller.appointmentTime = formatPreferenceForSpeech(timePreference);
       caller.status = "callback_requested";
       caller.lastStep = "ask_notes";
 
@@ -2407,7 +2461,7 @@ app.post("/handle-input", async (req, res) => {
     const timePreference = detectTimePreference(speech);
 
     if (timePreference && !isSpecificTime(speech)) {
-      caller.appointmentTime = timePreference;
+      caller.appointmentTime = formatPreferenceForSpeech(timePreference);
       caller.status = "callback_requested";
       caller.lastStep = "ask_notes";
 
@@ -2675,3 +2729,4 @@ app.get("/twilio-token", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
 });
+
