@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V93-CALENDAR-TONE-APPLIANCE-REFINED
+ VERSION: V94-CALENDAR-DATETIME-ANCHOR
  DATE: 2026-04-01
 
  NOTES:
@@ -9,7 +9,7 @@
  - Fixes exact-time callback availability handling
  - Preserves requested day when asking for another option
  - Improves acceptance of natural yes-style replies
- - Sends current local date to availability scenario to prevent day drift
+ - Sends current local date/time to availability scenario to prevent day/time drift
  - Removes "it's / it is" from opening name parsing
  - Prevents false names like "Not"
  - Removes the hidden "Nice to meet you" fallback path
