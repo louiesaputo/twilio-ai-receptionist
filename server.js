@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V94-CALENDAR-DATETIME-ANCHOR
+ VERSION: V95-ISSUE-PARSER-SCHEDULING-REROUTE
  DATE: 2026-04-01
 
  NOTES:
@@ -24,7 +24,7 @@
  - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V94 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V95 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -35,7 +35,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V94-CALENDAR-DATETIME-ANCHOR";
+const APP_VERSION = "VOICE-FLOW-V95-ISSUE-PARSER-SCHEDULING-REROUTE";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 
@@ -309,13 +309,22 @@ function stripIssueLeadIn(text) {
   if (!text) return "";
   return cleanForSpeech(text)
     .replace(/^(and\s+)?i\s+have\s+/i, "")
-    .replace(/^(and\s+)?i've\s+got\s+/i, "")
+    .replace(/^(and\s+)?i\'ve\s+got\s+/i, "")
     .replace(/^(and\s+)?i\s+need\s+/i, "")
     .replace(/^(and\s+)?i\s+would\s+like\s+/i, "")
-    .replace(/^(and\s+)?i'?d\s+like\s+/i, "")
+    .replace(/^(and\s+)?i\'?d\s+like\s+/i, "")
     .replace(/^(and\s+)?i\s+want\s+/i, "")
     .replace(/^(and\s+)?i\s+am\s+interested\s+in\s+/i, "")
-    .replace(/^(and\s+)?i'?m\s+interested\s+in\s+/i, "")
+    .replace(/^(and\s+)?i\'?m\s+interested\s+in\s+/i, "")
+    .replace(/^i\s+need\s+someone\s+to\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^i\s+need\s+somebody\s+to\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^can\s+someone\s+look\s+at\s+/i, "")
+    .replace(/^can\s+you\s+look\s+at\s+/i, "")
+    .replace(/^i\s+need\s+service\s+for\s+/i, "")
+    .replace(/^i\s+need\s+help\s+with\s+/i, "")
+    .replace(/^i\'?m\s+having\s+an?\s+issue\s+with\s+/i, "")
+    .replace(/^i\s+am\s+having\s+an?\s+issue\s+with\s+/i, "")
+    .replace(/^there\s+is\s+an?\s+issue\s+with\s+/i, "")
     .replace(/^calling\s+about\s+/i, "")
     .replace(/^calling\s+with\s+/i, "")
     .replace(/^calling\s+for\s+/i, "")
@@ -328,81 +337,81 @@ function stripIssueLeadIn(text) {
     .trim();
 }
 
+function stripGreetingPrefix(text) {
+  return cleanSpeechText(text || "")
+    .replace(/^(hi|hello|hey)\s*,?\s*alex\s*[,. -]*\s*/i, "")
+    .replace(/^(hi|hello|hey)\s*[,. -]*\s*/i, "")
+    .trim();
+}
+
+function looksLikeIssueText(text) {
+  const t = normalizedText(text || "");
+  return Boolean(
+    t && (
+      t.startsWith("my ") ||
+      t.startsWith("the ") ||
+      t.startsWith("our ") ||
+      t.includes(" not ") ||
+      t.includes("isn't") ||
+      t.includes("isnt") ||
+      t.includes("won't") ||
+      t.includes("wont") ||
+      t.includes("leak") ||
+      t.includes("cool") ||
+      t.includes("heat") ||
+      t.includes("drain") ||
+      t.includes("noise") ||
+      t.includes("problem") ||
+      t.includes("issue") ||
+      t.includes("refrigerator") ||
+      t.includes("fridge") ||
+      t.includes("oven") ||
+      t.includes("dishwasher") ||
+      t.includes("washer") ||
+      t.includes("dryer") ||
+      t.includes("range") ||
+      t.includes("stove") ||
+      t.includes("light") ||
+      t.includes("door")
+    )
+  );
+}
+
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
-  let normalized = original
-    .replace(/^(hi|hello|hey)\s*,?\s*alex\s*,?\s*/i, "")
-    .replace(/^(hi|hello|hey)\s*,?\s*/i, "")
-    .trim();
-
-  const markerPatterns = [
-    "this is",
-    "my name is",
-    "i am",
-    "i'm"
+  const normalized = stripGreetingPrefix(original);
+  const patterns = [
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s*,\s*|\s+and\s+)(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(my\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(the\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\s+need\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\'?m\s+having\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+someone\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+you\s+.+)$/i
   ];
 
-  const issueSeparators = [
-    " and i have ",
-    " and i've got ",
-    " and i need ",
-    " and i would like ",
-    " and i'd like ",
-    " and i want ",
-    ", i have ",
-    ", i've got ",
-    ", i need ",
-    ", i would like ",
-    ", i'd like ",
-    ", i want ",
-    ", i'm interested in ",
-    ", i am interested in ",
-    " i have ",
-    " i've got ",
-    " i need ",
-    " i would like ",
-    " i'd like ",
-    " i want ",
-    " i'm interested in ",
-    " i am interested in ",
-    " calling about ",
-    " calling with ",
-    " calling for ",
-    " calling regarding "
-  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
 
-  const lower = normalized.toLowerCase();
+    const possibleName = normalizeNameCandidate(match[1]);
+    const issueText = stripIssueLeadIn(match[2]);
 
-  for (const marker of markerPatterns) {
-    if (!lower.startsWith(marker)) continue;
-
-    const afterMarker = normalized.slice(marker.length).trim();
-    const afterMarkerLower = afterMarker.toLowerCase();
-
-    for (const separator of issueSeparators) {
-      const sepIndex = afterMarkerLower.indexOf(separator);
-      if (sepIndex === -1) continue;
-
-      const possibleNameRaw = afterMarker
-        .slice(0, sepIndex)
-        .trim()
-        .replace(/^[,.\-\s]+|[,.\-\s]+$/g, "");
-      const issueRaw = afterMarker.slice(sepIndex + separator.length).trim();
-
-      const possibleName = normalizeNameCandidate(possibleNameRaw);
-      const issueText = stripIssueLeadIn(issueRaw);
-
-      if (possibleName && issueText) {
-        return { name: possibleName, issueText };
-      }
+    if (possibleName && issueText) {
+      return { name: possibleName, issueText };
     }
+  }
 
-    const possibleNameOnly = normalizeNameCandidate(afterMarker);
-    if (possibleNameOnly) {
-      return { name: possibleNameOnly, issueText: "" };
-    }
+  const markerOnly = normalized.match(/^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+)$/i);
+  if (markerOnly) {
+    const possibleName = normalizeNameCandidate(markerOnly[1]);
+    if (possibleName) return { name: possibleName, issueText: "" };
+  }
+
+  if (looksLikeIssueText(normalized)) {
+    return { name: null, issueText: stripIssueLeadIn(normalized) || original };
   }
 
   return { name: null, issueText: original };
@@ -1236,8 +1245,33 @@ function isAlternateAvailabilityRequest(text) {
     t.includes("anything else tomorrow") ||
     t.includes("what else do you have tomorrow") ||
     t.includes("what else is available") ||
-    t.includes("what else is open")
+    t.includes("what else is open") ||
+    t.includes("instead")
   );
+}
+
+function isFlexibleSchedulingRequest(text) {
+  const t = normalizedText(text);
+  if (!t) return false;
+
+  if (containsAny(t, [
+    "today", "tomorrow", "next week", "this week",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+  ])) return true;
+
+  if (detectTimePreference(text)) return true;
+  if (isSpecificTime(text)) return true;
+
+  return containsAny(t, [
+    "what about",
+    "how about",
+    "instead",
+    "monday or",
+    "tuesday or",
+    "wednesday or",
+    "thursday or",
+    "friday or"
+  ]);
 }
 
 function detectTimePreference(text) {
@@ -1284,20 +1318,30 @@ function extractDatePart(text) {
   let value = cleanForSpeech(text || "");
   if (!value) return "";
 
+  const normalized = normalizedText(value);
+  const containsDirectDate = containsAny(normalized, [
+    "today", "tomorrow", "next week", "this week",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+  ]) || isSpecificTime(value);
+
+  if (!containsDirectDate) {
+    value = value
+      .replace(/^let'?s say\s+/i, "")
+      .replace(/^how about\s+/i, "")
+      .replace(/^maybe\s+/i, "")
+      .replace(/^for\s+/i, "")
+      .replace(/\bwhat('?s| is)\s+(your\s+)?first available( appointment)?\b.*$/i, "")
+      .replace(/\bwhat('?s| is)\s+the first available( appointment)?\b.*$/i, "")
+      .replace(/\bwhat('?s| is)\s+(your\s+)?next available( appointment)?\b.*$/i, "")
+      .replace(/\b(first|next|soonest|earliest)\s+(available\s+)?(appointment|opening|slot|time)\b.*$/i, "")
+      .replace(/\bdo you have anything available\b.*$/i, "")
+      .replace(/\bwhat do you have available\b.*$/i, "")
+      .replace(/\bdo you have anything.*$/i, "")
+      .replace(/\bwhat do you have.*$/i, "")
+      .replace(/\banything in the .*$/i, "");
+  }
+
   value = value
-    .replace(/^let'?s say\s+/i, "")
-    .replace(/^how about\s+/i, "")
-    .replace(/^maybe\s+/i, "")
-    .replace(/^for\s+/i, "")
-    .replace(/\bwhat('?s| is)\s+(your\s+)?first available( appointment)?\b.*$/i, "")
-    .replace(/\bwhat('?s| is)\s+the first available( appointment)?\b.*$/i, "")
-    .replace(/\bwhat('?s| is)\s+(your\s+)?next available( appointment)?\b.*$/i, "")
-    .replace(/\b(first|next|soonest|earliest)\s+(available\s+)?(appointment|opening|slot|time)\b.*$/i, "")
-    .replace(/\bdo you have anything available\b.*$/i, "")
-    .replace(/\bwhat do you have available\b.*$/i, "")
-    .replace(/\bdo you have anything.*$/i, "")
-    .replace(/\bwhat do you have.*$/i, "")
-    .replace(/\banything in the .*$/i, "")
     .replace(/\bin the mornings?\b.*$/i, "")
     .replace(/\bin the afternoon\b.*$/i, "")
     .replace(/\bin the afternoons\b.*$/i, "")
@@ -1317,6 +1361,10 @@ function parseAvailabilityRequest(text, existingDate = "") {
   const raw = cleanForSpeech(text || "");
   let datePart = extractDatePart(raw);
   const timePref = detectTimePreference(raw);
+
+  if (!datePart && isFlexibleSchedulingRequest(raw)) {
+    datePart = raw;
+  }
 
   if (!datePart && existingDate && !containsAny(normalizedText(existingDate), [
     "first available requested",
@@ -1764,7 +1812,12 @@ function resetPendingAvailability(caller) {
 }
 
 async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
-  if (!isAvailabilityRequest(speech) && !isAlternateAvailabilityRequest(speech)) return false;
+  const shouldHandle =
+    isAvailabilityRequest(speech) ||
+    isAlternateAvailabilityRequest(speech) ||
+    (options.allowFlexibleDateRequest && isFlexibleSchedulingRequest(speech));
+
+  if (!shouldHandle) return false;
 
   const requestDetails = parseAvailabilityRequest(
     speech,
@@ -2278,7 +2331,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to choose a callback date and time now, or would you prefer the first available callback?"
+      "Would you like to choose a callback day and time now, ask what is available on a specific day, or would you prefer the first available callback?"
     );
   }
 
@@ -2328,7 +2381,7 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "schedule_or_callback") {
-    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech);
+    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, { allowFlexibleDateRequest: true });
     if (availabilityHandled) return availabilityHandled;
 
     const t = normalizedText(speech);
@@ -2369,14 +2422,15 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to choose a callback date and time now, or would you prefer the first available callback?"
+      "Would you like to choose a callback day and time now, ask what is available on a specific day, or would you prefer the first available callback?"
     );
   }
 
   if (caller.lastStep === "confirm_first_available") {
     const alternateAvailabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, {
       existingDate: caller.requestedDate || caller.pendingOfferedDate || "",
-      existingTimePreference: caller.requestedTimePreference || ""
+      existingTimePreference: caller.requestedTimePreference || "",
+      allowFlexibleDateRequest: true
     });
     if (alternateAvailabilityHandled) return alternateAvailabilityHandled;
 
@@ -2418,7 +2472,7 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_appointment_day") {
-    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech);
+    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, { allowFlexibleDateRequest: true });
     if (availabilityHandled) return availabilityHandled;
 
     const timePreference = detectTimePreference(speech);
@@ -2485,7 +2539,8 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "ask_appointment_time") {
     const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, {
-      existingDate: caller.appointmentDate
+      existingDate: caller.appointmentDate,
+      allowFlexibleDateRequest: true
     });
     if (availabilityHandled) return availabilityHandled;
 
