@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V95-ISSUE-PARSER-SCHEDULING-REROUTE
+ VERSION: V96-NAME-SPELLING-DATE-PHRASING
  DATE: 2026-04-01
 
  NOTES:
@@ -17,6 +17,8 @@
  - Adds better unknown-item fallback summaries
  - Improves appliance issue summaries
  - Keeps appliance drain issues classified as appliance issues
+ - Adds ambiguous first-name spelling confirmation
+ - Improves spoken callback date phrasing for tomorrow/today
  - Adds demo follow-up contact confirmation + corrected contact capture
  - Updates intro wording to flow more naturally
  - Updates callback wording to match callback scheduling
@@ -24,7 +26,7 @@
  - Keeps emergency routing + leak emergency choice
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V95 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V96 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -35,7 +37,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V95-ISSUE-PARSER-SCHEDULING-REROUTE";
+const APP_VERSION = "VOICE-FLOW-V96-NAME-SPELLING-DATE-PHRASING";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 
@@ -85,6 +87,9 @@ function getOrCreateCaller(phone) {
       demoFollowupRequested: false,
       demoFollowupSent: false,
       demoFollowupContactName: "",
+
+      nameSpellingConfirmed: false,
+      pendingNameNextStep: "",
       demoFollowupCallbackNumber: "",
       demoFollowupEmail: "",
 
@@ -138,6 +143,9 @@ function resetCallerForNewCall(caller, phone) {
   caller.demoFollowupRequested = false;
   caller.demoFollowupSent = false;
   caller.demoFollowupContactName = "";
+
+  caller.nameSpellingConfirmed = false;
+  caller.pendingNameNextStep = "";
   caller.demoFollowupCallbackNumber = "";
   caller.demoFollowupEmail = "";
 
@@ -229,6 +237,77 @@ function getFirstName(fullName) {
 function hasFullName(name) {
   if (!name) return false;
   return cleanForSpeech(name).split(/\s+/).filter(Boolean).length >= 2;
+}
+
+
+const AMBIGUOUS_FIRST_NAMES = new Set([
+  "john", "jon", "johnny", "jonny",
+  "louie", "louis", "luis",
+  "bobby", "bobbie",
+  "carrie", "kari", "kerri", "keri", "kerry", "carey",
+  "cathy", "kathy", "cathie", "kathi",
+  "sara", "sarah",
+  "steven", "stephen",
+  "megan", "meaghan", "meghan", "meagan",
+  "tracy", "tracey",
+  "jamie", "jaime", "jamey",
+  "terri", "terry", "teri",
+  "bobbi", "robyn", "robin"
+]);
+
+function firstNameNeedsSpelling(name) {
+  const first = normalizedText(name).replace(/[^a-z]/g, "");
+  if (!first) return false;
+  if (AMBIGUOUS_FIRST_NAMES.has(first)) return true;
+  return false;
+}
+
+function normalizeSpelledFirstName(text, fallback = "") {
+  const letters = cleanForSpeech(text || "").replace(/[^a-zA-Z]/g, "");
+  if (letters.length >= 2 && letters.length <= 15) {
+    return toTitleCase(letters);
+  }
+  return fallback || "";
+}
+
+function maybeAskFirstNameSpelling(twiml, res, caller, nextStep) {
+  if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
+    caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
+    caller.lastStep = "ask_first_name_spelling";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "I know that name can be spelled a few different ways — how do you spell it?"
+    );
+  }
+  return null;
+}
+
+function parseSpokenDateText(dateText) {
+  const raw = cleanForSpeech(dateText || "");
+  const m = raw.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
+  if (!m) return null;
+  const months = {
+    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+  };
+  return { weekday: m[1], month: months[m[2].toLowerCase()], day: Number(m[3]) };
+}
+
+function spokenAvailabilityPhrase(dateText, timeText) {
+  const parsed = parseSpokenDateText(dateText);
+  if (!parsed) return `${dateText} at ${timeText}`;
+
+  const current = currentEasternParts();
+  const year = Number(current.year);
+  const currentDate = new Date(Date.UTC(year, Number(current.month) - 1, Number(current.day)));
+  const offeredDate = new Date(Date.UTC(year, parsed.month - 1, parsed.day));
+  const diffDays = Math.round((offeredDate - currentDate) / 86400000);
+
+  if (diffDays === 0) return `today at ${timeText}`;
+  if (diffDays === 1) return `tomorrow, ${parsed.weekday} at ${timeText}`;
+  return `${dateText} at ${timeText}`;
 }
 
 function normalizeNameCandidate(rawName) {
@@ -1684,6 +1763,9 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
   } = options;
 
   if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "ask_last_name");
+    if (spellingPrompt) return spellingPrompt;
+
     caller.lastStep = "ask_last_name";
     return sayThenGather(
       twiml,
@@ -1694,6 +1776,8 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
   }
 
   if (caller.fullName && caller.firstName) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "confirm_phone");
+    if (spellingPrompt) return spellingPrompt;
     caller.lastStep = "confirm_phone";
 
     if (caller.emergencyAlert) {
@@ -1741,6 +1825,9 @@ function moveToQuoteNameOrPhoneStep(twiml, res, caller) {
   caller.status = "quote_request";
 
   if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "ask_last_name");
+    if (spellingPrompt) return spellingPrompt;
+
     caller.lastStep = "ask_last_name";
     return sayThenGather(
       twiml,
@@ -1751,6 +1838,8 @@ function moveToQuoteNameOrPhoneStep(twiml, res, caller) {
   }
 
   if (caller.fullName && caller.firstName) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "confirm_phone");
+    if (spellingPrompt) return spellingPrompt;
     caller.lastStep = "confirm_phone";
     return sayThenGather(
       twiml,
@@ -1775,6 +1864,9 @@ function moveToDemoNameOrPhoneStep(twiml, res, caller) {
   if (!caller.issueSummary) caller.issueSummary = "demo request";
 
   if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "ask_last_name");
+    if (spellingPrompt) return spellingPrompt;
+
     caller.lastStep = "ask_last_name";
     return sayThenGather(
       twiml,
@@ -1785,6 +1877,8 @@ function moveToDemoNameOrPhoneStep(twiml, res, caller) {
   }
 
   if (caller.fullName && caller.firstName) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "confirm_phone");
+    if (spellingPrompt) return spellingPrompt;
     caller.lastStep = "confirm_phone";
     return sayThenGather(
       twiml,
@@ -1840,7 +1934,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
       twiml,
       res,
       "/handle-input",
-      `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime} for a callback. Would that callback time work for you?`
+      `Let me check the calendar. I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
     );
   }
 
@@ -1938,6 +2032,7 @@ app.post("/handle-input", async (req, res) => {
     if (parsed.name) {
       caller.fullName = parsed.name;
       caller.firstName = getFirstName(parsed.name);
+      caller.nameSpellingConfirmed = false;
       console.log("✅ Captured opening name:", caller.fullName);
     }
 
@@ -2158,6 +2253,15 @@ app.post("/handle-input", async (req, res) => {
 
     caller.fullName = parsedName;
     caller.firstName = getFirstName(caller.fullName);
+    caller.nameSpellingConfirmed = false;
+
+    const spellingPrompt = maybeAskFirstNameSpelling(
+      twiml,
+      res,
+      caller,
+      hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name"
+    );
+    if (spellingPrompt) return spellingPrompt;
 
     if (!hasFullName(caller.fullName)) {
       caller.lastStep = "ask_last_name";
@@ -2178,6 +2282,36 @@ app.post("/handle-input", async (req, res) => {
     );
   }
 
+  if (caller.lastStep === "ask_first_name_spelling") {
+    const spelledFirstName = normalizeSpelledFirstName(speech, caller.firstName || "");
+    const remainingParts = cleanForSpeech(caller.fullName || "").split(/\s+/).filter(Boolean).slice(1).join(" ");
+
+    caller.firstName = spelledFirstName || caller.firstName;
+    caller.fullName = remainingParts ? `${caller.firstName} ${toTitleCase(remainingParts)}` : caller.firstName;
+    caller.nameSpellingConfirmed = true;
+
+    const nextStep = caller.pendingNameNextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
+    caller.pendingNameNextStep = "";
+
+    if (nextStep === "ask_last_name") {
+      caller.lastStep = "ask_last_name";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Thank you. Can I get your last name as well?"
+      );
+    }
+
+    caller.lastStep = "confirm_phone";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+    );
+  }
+
   if (caller.lastStep === "ask_last_name") {
     const possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${speech}`);
 
@@ -2192,6 +2326,10 @@ app.post("/handle-input", async (req, res) => {
 
     caller.fullName = possibleFullName;
     caller.firstName = getFirstName(caller.fullName);
+
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "confirm_phone");
+    if (spellingPrompt) return spellingPrompt;
+
     caller.lastStep = "confirm_phone";
 
     return sayThenGather(
@@ -2510,7 +2648,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          `Let me check the calendar. I have ${caller.pendingOfferedDate} at ${caller.pendingOfferedTime} for a callback. Would that callback time work for you?`
+          `Let me check the calendar. I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
         );
       }
 
