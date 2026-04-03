@@ -1,6 +1,6 @@
 /*************************************************
- VERSION: V96-NAME-SPELLING-DATE-PHRASING
- DATE: 2026-04-01
+ VERSION: V97-CALENDAR-WRITEBACK
+ DATE: 2026-04-02
 
  NOTES:
  - Keeps browser / PC call support
@@ -24,9 +24,12 @@
  - Updates callback wording to match callback scheduling
  - Keeps quote routing as quote_request
  - Keeps emergency routing + leak emergency choice
+ - Writes confirmed calendar-backed callback slots to a dedicated Make booking webhook
+ - Places service address into the booking payload for Calendar Location mapping
+ - Uses actual first name in ambiguous-name spelling prompt
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V96 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V97 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -37,9 +40,10 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V96-NAME-SPELLING-DATE-PHRASING";
+const APP_VERSION = "VOICE-FLOW-V97-CALENDAR-WRITEBACK";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
+const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -83,6 +87,8 @@ function getOrCreateCaller(phone) {
       pendingOfferedDate: "",
       pendingOfferedTime: "",
       pendingAvailabilityQuery: "",
+      calendarSlotConfirmed: false,
+      bookingSent: false,
 
       demoFollowupRequested: false,
       demoFollowupSent: false,
@@ -139,6 +145,8 @@ function resetCallerForNewCall(caller, phone) {
   caller.pendingOfferedDate = "";
   caller.pendingOfferedTime = "";
   caller.pendingAvailabilityQuery = "";
+  caller.calendarSlotConfirmed = false;
+  caller.bookingSent = false;
 
   caller.demoFollowupRequested = false;
   caller.demoFollowupSent = false;
@@ -200,6 +208,69 @@ function currentDateTimeInEastern() {
   const p = currentEasternParts();
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
 }
+
+function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
+  const [datePart, timePart] = String(localDateTime || "").split("T");
+  if (!datePart || !timePart) return "";
+
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [hour, minute, second] = timePart.split(":").map(Number);
+
+  const dt = new Date(Date.UTC(year, month - 1, day, hour, minute, second || 0));
+  dt.setUTCMinutes(dt.getUTCMinutes() + minutesToAdd);
+
+  const yyyy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  const hh = String(dt.getUTCHours()).padStart(2, "0");
+  const mi = String(dt.getUTCMinutes()).padStart(2, "0");
+  const ss = String(dt.getUTCSeconds()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
+}
+
+function parseCallbackDateAndTimeToLocal(dateText, timeText) {
+  const safeDate = cleanForSpeech(dateText || "");
+  const safeTime = cleanForSpeech(timeText || "");
+
+  const dateMatch = safeDate.match(/^(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
+  const timeMatch = safeTime.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+
+  if (!dateMatch || !timeMatch) return null;
+
+  const months = {
+    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+  };
+
+  const current = currentEasternParts();
+  let year = Number(current.year);
+  const month = months[dateMatch[1].toLowerCase()];
+  const day = Number(dateMatch[2]);
+
+  let hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const meridiem = timeMatch[3].toUpperCase();
+
+  if (meridiem === "PM" && hour !== 12) hour += 12;
+  if (meridiem === "AM" && hour === 12) hour = 0;
+
+  const currentDateOnly = `${current.year}-${current.month}-${current.day}`;
+  const candidateDateOnly = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+  if (candidateDateOnly < currentDateOnly) {
+    year += 1;
+  }
+
+  const startLocal = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`;
+  const endLocal = addMinutesToLocalDateTime(startLocal, 30);
+
+  return {
+    startLocal,
+    endLocal
+  };
+}
+
 
 function containsAny(text, phrases) {
   return phrases.some((p) => text.includes(p));
@@ -278,7 +349,7 @@ function maybeAskFirstNameSpelling(twiml, res, caller, nextStep) {
       twiml,
       res,
       "/handle-input",
-      "I know that name can be spelled a few different ways — how do you spell it?"
+      `${toTitleCase(caller.firstName)} can be spelled a few different ways. How do you spell it?`
     );
   }
   return null;
@@ -1607,10 +1678,10 @@ function shouldSendToMake(caller) {
   return false;
 }
 
-function postJsonToMake(payload, onComplete) {
+function postJsonToWebhook(webhookUrl, payload, label, onComplete) {
   try {
     const data = JSON.stringify(payload);
-    const url = new URL(MAKE_WEBHOOK_URL);
+    const url = new URL(webhookUrl);
 
     const options = {
       hostname: url.hostname,
@@ -1622,22 +1693,26 @@ function postJsonToMake(payload, onComplete) {
       }
     };
 
-    const makeReq = https.request(options, (makeRes) => {
-      console.log(`[MAKE] Status: ${makeRes.statusCode}`);
+    const webhookReq = https.request(options, (webhookRes) => {
+      console.log(`[${label}] Status: ${webhookRes.statusCode}`);
       if (onComplete) onComplete();
     });
 
-    makeReq.on("error", (err) => {
-      console.error("[MAKE ERROR]", err.message);
+    webhookReq.on("error", (err) => {
+      console.error(`[${label} ERROR]`, err.message);
       if (onComplete) onComplete(err);
     });
 
-    makeReq.write(data);
-    makeReq.end();
+    webhookReq.write(data);
+    webhookReq.end();
   } catch (err) {
-    console.error("[MAKE ERROR]", err.message);
+    console.error(`[${label} ERROR]`, err.message);
     if (onComplete) onComplete(err);
   }
+}
+
+function postJsonToMake(payload, onComplete) {
+  return postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "MAKE", onComplete);
 }
 
 function sendLeadToMake(caller) {
@@ -1651,6 +1726,62 @@ function sendLeadToMake(caller) {
 
   postJsonToMake(payload);
   caller.makeSent = true;
+}
+
+
+function buildBookingPayload(caller) {
+  if (!caller.calendarSlotConfirmed || !caller.appointmentDate || !caller.appointmentTime) return null;
+
+  const slotTimes = parseCallbackDateAndTimeToLocal(caller.appointmentDate, caller.appointmentTime);
+  if (!slotTimes) return null;
+
+  return {
+    action: "create_callback_booking",
+    fullName: caller.fullName || "",
+    firstName: caller.firstName || "",
+    phone: caller.phone || "",
+    callbackNumber: caller.callbackNumber || "",
+    issueSummary: caller.issueSummary || "",
+    address: caller.address || "",
+    leadType: caller.leadType || "service",
+    notes: caller.notes || "",
+    appointmentDate: caller.appointmentDate || "",
+    appointmentTime: caller.appointmentTime || "",
+    bookingStartDateTimeLocal: slotTimes.startLocal,
+    bookingEndDateTimeLocal: slotTimes.endLocal,
+    source: "AI Receptionist"
+  };
+}
+
+function shouldSendBooking(caller) {
+  const payload = buildBookingPayload(caller);
+  if (!payload) return false;
+
+  return Boolean(
+    !caller.bookingSent &&
+    caller.leadType === "service" &&
+    caller.status === "scheduled" &&
+    caller.calendarSlotConfirmed === true &&
+    payload.fullName &&
+    payload.callbackNumber &&
+    payload.issueSummary &&
+    payload.address &&
+    payload.bookingStartDateTimeLocal &&
+    payload.bookingEndDateTimeLocal
+  );
+}
+
+function sendBookingToMake(caller) {
+  if (!shouldSendBooking(caller)) {
+    if (caller.status === "scheduled" && caller.calendarSlotConfirmed) {
+      console.log("⚠️ Skipping booking webhook — missing booking data");
+    }
+    return;
+  }
+
+  const payload = buildBookingPayload(caller);
+  postJsonToWebhook(BOOKING_WEBHOOK_URL, payload, "BOOKING");
+  caller.bookingSent = true;
 }
 
 function sendDemoFollowupToMake(caller) {
@@ -1928,6 +2059,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
   if (availability && availability.date && availability.time) {
     caller.pendingOfferedDate = availability.date;
     caller.pendingOfferedTime = availability.time;
+    caller.calendarSlotConfirmed = false;
     caller.lastStep = "confirm_first_available";
 
     return sayThenGather(
@@ -1939,6 +2071,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
   }
 
   caller.status = "callback_requested";
+  caller.calendarSlotConfirmed = false;
   caller.appointmentDate = requestDetails.requestedDate || "First available requested";
   caller.appointmentTime = requestDetails.requestedTimePreference
     ? `${formatPreferenceForSpeech(requestDetails.requestedTimePreference)} preferred`
@@ -2547,6 +2680,7 @@ app.post("/handle-input", async (req, res) => {
       t.includes("someone call")
     ) {
       caller.status = "callback_requested";
+      caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
       return sayThenGather(
         twiml,
@@ -2576,6 +2710,7 @@ app.post("/handle-input", async (req, res) => {
       caller.appointmentDate = caller.pendingOfferedDate;
       caller.appointmentTime = caller.pendingOfferedTime;
       caller.status = "scheduled";
+      caller.calendarSlotConfirmed = true;
       caller.lastStep = "ask_notes";
       resetPendingAvailability(caller);
 
@@ -2591,6 +2726,7 @@ app.post("/handle-input", async (req, res) => {
       caller.pendingOfferedDate = "";
       caller.pendingOfferedTime = "";
       caller.status = "scheduling";
+      caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_appointment_day";
 
       return sayThenGather(
@@ -2655,6 +2791,7 @@ app.post("/handle-input", async (req, res) => {
       caller.appointmentDate = datePart;
       caller.appointmentTime = formatPreferenceForSpeech(timePreference);
       caller.status = "callback_requested";
+      caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
 
       return sayThenGather(
@@ -2687,6 +2824,7 @@ app.post("/handle-input", async (req, res) => {
     if (timePreference && !isSpecificTime(speech)) {
       caller.appointmentTime = formatPreferenceForSpeech(timePreference);
       caller.status = "callback_requested";
+      caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
 
       return sayThenGather(
@@ -2699,6 +2837,7 @@ app.post("/handle-input", async (req, res) => {
 
     caller.appointmentTime = cleanForSpeech(speech);
     caller.status = "scheduled";
+    caller.calendarSlotConfirmed = false;
     caller.lastStep = "ask_notes";
     return sayThenGather(
       twiml,
@@ -2769,6 +2908,7 @@ app.post("/handle-input", async (req, res) => {
     twiml.say({ voice: "alice" }, recap);
 
     sendLeadToMake(caller);
+    sendBookingToMake(caller);
 
     caller.lastStep = "final_question";
 
