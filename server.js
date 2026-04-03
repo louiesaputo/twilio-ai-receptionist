@@ -1,18 +1,17 @@
 /*************************************************
- VERSION: V97-CALENDAR-WRITEBACK
- DATE: 2026-04-02
+ VERSION: V98-INTAKE-AUDIO-POLISH
+ DATE: 2026-04-03
 
  NOTES:
  - Keeps browser / PC call support
  - Keeps calendar-driven scheduling flow
  - Uses dedicated Make availability webhook
- - Fixes exact-time callback availability handling
+ - Uses dedicated Make booking webhook for confirmed callback slots
  - Preserves requested day when asking for another option
- - Improves acceptance of natural yes-style replies
+ - Improves acceptance of natural yes/no-style replies
  - Sends current local date/time to availability scenario to prevent day drift
- - Removes "it's / it is" from opening name parsing
+ - Improves opening name + issue capture
  - Prevents false names like "Not"
- - Removes the hidden "Nice to meet you" fallback path
  - Expands major appliance detection and aliases
  - Adds better unknown-item fallback summaries
  - Improves appliance issue summaries
@@ -20,16 +19,16 @@
  - Adds ambiguous first-name spelling confirmation
  - Improves spoken callback date phrasing for tomorrow/today
  - Adds demo follow-up contact confirmation + corrected contact capture
- - Updates intro wording to flow more naturally
- - Updates callback wording to match callback scheduling
- - Keeps quote routing as quote_request
- - Keeps emergency routing + leak emergency choice
- - Writes confirmed calendar-backed callback slots to a dedicated Make booking webhook
+ - Writes confirmed calendar-backed callback slots to dedicated Make booking webhook
  - Places service address into the booking payload for Calendar Location mapping
- - Uses actual first name in ambiguous-name spelling prompt
+ - Confirms address using natural wording
+ - Improves ZIP/address cleanup including spaced-out digits
+ - Broadens natural affirmative/negative intent handling
+ - Makes weak-audio / choppy-call handling less repetitive and less technical
+ - Rotates fallback prompts instead of repeating the same line
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V97 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V98 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -40,7 +39,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V97-CALENDAR-WRITEBACK";
+const APP_VERSION = "VOICE-FLOW-V98-INTAKE-AUDIO-POLISH";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -50,6 +49,33 @@ app.use(express.json());
 app.use(express.static("public"));
 
 const callerStore = {};
+
+const AMBIGUOUS_FIRST_NAMES = new Set([
+  "john", "jon", "johnny", "jonny",
+  "louie", "louis", "luis",
+  "bobby", "bobbie",
+  "carrie", "kari", "kerri", "keri", "kerry", "carey",
+  "cathy", "kathy", "cathie", "kathi",
+  "sara", "sarah",
+  "steven", "stephen",
+  "megan", "meaghan", "meghan", "meagan",
+  "tracy", "tracey",
+  "jamie", "jaime", "jamey",
+  "terri", "terry", "teri",
+  "bobbi", "robyn", "robin"
+]);
+
+const MISSED_AUDIO_PROMPTS = [
+  "I'm sorry, I didn't catch that. Could you say that again?",
+  "I'm sorry, I missed that. Could you repeat it for me?",
+  "I'm sorry, I think our phone call is a little choppy. Could you say that again?"
+];
+
+const CHOPPY_AUDIO_PROMPTS = [
+  "You're cutting in and out just a little bit, so I'm going to have to ask you to repeat yourself.",
+  "Our phone connection seems a little choppy, but I can hear you. Please say that again for me.",
+  "I'm sorry, I only caught part of that. Could you repeat it one more time?"
+];
 
 function getOrCreateCaller(phone) {
   if (!callerStore[phone]) {
@@ -102,6 +128,7 @@ function getOrCreateCaller(phone) {
       makeSent: false,
       lastStep: "ask_issue",
       silenceCount: 0,
+      audioRepromptCount: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -160,6 +187,7 @@ function resetCallerForNewCall(caller, phone) {
   caller.makeSent = false;
   caller.lastStep = "ask_issue";
   caller.silenceCount = 0;
+  caller.audioRepromptCount = 0;
   caller.updatedAt = new Date().toISOString();
 }
 
@@ -178,6 +206,13 @@ function cleanForSpeech(input) {
 
 function normalizedText(text) {
   return cleanForSpeech(text || "").toLowerCase();
+}
+
+function normalizeIntentText(text) {
+  return normalizedText(text)
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function currentEasternParts() {
@@ -271,7 +306,6 @@ function parseCallbackDateAndTimeToLocal(dateText, timeText) {
   };
 }
 
-
 function containsAny(text, phrases) {
   return phrases.some((p) => text.includes(p));
 }
@@ -310,27 +344,10 @@ function hasFullName(name) {
   return cleanForSpeech(name).split(/\s+/).filter(Boolean).length >= 2;
 }
 
-
-const AMBIGUOUS_FIRST_NAMES = new Set([
-  "john", "jon", "johnny", "jonny",
-  "louie", "louis", "luis",
-  "bobby", "bobbie",
-  "carrie", "kari", "kerri", "keri", "kerry", "carey",
-  "cathy", "kathy", "cathie", "kathi",
-  "sara", "sarah",
-  "steven", "stephen",
-  "megan", "meaghan", "meghan", "meagan",
-  "tracy", "tracey",
-  "jamie", "jaime", "jamey",
-  "terri", "terry", "teri",
-  "bobbi", "robyn", "robin"
-]);
-
 function firstNameNeedsSpelling(name) {
   const first = normalizedText(name).replace(/[^a-z]/g, "");
   if (!first) return false;
-  if (AMBIGUOUS_FIRST_NAMES.has(first)) return true;
-  return false;
+  return AMBIGUOUS_FIRST_NAMES.has(first);
 }
 
 function normalizeSpelledFirstName(text, fallback = "") {
@@ -359,10 +376,12 @@ function parseSpokenDateText(dateText) {
   const raw = cleanForSpeech(dateText || "");
   const m = raw.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
   if (!m) return null;
+
   const months = {
     january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
     july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
   };
+
   return { weekday: m[1], month: months[m[2].toLowerCase()], day: Number(m[3]) };
 }
 
@@ -522,7 +541,8 @@ function looksLikeIssueText(text) {
       t.includes("range") ||
       t.includes("stove") ||
       t.includes("light") ||
-      t.includes("door")
+      t.includes("door") ||
+      t.includes("faucet")
     )
   );
 }
@@ -532,6 +552,51 @@ function extractOpeningNameAndIssue(text) {
   if (!original) return { name: null, issueText: "" };
 
   const normalized = stripGreetingPrefix(original);
+
+  const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
+  if (introMarker) {
+    const remainder = normalized.slice(introMarker[0].length).trim();
+
+    const issueMarkers = [
+      /\s+and\s+i\s+have\b/i,
+      /\s+i\s+have\b/i,
+      /\s+my\b/i,
+      /\s+the\b/i,
+      /\s+our\b/i,
+      /\s+i\s+need\b/i,
+      /\s+i\'?m\s+having\b/i,
+      /\s+i\s+am\s+having\b/i,
+      /\s+can\s+someone\b/i,
+      /\s+can\s+you\b/i,
+      /\s+there\s+is\b/i,
+      /\s+because\b/i,
+      /\s+about\b/i,
+      /\s+with\b/i,
+      /\s+regarding\b/i
+    ];
+
+    let earliestIndex = -1;
+    for (const marker of issueMarkers) {
+      const m = remainder.match(marker);
+      if (!m || typeof m.index !== "number") continue;
+      if (earliestIndex === -1 || m.index < earliestIndex) earliestIndex = m.index;
+    }
+
+    if (earliestIndex > 0) {
+      const possibleName = normalizeNameCandidate(remainder.slice(0, earliestIndex));
+      const issueText = stripIssueLeadIn(remainder.slice(earliestIndex));
+
+      if (possibleName && issueText) {
+        return { name: possibleName, issueText };
+      }
+    }
+
+    const possibleNameOnly = normalizeNameCandidate(remainder);
+    if (possibleNameOnly) {
+      return { name: possibleNameOnly, issueText: "" };
+    }
+  }
+
   const patterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s*,\s*|\s+and\s+)(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(my\s+.+)$/i,
@@ -567,6 +632,18 @@ function extractOpeningNameAndIssue(text) {
   return { name: null, issueText: original };
 }
 
+function collapseSpacedDigits(value) {
+  let output = value;
+  let previous = "";
+
+  while (output !== previous) {
+    previous = output;
+    output = output.replace(/\b(?:\d\s+){1,9}\d\b/g, (match) => match.replace(/\s+/g, ""));
+  }
+
+  return output;
+}
+
 function normalizeAddressInput(input) {
   if (!input) return "";
 
@@ -577,6 +654,8 @@ function normalizeAddressInput(input) {
     .replace(/\s{2,}/g, " ")
     .trim();
 
+  value = collapseSpacedDigits(value);
+
   value = value.replace(
     /^(\d)\s+(\d{2,})(\b.*)$/i,
     (match, first, second, rest) => {
@@ -586,7 +665,10 @@ function normalizeAddressInput(input) {
   );
 
   value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
-  return value.trim();
+  value = value.replace(/\b(FL|Florida)\s+(\d{5})(\d{4})\b/i, "$1 $2-$3");
+  value = value.replace(/\s{2,}/g, " ").trim();
+
+  return value;
 }
 
 function formatPhoneNumberForSpeech(phone) {
@@ -597,7 +679,7 @@ function formatPhoneNumberForSpeech(phone) {
 }
 
 function isAffirmative(text) {
-  const t = normalizedText(text).replace(/[^\w\s]/g, "").trim();
+  const t = normalizeIntentText(text);
 
   if (containsAny(t, [
     "not an emergency",
@@ -616,20 +698,23 @@ function isAffirmative(text) {
     t === "yeah" ||
     t === "yep" ||
     t === "yup" ||
+    t === "sure" ||
     t === "correct" ||
     t === "right" ||
     t === "ok" ||
     t === "okay" ||
-    t === "sure" ||
-    t === "perfect" ||
+    t === "absolutely" ||
+    t === "definitely" ||
     t === "please do" ||
     t === "go ahead" ||
     t === "do that" ||
+    t === "sounds good" ||
+    t === "sounds great" ||
     t === "that works" ||
-    t === "that would work" ||
-    t === "works for me" ||
     t === "that will work" ||
     t === "thatll work" ||
+    t === "works for me" ||
+    t === "that works for me" ||
     t === "that is fine" ||
     t === "thats fine" ||
     t === "that is okay" ||
@@ -638,49 +723,31 @@ function isAffirmative(text) {
     t === "thats perfect" ||
     t === "that should work" ||
     t === "that should be fine" ||
-    t === "sounds good" ||
-    t === "sounds fine" ||
+    t === "yes please" ||
+    t === "yeah please" ||
+    t === "yep please" ||
+    t === "sure please" ||
+    t === "okay please" ||
+    t === "ok please" ||
     t === "ill take it" ||
     t === "i will take it" ||
     t === "ill take that" ||
     t === "i will take that" ||
-    t === "ill take the soonest" ||
-    t === "i will take the soonest" ||
-    t.includes("if thats the soonest ill take it") ||
-    t.includes("if that is the soonest i will take it") ||
-    t.includes("if thats the soonest") ||
-    t.includes("if that is the soonest") ||
-    t.includes("that works for me") ||
-    t.includes("that will work") ||
-    t.includes("thats fine") ||
-    t.includes("that is fine") ||
-    t.includes("that is okay") ||
-    t.includes("thats okay") ||
-    t.includes("thats perfect") ||
-    t.includes("that is perfect") ||
-    t.includes("perfect ill take it") ||
-    t.includes("perfect i will take it") ||
-    t.includes("ill take it") ||
-    t.includes("i will take it") ||
-    t.includes("ill take that") ||
-    t.includes("i will take that") ||
-    t.includes("thatll work") ||
-    t.includes("that will work") ||
-    t.includes("that works") ||
-    t.includes("that is perfect") ||
-    t.includes("sounds good") ||
-    t.includes("ill take it") ||
-    t.includes("i will take it") ||
-    t.includes("ill take that") ||
-    t.includes("i will take that") ||
+    t === "book it" ||
+    t === "schedule it" ||
+    t === "lets do that" ||
+    t === "let s do that" ||
+    t.includes("that appointment works") ||
+    t.includes("that time works") ||
+    t.includes("that will be fine") ||
+    t.includes("that sounds good") ||
+    t.includes("that sounds great") ||
+    t.includes("perfect") ||
     t.includes("mark this as an emergency") ||
     t.includes("make this an emergency") ||
-    t.includes("yes mark it as an emergency") ||
-    t.includes("yes make it an emergency") ||
     t.includes("this is an emergency") ||
     t.includes("its an emergency") ||
     t.includes("it is an emergency") ||
-    t.includes("urgent") ||
     t.includes("as soon as possible") ||
     t.includes("right away") ||
     t.includes("immediately")
@@ -688,15 +755,20 @@ function isAffirmative(text) {
 }
 
 function isNegative(text) {
-  const t = normalizedText(text).replace(/[^\w\s]/g, "").trim();
+  const t = normalizeIntentText(text);
 
   return (
     t === "no" ||
     t === "nope" ||
     t === "nah" ||
+    t === "no thanks" ||
+    t === "no thank you" ||
     t === "not now" ||
+    t === "not really" ||
     t === "dont" ||
     t === "do not" ||
+    t === "pass" ||
+    t === "skip" ||
     t.includes("not an emergency") ||
     t.includes("not emergency") ||
     t.includes("non emergency") ||
@@ -711,12 +783,20 @@ function isNegative(text) {
     t.includes("normal business hours") ||
     t.includes("business hours is fine") ||
     t.includes("can wait") ||
-    t.includes("no rush")
+    t.includes("no rush") ||
+    t.includes("that wont work") ||
+    t.includes("that won't work") ||
+    t.includes("that does not work") ||
+    t.includes("that doesnt work") ||
+    t.includes("that doesn't work") ||
+    t.includes("something else") ||
+    t.includes("another time") ||
+    t.includes("different time")
   );
 }
 
 function isPhoneCorrection(text) {
-  const t = normalizedText(text).replace(/[^\w\s]/g, "").trim();
+  const t = normalizeIntentText(text);
   return (
     t === "no" ||
     t === "nope" ||
@@ -732,7 +812,7 @@ function isPhoneCorrection(text) {
 }
 
 function isSkipResponse(text) {
-  const t = normalizedText(text).replace(/[^\w\s]/g, "").trim();
+  const t = normalizeIntentText(text);
   return (
     t === "skip" ||
     t === "no" ||
@@ -1213,7 +1293,7 @@ function combineItemAndDetail(item, detail) {
 }
 
 function parseWarrantyStatus(text) {
-  const t = normalizedText(text).replace(/[^\w\s]/g, "").trim();
+  const t = normalizeIntentText(text);
 
   if (containsAny(t, [
     "i dont know",
@@ -1723,11 +1803,9 @@ function sendLeadToMake(caller) {
   }
 
   const payload = buildMakePayload(caller);
-
   postJsonToMake(payload);
   caller.makeSent = true;
 }
-
 
 function buildBookingPayload(caller) {
   if (!caller.calendarSlotConfirmed || !caller.appointmentDate || !caller.appointmentTime) return null;
@@ -1868,13 +1946,54 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
   });
 }
 
+function looksLikeWeakAudioTranscript(text) {
+  const t = normalizeIntentText(text);
+
+  if (!t) return true;
+
+  if ([
+    "uh",
+    "um",
+    "er",
+    "ah",
+    "huh",
+    "hmm",
+    "mm",
+    "mhm",
+    "hm",
+    "uh huh",
+    "nuh uh",
+    "static",
+    "noise"
+  ].includes(t)) return true;
+
+  if (/^[hm]+$/.test(t)) return true;
+  if (t.length === 1) return true;
+
+  return false;
+}
+
+function nextRotatingPrompt(caller, prompts) {
+  const index = caller.audioRepromptCount % prompts.length;
+  caller.audioRepromptCount += 1;
+  return prompts[index];
+}
+
+function nextMissedAudioPrompt(caller) {
+  return nextRotatingPrompt(caller, MISSED_AUDIO_PROMPTS);
+}
+
+function nextChoppyAudioPrompt(caller) {
+  return nextRotatingPrompt(caller, CHOPPY_AUDIO_PROMPTS);
+}
+
 function sayThenGather(twiml, res, actionUrl, prompt) {
   const gather = twiml.gather({
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: "auto",
-    timeout: 5,
+    speechTimeout: "1",
+    timeout: 6,
     actionOnEmptyResult: true,
     language: "en-US"
   });
@@ -1882,6 +2001,52 @@ function sayThenGather(twiml, res, actionUrl, prompt) {
   gather.say({ voice: "alice" }, prompt);
 
   return res.type("text/xml").send(twiml.toString());
+}
+
+function getAddressPrompt(caller) {
+  return caller.leadType === "quote" ? "What is the project address?" : "What is the service address?";
+}
+
+function proceedAfterConfirmedAddress(twiml, res, caller) {
+  if (caller.leadType === "quote") {
+    caller.leadType = "quote";
+    caller.status = "quote_request";
+    caller.lastStep = "ask_project_timeline";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Do you have a timeline in mind for this project?"
+    );
+  }
+
+  if (caller.emergencyAlert) {
+    caller.lastStep = "ask_notes";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      nonDemoNotesPrompt(caller)
+    );
+  }
+
+  if (caller.applianceType) {
+    caller.lastStep = "ask_appliance_warranty";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Do you know whether the appliance is still under the manufacturer's warranty?"
+    );
+  }
+
+  caller.lastStep = "schedule_or_callback";
+  return sayThenGather(
+    twiml,
+    res,
+    "/handle-input",
+    "Would you like to choose a callback day and time now, ask what is available on a specific day, or would you prefer the first available callback?"
+  );
 }
 
 function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
@@ -2101,8 +2266,8 @@ app.post("/incoming-call", (req, res) => {
     input: "speech",
     action: "/handle-input",
     method: "POST",
-    speechTimeout: "auto",
-    timeout: 5,
+    speechTimeout: "1",
+    timeout: 6,
     actionOnEmptyResult: true,
     language: "en-US"
   });
@@ -2129,7 +2294,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "I'm sorry, I didn't catch that. Could you please say that again?"
+        nextMissedAudioPrompt(caller)
       );
     }
 
@@ -2138,7 +2303,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "I'm still not hearing anything on the line. If you need help, please go ahead and say it now."
+        nextChoppyAudioPrompt(caller)
       );
     }
 
@@ -2148,6 +2313,17 @@ app.post("/handle-input", async (req, res) => {
   }
 
   caller.silenceCount = 0;
+
+  if (looksLikeWeakAudioTranscript(speech)) {
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      nextChoppyAudioPrompt(caller)
+    );
+  }
+
+  caller.audioRepromptCount = 0;
 
   if (callerSaysNotToldProblem(speech)) {
     caller.lastStep = "ask_issue";
@@ -2334,7 +2510,7 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "leak_emergency_choice") {
-    const normalizedEmergencyReply = normalizedText(speech).replace(/[^\w\s]/g, "").trim();
+    const normalizedEmergencyReply = normalizeIntentText(speech);
 
     if (isAffirmative(normalizedEmergencyReply)) {
       caller.emergencyAlert = true;
@@ -2564,45 +2740,37 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "ask_address") {
     caller.address = normalizeAddressInput(speech);
+    caller.lastStep = "confirm_address";
 
-    if (caller.leadType === "quote") {
-      caller.leadType = "quote";
-      caller.status = "quote_request";
-      caller.lastStep = "ask_project_timeline";
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        "Do you have a timeline in mind for this project?"
-      );
-    }
-
-    if (caller.emergencyAlert) {
-      caller.lastStep = "ask_notes";
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        nonDemoNotesPrompt(caller)
-      );
-    }
-
-    if (caller.applianceType) {
-      caller.lastStep = "ask_appliance_warranty";
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        "Do you know whether the appliance is still under the manufacturer's warranty?"
-      );
-    }
-
-    caller.lastStep = "schedule_or_callback";
     return sayThenGather(
       twiml,
       res,
       "/handle-input",
-      "Would you like to choose a callback day and time now, ask what is available on a specific day, or would you prefer the first available callback?"
+      `Great, let me make sure I have this right. You said ${caller.address}. Is that correct?`
+    );
+  }
+
+  if (caller.lastStep === "confirm_address") {
+    if (isAffirmative(speech)) {
+      return proceedAfterConfirmedAddress(twiml, res, caller);
+    }
+
+    if (isNegative(speech)) {
+      caller.address = "";
+      caller.lastStep = "ask_address";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        `I'm sorry about that. Let's try it again. ${getAddressPrompt(caller)}`
+      );
+    }
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      `Great, let me make sure I have this right. You said ${caller.address}. Is that correct?`
     );
   }
 
@@ -2911,7 +3079,6 @@ app.post("/handle-input", async (req, res) => {
     sendBookingToMake(caller);
 
     caller.lastStep = "final_question";
-
     twiml.pause({ length: 1 });
 
     return sayThenGather(
