@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V101-ELEVENLABS-VOICE-LAYER
+ VERSION: V102-VOICE-TUNING-POLISH
  DATE: 2026-04-03
 
  NOTES:
@@ -28,9 +28,16 @@
  - Calms speech sensitivity so tiny background sounds do not end the gather prematurely
  - Adds an immediate spoken calendar-check filler before availability lookup to remove awkward dead air
  - Adds ElevenLabs TTS playback for all spoken prompts with automatic Twilio Alice fallback
+ - Rotates natural calendar-check filler phrases
+ - Restores stronger emergency detection for main/yard/main-line issues
+ - Broadens alternate scheduling requests like later that day and next day
+ - Broadens natural demo follow-up yes-style responses
+ - Tunes ElevenLabs delivery for a steadier, calmer receptionist tone
+ - Speaks street numbers more naturally during address confirmation
+ - Adds brief situational acknowledgments before returning to task
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V101 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V102 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -42,7 +49,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V101-ELEVENLABS-VOICE-LAYER";
+const APP_VERSION = "VOICE-FLOW-V102-VOICE-TUNING-POLISH";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -88,6 +95,14 @@ const CHOPPY_AUDIO_PROMPTS = [
   "You're cutting in and out just a little bit, so I'm going to have to ask you to repeat yourself.",
   "Our phone connection seems a little choppy, but I can hear you. Please say that again for me.",
   "I'm sorry, I only caught part of that. Could you repeat it one more time?"
+];
+
+const CALENDAR_CHECK_FILLERS = [
+  "Absolutely, let me take a quick look at the calendar.",
+  "Alright, give me just a second and I'll see what's available.",
+  "Let me check that for you real quick.",
+  "Sure, I'll take a look and see what we have.",
+  "Give me just a moment while I check what's open."
 ];
 
 function getOrCreateCaller(phone) {
@@ -142,6 +157,8 @@ function getOrCreateCaller(phone) {
       lastStep: "ask_issue",
       silenceCount: 0,
       audioRepromptCount: 0,
+      calendarPromptIndex: 0,
+      emergencyChoicePrompt: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -337,10 +354,10 @@ function fetchElevenLabsAudio(text) {
       text: safeText,
       model_id: ELEVENLABS_MODEL_ID,
       voice_settings: {
-        stability: 0.55,
-        similarity_boost: 0.8,
-        style: 0.2,
-        use_speaker_boost: true
+        stability: 0.82,
+        similarity_boost: 0.72,
+        style: 0.0,
+        use_speaker_boost: false
       }
     });
 
@@ -537,6 +554,235 @@ function parseSpokenDateText(dateText) {
   };
 
   return { weekday: m[1], month: months[m[2].toLowerCase()], day: Number(m[3]) };
+}
+
+
+function shiftSpokenDateText(dateText, daysToAdd = 0) {
+  const parsed = parseSpokenDateText(dateText);
+  if (!parsed) return "";
+
+  const current = currentEasternParts();
+  let year = Number(current.year);
+  const candidateThisYear = new Date(Date.UTC(year, parsed.month - 1, parsed.day));
+  const today = new Date(Date.UTC(year, Number(current.month) - 1, Number(current.day)));
+  if (candidateThisYear < today) year += 1;
+
+  const shifted = new Date(Date.UTC(year, parsed.month - 1, parsed.day));
+  shifted.setUTCDate(shifted.getUTCDate() + Number(daysToAdd || 0));
+
+  const weekday = shifted.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+  const month = shifted.toLocaleDateString("en-US", { month: "long", timeZone: "UTC" });
+  const day = shifted.getUTCDate();
+
+  return `${weekday}, ${month} ${day}`;
+}
+
+function isSameDayRelativeRequest(text) {
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "later that day",
+    "later the same day",
+    "that same day",
+    "same day",
+    "later that afternoon",
+    "later that morning",
+    "later that evening",
+    "anything later today",
+    "something later today",
+    "anything later that day",
+    "something later that day"
+  ]);
+}
+
+function isNextDayRelativeRequest(text) {
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "next day",
+    "the next day",
+    "following day",
+    "the following day",
+    "day after",
+    "the day after"
+  ]);
+}
+
+function buildAvailabilityRawQuery(rawText, existingDate = "", existingTime = "") {
+  const raw = cleanForSpeech(rawText || "");
+  if (!raw) return "";
+
+  if (existingDate && existingTime && isSameDayRelativeRequest(raw)) {
+    return `${raw} after ${existingTime} on ${existingDate}`;
+  }
+
+  if (existingDate && isNextDayRelativeRequest(raw)) {
+    const shiftedDate = shiftSpokenDateText(existingDate, 1);
+    if (shiftedDate) return `${raw} on ${shiftedDate}`;
+  }
+
+  return raw;
+}
+
+const SMALL_NUMBER_WORDS = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
+const TENS_WORDS = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
+
+function numberUnder100ToWords(num) {
+  const n = Number(num);
+  if (!Number.isFinite(n) || n < 0) return String(num || "");
+  if (n < 20) return SMALL_NUMBER_WORDS[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return ones ? `${TENS_WORDS[tens]}-${SMALL_NUMBER_WORDS[ones]}` : TENS_WORDS[tens];
+}
+
+function numberToWordsStandard(num) {
+  const n = Number(num);
+  if (!Number.isFinite(n) || n < 0) return String(num || "");
+  if (n < 100) return numberUnder100ToWords(n);
+  if (n < 1000) {
+    const hundreds = Math.floor(n / 100);
+    const rest = n % 100;
+    return rest ? `${SMALL_NUMBER_WORDS[hundreds]} hundred ${numberUnder100ToWords(rest)}` : `${SMALL_NUMBER_WORDS[hundreds]} hundred`;
+  }
+  if (n < 1000000) {
+    const thousands = Math.floor(n / 1000);
+    const rest = n % 1000;
+    return rest ? `${numberToWordsStandard(thousands)} thousand ${numberToWordsStandard(rest)}` : `${numberToWordsStandard(thousands)} thousand`;
+  }
+  return String(num);
+}
+
+function streetNumberToSpeech(numText) {
+  const digits = String(numText || "").replace(/\D/g, "");
+  if (!digits) return String(numText || "");
+
+  if (digits.length === 3) {
+    return `${numberUnder100ToWords(Number(digits.slice(0, 1)))} ${numberUnder100ToWords(Number(digits.slice(1)))}`;
+  }
+
+  if (digits.length === 4) {
+    return `${numberUnder100ToWords(Number(digits.slice(0, 2)))} ${numberUnder100ToWords(Number(digits.slice(2)))}`;
+  }
+
+  if (digits.length === 5) {
+    const groups = [];
+    const first = digits.length % 2 === 1 ? digits.slice(0, 1) : digits.slice(0, 2);
+    groups.push(numberUnder100ToWords(Number(first)));
+    groups.push(numberUnder100ToWords(Number(digits.slice(-4, -2))));
+    groups.push(numberUnder100ToWords(Number(digits.slice(-2))));
+    return groups.filter(Boolean).join(" ");
+  }
+
+  return numberToWordsStandard(Number(digits));
+}
+
+function formatAddressForSpeech(address) {
+  const safe = cleanForSpeech(address || "");
+  if (!safe) return "";
+
+  const match = safe.match(/^(\d{1,5})(\s+.+)$/);
+  if (!match) return safe;
+
+  return `${streetNumberToSpeech(match[1])}${match[2]}`;
+}
+
+function getSituationalAcknowledgment(issueText) {
+  const t = normalizedText(issueText || "");
+  if (!t) return "";
+
+  if (containsAny(t, [
+    "right before thanksgiving",
+    "before thanksgiving",
+    "right before christmas",
+    "before christmas",
+    "right before the holidays",
+    "before the holidays",
+    "worst time",
+    "just my luck",
+    "of course this happens",
+    "of course right before"
+  ])) {
+    return "That's awful timing.";
+  }
+
+  if (containsAny(t, [
+    "family coming over",
+    "people coming over",
+    "company coming over",
+    "guests coming over",
+    "hosting",
+    "coming over tonight"
+  ])) {
+    return "I'm sorry, that's got to be stressful.";
+  }
+
+  return "";
+}
+
+function issueTransitionLeadIn(caller) {
+  const acknowledgement = getSituationalAcknowledgment(caller.issue || "");
+  return acknowledgement ? `${acknowledgement} ` : "";
+}
+
+function isUrgentLanguage(text) {
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "right away",
+    "as soon as possible",
+    "immediately",
+    "urgent",
+    "need somebody over here",
+    "need someone over here",
+    "need somebody out here",
+    "need someone out here",
+    "need someone here now",
+    "need somebody here now"
+  ]);
+}
+
+function isMainLineEmergencyCandidate(text) {
+  const t = normalizedText(text);
+  const mainLike = containsAny(t, [
+    "water main",
+    "main line",
+    "main leak",
+    "main broke",
+    "main broken",
+    "main popped",
+    "main in my yard",
+    "main in the yard",
+    "line popped",
+    "line broke",
+    "broken line"
+  ]) || (t.includes("main") && containsAny(t, ["yard", "front yard", "back yard", "outside"]));
+
+  const severeLike = containsAny(t, [
+    "popped",
+    "burst",
+    "broke",
+    "broken",
+    "water coming up",
+    "water coming out",
+    "leak",
+    "leaking",
+    "gushing",
+    "pouring"
+  ]) || isUrgentLanguage(t);
+
+  return mainLike && severeLike;
+}
+
+function buildEmergencyChoicePrompt(caller) {
+  if (isMainLineEmergencyCandidate(caller.issue || "") || isUrgentLanguage(caller.issue || "")) {
+    return "I'm so sorry to hear that. It sounds like someone needs to come out there right away. Do you want me to go ahead and mark this as an emergency call?";
+  }
+  return `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`;
+}
+
+function nextCalendarCheckPrompt(caller) {
+  const currentIndex = Number.isInteger(caller.calendarPromptIndex) ? caller.calendarPromptIndex : 0;
+  const prompt = CALENDAR_CHECK_FILLERS[currentIndex % CALENDAR_CHECK_FILLERS.length];
+  caller.calendarPromptIndex = (currentIndex + 1) % CALENDAR_CHECK_FILLERS.length;
+  return prompt;
 }
 
 function spokenAvailabilityPhrase(dateText, timeText) {
@@ -1073,7 +1319,10 @@ function isHardEmergency(text) {
     "no water",
     "gushing",
     "pouring",
-    "water everywhere"
+    "water everywhere",
+    "water coming through the ceiling",
+    "ceiling pouring",
+    "water is pouring"
   ]);
 }
 
@@ -1134,16 +1383,32 @@ function isDemoFollowupInterest(text) {
   const t = normalizedText(text);
   if (isNegative(t) || isEndCallPhrase(t)) return false;
 
+  if (
+    containsAny(t, [
+      "call me",
+      "have them call me",
+      "have somebody call me",
+      "have someone call me",
+      "have somebody reach out",
+      "have someone reach out",
+      "have someone contact me",
+      "have somebody contact me",
+      "somebody can call me",
+      "someone can call me",
+      "reach out to me",
+      "contact me",
+      "yes have them call me",
+      "yeah have them call me",
+      "yes have somebody call me",
+      "yeah have somebody call me"
+    ])
+  ) {
+    return true;
+  }
+
   return (
     isAffirmative(t) ||
     containsAny(t, [
-      "contact me",
-      "have someone contact me",
-      "have someone call me",
-      "have somebody call me",
-      "have someone reach out",
-      "have somebody reach out",
-      "reach out to me",
       "call me about it",
       "discuss how this works",
       "discuss how it works",
@@ -1482,7 +1747,7 @@ function parseWarrantyStatus(text) {
 }
 
 function applianceSchedulingPrompt() {
-  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Would you like to choose a callback time now, would you prefer someone from the office to call you, or would you like the first available callback time?";
+  return "If you have access to it, please have your model and serial number available when our team calls you to discuss your issue. Alright, I've got all the information I need. Now let's talk about a callback time that works best for you. Do you have something in mind, or would you like me to find the first available for you?";
 }
 
 function buildUnknownIssueSummary(issue) {
@@ -1525,12 +1790,14 @@ function classifyIssue(issue) {
     return { summary: applianceSummary };
   }
 
+  if (isMainLineEmergencyCandidate(text)) return { summary: "a possible broken water main in your yard" };
+
   if (
     containsAny(text, ["yard", "front yard", "back yard", "lawn", "outside"]) &&
     containsAny(text, ["leak", "water", "pooling", "drip", "dripping"])
   ) return { summary: "a leak in your yard" };
 
-  if (text.includes("water main")) return { summary: "a possible water main leak" };
+  if (text.includes("water main") || text.includes("main line")) return { summary: "a possible water main leak" };
   if (text.includes("roof") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a roof leak" };
   if (text.includes("ceiling") && containsAny(text, ["leak", "drip", "dripping", "pouring", "gushing"])) return { summary: "a ceiling leak" };
   if ((text.includes("faucet") || text.includes("sink")) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking faucet" };
@@ -1627,12 +1894,21 @@ function isAlternateAvailabilityRequest(text) {
     t.includes("another option") ||
     t.includes("something else") ||
     t.includes("anything later") ||
+    t.includes("later that day") ||
+    t.includes("later the same day") ||
+    t.includes("later that afternoon") ||
+    t.includes("later that morning") ||
+    t.includes("later that evening") ||
+    t.includes("later on ") ||
     t.includes("any other times") ||
     t.includes("anything tomorrow") ||
     t.includes("anything else tomorrow") ||
     t.includes("what else do you have tomorrow") ||
     t.includes("what else is available") ||
     t.includes("what else is open") ||
+    t.includes("next day") ||
+    t.includes("following day") ||
+    t.includes("day after") ||
     t.includes("instead")
   );
 }
@@ -1643,7 +1919,8 @@ function isFlexibleSchedulingRequest(text) {
 
   if (containsAny(t, [
     "today", "tomorrow", "next week", "this week",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "later that day", "later the same day", "next day", "following day", "day after"
   ])) return true;
 
   if (detectTimePreference(text)) return true;
@@ -1653,6 +1930,7 @@ function isFlexibleSchedulingRequest(text) {
     "what about",
     "how about",
     "instead",
+    "later on",
     "monday or",
     "tuesday or",
     "wednesday or",
@@ -1744,10 +2022,19 @@ function extractDatePart(text) {
   return value.replace(/[?.!,]+$/g, "").trim();
 }
 
-function parseAvailabilityRequest(text, existingDate = "") {
+function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   const raw = cleanForSpeech(text || "");
   let datePart = extractDatePart(raw);
   const timePref = detectTimePreference(raw);
+  const enrichedRawQuery = buildAvailabilityRawQuery(raw, existingDate, existingTime);
+
+  if (!datePart && isSameDayRelativeRequest(raw) && existingDate) {
+    datePart = cleanForSpeech(existingDate);
+  }
+
+  if (!datePart && isNextDayRelativeRequest(raw) && existingDate) {
+    datePart = shiftSpokenDateText(existingDate, 1) || "";
+  }
 
   if (!datePart && isFlexibleSchedulingRequest(raw)) {
     datePart = raw;
@@ -1761,7 +2048,7 @@ function parseAvailabilityRequest(text, existingDate = "") {
   }
 
   return {
-    rawQuery: raw,
+    rawQuery: enrichedRawQuery || raw,
     requestedDate: datePart || "",
     requestedTimePreference: convertPreferenceToMakeValue(timePref)
   };
@@ -2247,6 +2534,8 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
     askLastNamePrompt = null
   } = options;
 
+  const situationalLeadIn = issueTransitionLeadIn(caller);
+
   if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
     const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "ask_last_name");
     if (spellingPrompt) return spellingPrompt;
@@ -2271,7 +2560,7 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
         res,
         "/handle-input",
         emergencyKnownNamePrompt ||
-          `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          `Thank you, ${caller.firstName}. ${situationalLeadIn}I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
       );
     }
 
@@ -2280,7 +2569,7 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
       res,
       "/handle-input",
       normalKnownNamePrompt ||
-        `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+        `Thank you, ${caller.firstName}. ${situationalLeadIn}I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
     );
   }
 
@@ -2292,7 +2581,7 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
       res,
       "/handle-input",
       emergencyUnknownNamePrompt ||
-        `I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
+        `${situationalLeadIn}I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`
     );
   }
 
@@ -2301,7 +2590,7 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
     res,
     "/handle-input",
     normalUnknownNamePrompt ||
-      `I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Can I start by getting your full name, please?`
+      `${situationalLeadIn}I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Can I start by getting your full name, please?`
   );
 }
 
@@ -2400,7 +2689,8 @@ function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
 
   const requestDetails = parseAvailabilityRequest(
     speech,
-    options.existingDate || ""
+    options.existingDate || "",
+    options.existingTime || caller.pendingOfferedTime || ""
   );
 
   caller.requestedDate = requestDetails.requestedDate;
@@ -2411,7 +2701,7 @@ function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
   return sayThenRedirect(
     twiml,
     res,
-    "Sure, give me just a moment while I check the calendar for you.",
+    nextCalendarCheckPrompt(caller),
     "/perform-availability-check"
   );
 }
@@ -2625,14 +2915,27 @@ app.post("/handle-input", async (req, res) => {
       return moveToQuoteNameOrPhoneStep(twiml, res, caller);
     }
 
-    if (isLeakLikeIssue(caller.issue)) {
+    if (isMainLineEmergencyCandidate(caller.issue) || (isLeakLikeIssue(caller.issue) && isUrgentLanguage(caller.issue))) {
       caller.leakNeedsEmergencyChoice = true;
+      caller.emergencyChoicePrompt = buildEmergencyChoicePrompt(caller);
       caller.lastStep = "leak_emergency_choice";
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`
+        caller.emergencyChoicePrompt
+      );
+    }
+
+    if (isLeakLikeIssue(caller.issue)) {
+      caller.leakNeedsEmergencyChoice = true;
+      caller.emergencyChoicePrompt = buildEmergencyChoicePrompt(caller);
+      caller.lastStep = "leak_emergency_choice";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        caller.emergencyChoicePrompt
       );
     }
 
@@ -2687,14 +2990,27 @@ app.post("/handle-input", async (req, res) => {
       return moveToQuoteNameOrPhoneStep(twiml, res, caller);
     }
 
-    if (isLeakLikeIssue(caller.issue)) {
+    if (isMainLineEmergencyCandidate(caller.issue) || (isLeakLikeIssue(caller.issue) && isUrgentLanguage(caller.issue))) {
       caller.leakNeedsEmergencyChoice = true;
+      caller.emergencyChoicePrompt = buildEmergencyChoicePrompt(caller);
       caller.lastStep = "leak_emergency_choice";
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`
+        caller.emergencyChoicePrompt
+      );
+    }
+
+    if (isLeakLikeIssue(caller.issue)) {
+      caller.leakNeedsEmergencyChoice = true;
+      caller.emergencyChoicePrompt = buildEmergencyChoicePrompt(caller);
+      caller.lastStep = "leak_emergency_choice";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        caller.emergencyChoicePrompt
       );
     }
 
@@ -2732,14 +3048,27 @@ app.post("/handle-input", async (req, res) => {
       return moveToNameOrPhoneStep(twiml, res, caller);
     }
 
-    if (isLeakLikeIssue(caller.issue)) {
+    if (isMainLineEmergencyCandidate(caller.issue) || (isLeakLikeIssue(caller.issue) && isUrgentLanguage(caller.issue))) {
       caller.leakNeedsEmergencyChoice = true;
+      caller.emergencyChoicePrompt = buildEmergencyChoicePrompt(caller);
       caller.lastStep = "leak_emergency_choice";
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`
+        caller.emergencyChoicePrompt
+      );
+    }
+
+    if (isLeakLikeIssue(caller.issue)) {
+      caller.leakNeedsEmergencyChoice = true;
+      caller.emergencyChoicePrompt = buildEmergencyChoicePrompt(caller);
+      caller.lastStep = "leak_emergency_choice";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        caller.emergencyChoicePrompt
       );
     }
 
@@ -2758,6 +3087,7 @@ app.post("/handle-input", async (req, res) => {
       caller.leadType = "emergency";
       caller.status = "new_emergency";
       caller.leakNeedsEmergencyChoice = false;
+      caller.emergencyChoicePrompt = "";
 
       return moveToNameOrPhoneStep(twiml, res, caller, {
         emergencyKnownNamePrompt: `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`,
@@ -2772,6 +3102,7 @@ app.post("/handle-input", async (req, res) => {
       caller.leadType = "service";
       caller.status = "new_lead";
       caller.leakNeedsEmergencyChoice = false;
+      caller.emergencyChoicePrompt = "";
 
       return moveToNameOrPhoneStep(twiml, res, caller, {
         normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`,
@@ -2784,7 +3115,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Do you want me to mark this as an emergency? Please say yes or no."
+      (caller.emergencyChoicePrompt || "Do you want me to mark this as an emergency?") + " Please say yes or no."
     );
   }
 
@@ -2986,7 +3317,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `Great, let me make sure I have this right. You said ${caller.address}. Is that correct?`
+      `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`
     );
   }
 
@@ -3010,7 +3341,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `Great, let me make sure I have this right. You said ${caller.address}. Is that correct?`
+      `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`
     );
   }
 
@@ -3110,6 +3441,7 @@ app.post("/handle-input", async (req, res) => {
     const alternateAvailabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, {
       existingDate: caller.requestedDate || caller.pendingOfferedDate || "",
       existingTimePreference: caller.requestedTimePreference || "",
+      existingTime: caller.pendingOfferedTime || "",
       allowFlexibleDateRequest: true
     });
     if (alternateAvailabilityHandled) return alternateAvailabilityHandled;
@@ -3171,42 +3503,16 @@ app.post("/handle-input", async (req, res) => {
     }
 
     if (datePart && timePreference) {
-      const requestDetails = {
-        rawQuery: cleanForSpeech(speech),
-        requestedDate: datePart,
-        requestedTimePreference: convertPreferenceToMakeValue(timePreference)
-      };
+      caller.requestedDate = datePart;
+      caller.requestedTimePreference = convertPreferenceToMakeValue(timePreference);
+      caller.pendingAvailabilityQuery = buildAvailabilityRawQuery(cleanForSpeech(speech), datePart, caller.pendingOfferedTime || "");
+      caller.lastStep = "waiting_for_availability_lookup";
 
-      caller.requestedDate = requestDetails.requestedDate;
-      caller.requestedTimePreference = requestDetails.requestedTimePreference;
-      caller.pendingAvailabilityQuery = requestDetails.rawQuery;
-
-      const availability = normalizeAvailabilityResponse(await checkCalendarAvailability(caller, requestDetails));
-
-      if (availability && availability.date && availability.time) {
-        caller.pendingOfferedDate = availability.date;
-        caller.pendingOfferedTime = availability.time;
-        caller.lastStep = "confirm_first_available";
-
-        return sayThenGather(
-          twiml,
-          res,
-          "/handle-input",
-          `I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
-        );
-      }
-
-      caller.appointmentDate = datePart;
-      caller.appointmentTime = formatPreferenceForSpeech(timePreference);
-      caller.status = "callback_requested";
-      caller.calendarSlotConfirmed = false;
-      caller.lastStep = "ask_notes";
-
-      return sayThenGather(
+      return sayThenRedirect(
         twiml,
         res,
-        "/handle-input",
-        `Got it. I'll note that you'd prefer a ${formatPreferenceForSpeech(timePreference)} callback on ${caller.appointmentDate}, and someone from the office will confirm the exact callback time with you. Before I submit this, is there anything else you'd like me to note for the technician?`
+        nextCalendarCheckPrompt(caller),
+        "/perform-availability-check"
       );
     }
 
@@ -3223,6 +3529,7 @@ app.post("/handle-input", async (req, res) => {
   if (caller.lastStep === "ask_appointment_time") {
     const availabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, {
       existingDate: caller.appointmentDate,
+      existingTime: caller.pendingOfferedTime || "",
       allowFlexibleDateRequest: true
     });
     if (availabilityHandled) return availabilityHandled;
@@ -3356,7 +3663,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          "If you'd like, I can have someone from our team contact you to discuss how this could work for your company. Would you like me to do that?"
+          "If you'd like, I can have someone from our team contact you to discuss how this could work for your company. Just let me know if you'd like someone to call you."
         );
       }
     }
