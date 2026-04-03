@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V99-AUDIO-CALMED
+ VERSION: V100-CALENDAR-CHECK-FILLER
  DATE: 2026-04-03
 
  NOTES:
@@ -26,9 +26,10 @@
  - Broadens natural affirmative/negative intent handling
  - Keeps softer, varied fallback wording for weak or choppy audio
  - Calms speech sensitivity so tiny background sounds do not end the gather prematurely
+ - Adds an immediate spoken calendar-check filler before availability lookup to remove awkward dead air
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V99 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V100 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -39,7 +40,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V99-AUDIO-CALMED";
+const APP_VERSION = "VOICE-FLOW-V100-CALENDAR-CHECK-FILLER";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -2033,6 +2034,12 @@ function sayThenGather(twiml, res, actionUrl, prompt) {
   return res.type("text/xml").send(twiml.toString());
 }
 
+function sayThenRedirect(twiml, res, prompt, redirectUrl) {
+  twiml.say({ voice: "alice" }, prompt);
+  twiml.redirect({ method: "POST" }, redirectUrl);
+  return res.type("text/xml").send(twiml.toString());
+}
+
 function getAddressPrompt(caller) {
   return caller.leadType === "quote" ? "What is the project address?" : "What is the service address?";
 }
@@ -2231,7 +2238,7 @@ function resetPendingAvailability(caller) {
   caller.pendingAvailabilityQuery = "";
 }
 
-async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
+function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
   const shouldHandle =
     isAvailabilityRequest(speech) ||
     isAlternateAvailabilityRequest(speech) ||
@@ -2247,6 +2254,26 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
   caller.requestedDate = requestDetails.requestedDate;
   caller.requestedTimePreference = requestDetails.requestedTimePreference;
   caller.pendingAvailabilityQuery = requestDetails.rawQuery;
+  caller.lastStep = "waiting_for_availability_lookup";
+
+  return sayThenRedirect(
+    twiml,
+    res,
+    "Sure, give me just a moment while I check the calendar for you.",
+    "/perform-availability-check"
+  );
+}
+
+app.post("/perform-availability-check", async (req, res) => {
+  const twiml = new twilio.twiml.VoiceResponse();
+  const phone = req.body.From || "unknown";
+  const caller = getOrCreateCaller(phone);
+
+  const requestDetails = {
+    requestedDate: caller.requestedDate || "",
+    requestedTimePreference: caller.requestedTimePreference || "",
+    rawQuery: caller.pendingAvailabilityQuery || ""
+  };
 
   const availabilityRaw = await checkCalendarAvailability(caller, requestDetails);
   const availability = normalizeAvailabilityResponse(availabilityRaw);
@@ -2261,7 +2288,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
       twiml,
       res,
       "/handle-input",
-      `Let me check the calendar. I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
+      `I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
     );
   }
 
@@ -2279,7 +2306,7 @@ async function handleAvailabilityLookup(twiml, res, caller, speech, options = {}
     "/handle-input",
     "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. Before I submit this, is there anything else you'd like me to note for the technician?"
   );
-}
+});
 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
