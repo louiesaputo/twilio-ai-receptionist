@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V102-VOICE-TUNING-POLISH
+ VERSION: V103-VOICE-EMERGENCY-CORRECTION
  DATE: 2026-04-03
 
  NOTES:
@@ -35,9 +35,11 @@
  - Tunes ElevenLabs delivery for a steadier, calmer receptionist tone
  - Speaks street numbers more naturally during address confirmation
  - Adds brief situational acknowledgments before returning to task
+ - Restores more natural, warmer ElevenLabs delivery after V102 became too flat
+ - Strengthens emergency detection for popped/broken main-line and severe yard-leak wording
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V102 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V103 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -49,7 +51,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V102-VOICE-TUNING-POLISH";
+const APP_VERSION = "VOICE-FLOW-V103-VOICE-EMERGENCY-CORRECTION";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -354,10 +356,10 @@ function fetchElevenLabsAudio(text) {
       text: safeText,
       model_id: ELEVENLABS_MODEL_ID,
       voice_settings: {
-        stability: 0.82,
-        similarity_boost: 0.72,
-        style: 0.0,
-        use_speaker_boost: false
+        stability: 0.66,
+        similarity_boost: 0.78,
+        style: 0.08,
+        use_speaker_boost: true
       }
     });
 
@@ -732,15 +734,37 @@ function isUrgentLanguage(text) {
     "urgent",
     "need somebody over here",
     "need someone over here",
+    "need to get somebody over here",
+    "need to get someone over here",
     "need somebody out here",
     "need someone out here",
+    "need to get somebody out here",
+    "need to get someone out here",
+    "need somebody out there",
+    "need someone out there",
+    "need somebody here now",
     "need someone here now",
-    "need somebody here now"
+    "need somebody here right away",
+    "need someone here right away",
+    "get somebody over here",
+    "get someone over here",
+    "get somebody out here",
+    "get someone out here"
   ]);
 }
 
 function isMainLineEmergencyCandidate(text) {
   const t = normalizedText(text);
+
+  const yardLike = containsAny(t, [
+    "yard",
+    "front yard",
+    "back yard",
+    "outside",
+    "front lawn",
+    "back lawn"
+  ]);
+
   const mainLike = containsAny(t, [
     "water main",
     "main line",
@@ -750,10 +774,24 @@ function isMainLineEmergencyCandidate(text) {
     "main popped",
     "main in my yard",
     "main in the yard",
+    "main in my front yard",
+    "main in the front yard",
+    "main in my back yard",
+    "main in the back yard",
+    "main out front",
+    "front yard main",
+    "yard main",
+    "water line",
+    "service line",
     "line popped",
     "line broke",
-    "broken line"
-  ]) || (t.includes("main") && containsAny(t, ["yard", "front yard", "back yard", "outside"]));
+    "line broken",
+    "broken line",
+    "burst line"
+  ]) || (
+    containsAny(t, ["main", "line", "water"]) &&
+    yardLike
+  );
 
   const severeLike = containsAny(t, [
     "popped",
@@ -762,6 +800,8 @@ function isMainLineEmergencyCandidate(text) {
     "broken",
     "water coming up",
     "water coming out",
+    "water coming from the yard",
+    "water coming out of the yard",
     "leak",
     "leaking",
     "gushing",
@@ -773,7 +813,7 @@ function isMainLineEmergencyCandidate(text) {
 
 function buildEmergencyChoicePrompt(caller) {
   if (isMainLineEmergencyCandidate(caller.issue || "") || isUrgentLanguage(caller.issue || "")) {
-    return "I'm so sorry to hear that. It sounds like someone needs to come out there right away. Do you want me to go ahead and mark this as an emergency call?";
+    return "I'm so sorry to hear that. It sounds like we need to get somebody out there right away. Do you want me to go ahead and mark this as an emergency call?";
   }
   return `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`;
 }
