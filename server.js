@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V98-INTAKE-AUDIO-POLISH
+ VERSION: V99-AUDIO-CALMED
  DATE: 2026-04-03
 
  NOTES:
@@ -24,11 +24,11 @@
  - Confirms address using natural wording
  - Improves ZIP/address cleanup including spaced-out digits
  - Broadens natural affirmative/negative intent handling
- - Makes weak-audio / choppy-call handling less repetitive and less technical
- - Rotates fallback prompts instead of repeating the same line
+ - Keeps softer, varied fallback wording for weak or choppy audio
+ - Calms speech sensitivity so tiny background sounds do not end the gather prematurely
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V98 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V99 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -39,7 +39,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V98-INTAKE-AUDIO-POLISH";
+const APP_VERSION = "VOICE-FLOW-V99-AUDIO-CALMED";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -213,6 +213,10 @@ function normalizeIntentText(text) {
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function wordCount(text) {
+  return cleanForSpeech(text || "").split(/\s+/).filter(Boolean).length;
 }
 
 function currentEasternParts() {
@@ -1392,9 +1396,9 @@ function classifyIssue(issue) {
 function hasUsableProblemText(text) {
   if (!text) return false;
   const t = normalizedText(text);
-  const wordCount = cleanForSpeech(text).split(/\s+/).filter(Boolean).length;
+  const count = wordCount(text);
 
-  if (wordCount >= 2) return true;
+  if (count >= 2) return true;
 
   return (
     isQuoteIntent(text) ||
@@ -1946,6 +1950,11 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
   });
 }
 
+function parseConfidence(rawConfidence) {
+  const n = Number(rawConfidence);
+  return Number.isFinite(n) ? n : null;
+}
+
 function looksLikeWeakAudioTranscript(text) {
   const t = normalizeIntentText(text);
 
@@ -1973,6 +1982,27 @@ function looksLikeWeakAudioTranscript(text) {
   return false;
 }
 
+function isLikelyNoiseTranscript(text, confidence) {
+  const t = normalizeIntentText(text);
+  const words = t ? t.split(/\s+/).filter(Boolean).length : 0;
+
+  if (!t) return true;
+  if (looksLikeWeakAudioTranscript(text)) return true;
+
+  if (
+    confidence !== null &&
+    confidence < 0.35 &&
+    words <= 2 &&
+    t.length <= 12 &&
+    !isAffirmative(t) &&
+    !isNegative(t)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function nextRotatingPrompt(caller, prompts) {
   const index = caller.audioRepromptCount % prompts.length;
   caller.audioRepromptCount += 1;
@@ -1992,8 +2022,8 @@ function sayThenGather(twiml, res, actionUrl, prompt) {
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: "1",
-    timeout: 6,
+    speechTimeout: "auto",
+    timeout: 5,
     actionOnEmptyResult: true,
     language: "en-US"
   });
@@ -2266,8 +2296,8 @@ app.post("/incoming-call", (req, res) => {
     input: "speech",
     action: "/handle-input",
     method: "POST",
-    speechTimeout: "1",
-    timeout: 6,
+    speechTimeout: "auto",
+    timeout: 5,
     actionOnEmptyResult: true,
     language: "en-US"
   });
@@ -2284,6 +2314,7 @@ app.post("/handle-input", async (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const phone = req.body.From || "unknown";
   const speech = cleanSpeechText(req.body.SpeechResult || "");
+  const confidence = parseConfidence(req.body.Confidence);
   const caller = getOrCreateCaller(phone);
 
   if (!speech) {
@@ -2314,7 +2345,7 @@ app.post("/handle-input", async (req, res) => {
 
   caller.silenceCount = 0;
 
-  if (looksLikeWeakAudioTranscript(speech)) {
+  if (isLikelyNoiseTranscript(speech, confidence)) {
     return sayThenGather(
       twiml,
       res,
