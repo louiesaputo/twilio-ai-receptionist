@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V100-CALENDAR-CHECK-FILLER
+ VERSION: V101-ELEVENLABS-VOICE-LAYER
  DATE: 2026-04-03
 
  NOTES:
@@ -27,29 +27,41 @@
  - Keeps softer, varied fallback wording for weak or choppy audio
  - Calms speech sensitivity so tiny background sounds do not end the gather prematurely
  - Adds an immediate spoken calendar-check filler before availability lookup to remove awkward dead air
+ - Adds ElevenLabs TTS playback for all spoken prompts with automatic Twilio Alice fallback
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V100 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V101 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
 const https = require("https");
 const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V100-CALENDAR-CHECK-FILLER";
+const APP_VERSION = "VOICE-FLOW-V101-ELEVENLABS-VOICE-LAYER";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
+
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "";
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
+const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "";
+const TTS_PROMPT_TTL_MS = 30 * 60 * 1000;
+const TTS_AUDIO_TTL_MS = 6 * 60 * 60 * 1000;
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(express.static("public"));
 
 const callerStore = {};
+const ttsPromptStore = new Map();
+const ttsAudioCache = new Map();
 
 const AMBIGUOUS_FIRST_NAMES = new Set([
   "john", "jon", "johnny", "jonny",
@@ -247,6 +259,143 @@ function currentDateInEastern() {
 function currentDateTimeInEastern() {
   const p = currentEasternParts();
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
+}
+
+function getPublicBaseUrl() {
+  const explicitBase = cleanForSpeech(PUBLIC_BASE_URL || "");
+  if (explicitBase) return explicitBase.replace(/\/+$/, "");
+
+  const railwayDomain = cleanForSpeech(process.env.RAILWAY_PUBLIC_DOMAIN || "");
+  if (railwayDomain) {
+    return `https://${railwayDomain.replace(/^https?:\/\//i, "").replace(/\/+$/, "")}`;
+  }
+
+  return "";
+}
+
+function isElevenLabsReady() {
+  return Boolean(ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID && getPublicBaseUrl());
+}
+
+function pruneTtsStores() {
+  const now = Date.now();
+
+  for (const [id, entry] of ttsPromptStore.entries()) {
+    if (!entry || !entry.createdAt || now - entry.createdAt > TTS_PROMPT_TTL_MS) {
+      ttsPromptStore.delete(id);
+    }
+  }
+
+  for (const [key, entry] of ttsAudioCache.entries()) {
+    if (!entry || !entry.createdAt || now - entry.createdAt > TTS_AUDIO_TTL_MS) {
+      ttsAudioCache.delete(key);
+    }
+  }
+}
+
+function getTtsCacheKey(text) {
+  return crypto.createHash("sha1").update(String(text || "")).digest("hex");
+}
+
+function rememberTtsPrompt(text) {
+  pruneTtsStores();
+  const safeText = cleanForSpeech(text || "");
+  const id = crypto.randomBytes(12).toString("hex");
+  ttsPromptStore.set(id, {
+    text: safeText,
+    createdAt: Date.now()
+  });
+  return id;
+}
+
+function getCachedTtsAudio(text) {
+  const entry = ttsAudioCache.get(getTtsCacheKey(text));
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > TTS_AUDIO_TTL_MS) {
+    ttsAudioCache.delete(getTtsCacheKey(text));
+    return null;
+  }
+  return entry;
+}
+
+function setCachedTtsAudio(text, audioBuffer, contentType) {
+  ttsAudioCache.set(getTtsCacheKey(text), {
+    audioBuffer,
+    contentType: contentType || "audio/mpeg",
+    createdAt: Date.now()
+  });
+}
+
+function fetchElevenLabsAudio(text) {
+  return new Promise((resolve, reject) => {
+    const safeText = cleanForSpeech(text || "");
+    if (!safeText) return reject(new Error("Missing text for ElevenLabs audio request"));
+    if (!ELEVENLABS_API_KEY) return reject(new Error("Missing ELEVENLABS_API_KEY"));
+    if (!ELEVENLABS_VOICE_ID) return reject(new Error("Missing ELEVENLABS_VOICE_ID"));
+
+    const requestBody = JSON.stringify({
+      text: safeText,
+      model_id: ELEVENLABS_MODEL_ID,
+      voice_settings: {
+        stability: 0.55,
+        similarity_boost: 0.8,
+        style: 0.2,
+        use_speaker_boost: true
+      }
+    });
+
+    const options = {
+      hostname: "api.elevenlabs.io",
+      path: `/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}?output_format=${encodeURIComponent(ELEVENLABS_OUTPUT_FORMAT)}`,
+      method: "POST",
+      headers: {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Length": Buffer.byteLength(requestBody)
+      }
+    };
+
+    const elevenReq = https.request(options, (elevenRes) => {
+      const chunks = [];
+
+      elevenRes.on("data", (chunk) => chunks.push(chunk));
+
+      elevenRes.on("end", () => {
+        const buffer = Buffer.concat(chunks);
+        if (elevenRes.statusCode && elevenRes.statusCode >= 200 && elevenRes.statusCode < 300) {
+          return resolve({
+            audioBuffer: buffer,
+            contentType: elevenRes.headers["content-type"] || "audio/mpeg"
+          });
+        }
+
+        const errorBody = buffer.toString("utf8");
+        return reject(new Error(`ElevenLabs returned ${elevenRes.statusCode}: ${errorBody}`));
+      });
+    });
+
+    elevenReq.setTimeout(15000, () => {
+      elevenReq.destroy(new Error("ElevenLabs request timed out"));
+    });
+
+    elevenReq.on("error", (err) => reject(err));
+    elevenReq.write(requestBody);
+    elevenReq.end();
+  });
+}
+
+function addSpeechToResponse(target, prompt) {
+  const safePrompt = cleanForSpeech(prompt || "");
+  if (!safePrompt) return;
+
+  if (isElevenLabsReady()) {
+    const promptId = rememberTtsPrompt(safePrompt);
+    target.play(`${getPublicBaseUrl()}/tts/${promptId}.mp3`);
+    return;
+  }
+
+  target.say({ voice: "alice" }, safePrompt);
 }
 
 function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
@@ -1365,6 +1514,13 @@ function classifyIssue(issue) {
   const serviceItem = detectServiceItem(issue);
   const applianceSummary = detectApplianceSummary(issue);
 
+  if (serviceItem && serviceItem.category !== "appliance") {
+    if ((text.includes("faucet") || text.includes("sink")) && containsAny(text, ["leak", "drip", "dripping"])) {
+      return { summary: "a leaking faucet" };
+    }
+    return { summary: `an issue with ${serviceItem.prompt}` };
+  }
+
   if (serviceItem && serviceItem.category === "appliance" && applianceSummary) {
     return { summary: applianceSummary };
   }
@@ -1386,10 +1542,6 @@ function classifyIssue(issue) {
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
   if (containsAny(text, ["no water"])) return { summary: "no water service" };
   if (containsAny(text, ["leak", "leaking", "drip", "dripping"])) return { summary: "a water leak" };
-
-  if (serviceItem && serviceItem.category === "fixture") {
-    return { summary: `an issue with ${serviceItem.prompt}` };
-  }
 
   return { summary: buildUnknownIssueSummary(issue) };
 }
@@ -2029,13 +2181,13 @@ function sayThenGather(twiml, res, actionUrl, prompt) {
     language: "en-US"
   });
 
-  gather.say({ voice: "alice" }, prompt);
+  addSpeechToResponse(gather, prompt);
 
   return res.type("text/xml").send(twiml.toString());
 }
 
 function sayThenRedirect(twiml, res, prompt, redirectUrl) {
-  twiml.say({ voice: "alice" }, prompt);
+  addSpeechToResponse(twiml, prompt);
   twiml.redirect({ method: "POST" }, redirectUrl);
   return res.type("text/xml").send(twiml.toString());
 }
@@ -2082,7 +2234,7 @@ function proceedAfterConfirmedAddress(twiml, res, caller) {
     twiml,
     res,
     "/handle-input",
-    "Would you like to choose a callback day and time now, ask what is available on a specific day, or would you prefer the first available callback?"
+    "Alright, I've got all the information I need. Now let's talk about a callback time that works best for you. Do you have something in mind, or would you like me to find the first available for you?"
   );
 }
 
@@ -2264,6 +2416,36 @@ function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
   );
 }
 
+app.get("/tts/:promptId.mp3", async (req, res) => {
+  pruneTtsStores();
+
+  const promptId = req.params.promptId;
+  const promptEntry = ttsPromptStore.get(promptId);
+
+  if (!promptEntry || !promptEntry.text) {
+    return res.status(404).send("Prompt not found");
+  }
+
+  try {
+    const cached = getCachedTtsAudio(promptEntry.text);
+    if (cached) {
+      res.set("Content-Type", cached.contentType || "audio/mpeg");
+      res.set("Cache-Control", "public, max-age=86400");
+      return res.send(cached.audioBuffer);
+    }
+
+    const { audioBuffer, contentType } = await fetchElevenLabsAudio(promptEntry.text);
+    setCachedTtsAudio(promptEntry.text, audioBuffer, contentType);
+
+    res.set("Content-Type", contentType || "audio/mpeg");
+    res.set("Cache-Control", "public, max-age=86400");
+    return res.send(audioBuffer);
+  } catch (err) {
+    console.error("[ELEVENLABS TTS ERROR]", err.message);
+    return res.status(500).send("TTS unavailable");
+  }
+});
+
 app.post("/perform-availability-check", async (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const phone = req.body.From || "unknown";
@@ -2329,8 +2511,8 @@ app.post("/incoming-call", (req, res) => {
     language: "en-US"
   });
 
-  gather.say(
-    { voice: "alice" },
+  addSpeechToResponse(
+    gather,
     "Thank you for calling Blue Caller Automation. This is Alex, your virtual receptionist. This is a demonstration line, so you can hear how I would handle calls for your business. You can speak to me just like any of your customers would if they were calling for a quote, a service call, or emergency service. How can I help you today?"
   );
 
@@ -2365,7 +2547,7 @@ app.post("/handle-input", async (req, res) => {
       );
     }
 
-    twiml.say({ voice: "alice" }, "I'm sorry we weren't able to connect. Please call us back when you're ready. Thank you.");
+    addSpeechToResponse(twiml, "I'm sorry we weren't able to connect. Please call us back when you're ready. Thank you.");
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
@@ -2878,7 +3060,7 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "schedule_or_callback") {
-    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, { allowFlexibleDateRequest: true });
+    const availabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, { allowFlexibleDateRequest: true });
     if (availabilityHandled) return availabilityHandled;
 
     const t = normalizedText(speech);
@@ -2920,12 +3102,12 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would you like to choose a callback day and time now, ask what is available on a specific day, or would you prefer the first available callback?"
+      "Alright, I've got all the information I need. Now let's talk about a callback time that works best for you. Do you have something in mind, or would you like me to find the first available for you?"
     );
   }
 
   if (caller.lastStep === "confirm_first_available") {
-    const alternateAvailabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, {
+    const alternateAvailabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, {
       existingDate: caller.requestedDate || caller.pendingOfferedDate || "",
       existingTimePreference: caller.requestedTimePreference || "",
       allowFlexibleDateRequest: true
@@ -2972,7 +3154,7 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_appointment_day") {
-    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, { allowFlexibleDateRequest: true });
+    const availabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, { allowFlexibleDateRequest: true });
     if (availabilityHandled) return availabilityHandled;
 
     const timePreference = detectTimePreference(speech);
@@ -3010,7 +3192,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          `Let me check the calendar. I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
+          `I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
         );
       }
 
@@ -3039,7 +3221,7 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "ask_appointment_time") {
-    const availabilityHandled = await handleAvailabilityLookup(twiml, res, caller, speech, {
+    const availabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, {
       existingDate: caller.appointmentDate,
       allowFlexibleDateRequest: true
     });
@@ -3131,7 +3313,7 @@ app.post("/handle-input", async (req, res) => {
       recap = `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
     }
 
-    twiml.say({ voice: "alice" }, recap);
+    addSpeechToResponse(twiml, recap);
 
     sendLeadToMake(caller);
     sendBookingToMake(caller);
@@ -3183,7 +3365,7 @@ app.post("/handle-input", async (req, res) => {
       ? "Thank you for calling. Take care."
       : "Perfect. Thank you for calling, and have a great day.";
 
-    twiml.say({ voice: "alice" }, goodbye);
+    addSpeechToResponse(twiml, goodbye);
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
@@ -3263,15 +3445,15 @@ app.post("/handle-input", async (req, res) => {
 
     sendDemoFollowupToMake(caller);
 
-    twiml.say(
-      { voice: "alice" },
+    addSpeechToResponse(
+      twiml,
       "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling, and have a great day."
     );
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
 
-  twiml.say({ voice: "alice" }, "Sorry, something went wrong. Please call back.");
+  addSpeechToResponse(twiml, "Sorry, something went wrong. Please call back.");
   twiml.hangup();
   return res.type("text/xml").send(twiml.toString());
 });
