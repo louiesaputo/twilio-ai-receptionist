@@ -134,11 +134,11 @@ const CHOPPY_AUDIO_PROMPTS = [
 ];
 
 const CALENDAR_CHECK_FILLERS = [
-  "Absolutely, let me take a quick look at the calendar.",
-  "Alright, give me just a second and I'll see what's available.",
-  "Let me check that for you real quick.",
-  "Sure, I'll take a look and see what we have.",
-  "Give me just a moment while I check what's open."
+  "Give me just one second while I look at the calendar and see what I have available for you.",
+  "Let me take a quick look at the calendar and see what I have available for you.",
+  "Give me just a moment while I check the calendar for you.",
+  "Let me look that up and see what I have available for you.",
+  "One second and I'll check the calendar for you."
 ];
 
 const AFFIRMATIVE_EXACT_PHRASES = new Set([
@@ -855,6 +855,17 @@ function addSpeechToResponse(target, prompt) {
   target.say({ voice: "alice" }, safePrompt);
 }
 
+let staticTtsWarmStarted = false;
+
+function warmStaticTtsPrompts() {
+  if (staticTtsWarmStarted || !isElevenLabsReady()) return;
+  staticTtsWarmStarted = true;
+
+  for (const prompt of STATIC_TTS_PROMPTS_TO_WARM) {
+    warmTtsAudio(prompt);
+  }
+}
+
 function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
   const [datePart, timePart] = String(localDateTime || "").split("T");
   if (!datePart || !timePart) return "";
@@ -877,7 +888,7 @@ function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
 
 function parseCallbackDateAndTimeToLocal(dateText, timeText) {
   const safeDate = cleanForSpeech(dateText || "");
-  const safeTime = cleanForSpeech(timeText || "");
+  const safeTime = formatTimeForSpeech(timeText || "");
 
   const dateMatch = safeDate.match(/^(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
   const timeMatch = safeTime.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
@@ -1559,6 +1570,39 @@ function extractOpeningNameAndIssue(text) {
     const possibleNameOnly = normalizeNameCandidate(remainder);
     if (possibleNameOnly) {
       return { name: possibleNameOnly, issueText: "" };
+    }
+  }
+
+  const fallbackIssueMarkers = [
+    /\s+and\s+i\s+have /i,
+    /\s+i\s+have /i,
+    /\s+i\s+need /i,
+    /\s+i'?m\s+having /i,
+    /\s+i\s+am\s+having /i,
+    /\s+can\s+someone /i,
+    /\s+can\s+you /i,
+    /\s+there\s+is /i,
+    /\s+because /i,
+    /\s+about /i,
+    /\s+with /i,
+    /\s+regarding /i,
+    /\s+my /i,
+    /\s+the /i,
+    /\s+our /i
+  ];
+
+  let fallbackIndex = -1;
+  for (const marker of fallbackIssueMarkers) {
+    const m = normalized.match(marker);
+    if (!m || typeof m.index !== "number") continue;
+    if (fallbackIndex === -1 || m.index < fallbackIndex) fallbackIndex = m.index;
+  }
+
+  if (fallbackIndex > 0) {
+    const possibleName = normalizeNameCandidate(normalized.slice(0, fallbackIndex));
+    const issueText = stripIssueLeadIn(normalized.slice(fallbackIndex));
+    if (possibleName && issueText) {
+      return { name: possibleName, issueText };
     }
   }
 
@@ -2674,11 +2718,50 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   };
 }
 
+function normalizeSpokenTimeText(input) {
+  let safe = cleanForSpeech(input || "");
+  if (!safe) return "";
+
+  safe = safe
+    .replace(/\$/g, "")
+    .replace(/ (\d{1,2})\s*o\s*clock /gi, "$1:00")
+    .replace(/ (\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\.? /gi, (match, hour, minute, meridiem) => {
+      const hh = String(Number(hour));
+      const mm = minute || "00";
+      const mer = meridiem.toUpperCase();
+      return `${hh}:${mm} ${mer}M`;
+    })
+    .replace(/ (\d{1,2})(?::(\d{2}))?\s*([AP])M /g, (match, hour, minute, meridiem) => {
+      const hh = String(Number(hour));
+      const mm = minute || "00";
+      return `${hh}:${mm} ${meridiem.toUpperCase()}M`;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return safe;
+}
+
+function formatTimeForSpeech(input) {
+  const safe = normalizeSpokenTimeText(input || "");
+  if (!safe) return "";
+
+  const match = safe.match(/^(\d{1,2}):(\d{2})\s*([AP])M$/i);
+  if (!match) return safe;
+
+  const hour = String(Number(match[1]));
+  const minute = match[2];
+  const meridiem = match[3].toUpperCase() === "A" ? "AM" : "PM";
+
+  if (minute === "00") return `${hour} ${meridiem}`;
+  return `${hour}:${minute} ${meridiem}`;
+}
+
 function normalizeAvailabilityResponse(response) {
   if (!response || typeof response !== "object") return null;
 
   const date = cleanForSpeech(response.date || response.nextAvailableDate || "");
-  const time = cleanForSpeech(response.time || response.nextAvailableTime || "");
+  const time = formatTimeForSpeech(response.time || response.nextAvailableTime || "");
 
   if (!date || !time) return null;
 
@@ -4802,4 +4885,11 @@ app.get("/twilio-token", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  setTimeout(() => {
+    try {
+      warmStaticTtsPrompts();
+    } catch (err) {
+      console.error("[STATIC TTS WARM ERROR]", err.message);
+    }
+  }, 250);
 });
