@@ -1,6 +1,6 @@
 
 /*************************************************
- VERSION: V104-NATURAL-CONFIRMATION-HANDLING
+ VERSION: V106-COST-EFFICIENCY-PASS
  DATE: 2026-04-03
 
  NOTES:
@@ -39,9 +39,13 @@
  - Restores more natural, warmer ElevenLabs delivery after V102 became too flat
  - Strengthens emergency detection for popped/broken main-line and severe yard-leak wording
  - Substantially broadens natural confirmation phrases like yes please, no thank you, yeah let’s do that, and that works
+ - Adds lower-cost gather profiles so short confirmations do not keep long listening windows open
+ - Disables the post-submit follow-up gather by default to cut one paid speech turn from completed calls
+ - Uses stable hashed TTS prompt URLs for better audio cache reuse
+ - Trims the demo opening slightly to reduce test-call duration
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V104 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V106 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -53,7 +57,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V104-NATURAL-CONFIRMATION-HANDLING";
+const APP_VERSION = "VOICE-FLOW-V106-COST-EFFICIENCY-PASS";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -65,6 +69,31 @@ const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "";
 const TTS_PROMPT_TTL_MS = 30 * 60 * 1000;
 const TTS_AUDIO_TTL_MS = 6 * 60 * 60 * 1000;
+const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
+const ELEVENLABS_USE_SPEAKER_BOOST = String(process.env.ELEVENLABS_USE_SPEAKER_BOOST || "false").toLowerCase() === "true";
+
+const GATHER_PROFILES = {
+  confirm: {
+    speechTimeout: "auto",
+    timeout: 2,
+    actionOnEmptyResult: true
+  },
+  short: {
+    speechTimeout: "auto",
+    timeout: 3,
+    actionOnEmptyResult: true
+  },
+  standard: {
+    speechTimeout: "auto",
+    timeout: 3,
+    actionOnEmptyResult: true
+  },
+  long: {
+    speechTimeout: "auto",
+    timeout: 4,
+    actionOnEmptyResult: true
+  }
+};
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -152,6 +181,8 @@ const AFFIRMATIVE_EXACT_PHRASES = new Set([
   "that works",
   "that will work",
   "thatll work",
+  "that ll work",
+  "that ll do",
   "works for me",
   "that works for me",
   "that is fine",
@@ -166,6 +197,10 @@ const AFFIRMATIVE_EXACT_PHRASES = new Set([
   "i will take it",
   "ill take that",
   "i will take that",
+  "use that",
+  "use it",
+  "use that information",
+  "use the information i gave you",
   "i think so",
   "i guess so",
   "probably",
@@ -205,7 +240,11 @@ const AFFIRMATIVE_CONTAINS_PHRASES = [
   "have someone call me",
   "have somebody call me",
   "someone can call me",
-  "somebody can call me"
+  "somebody can call me",
+  "that sounds fine",
+  "that sounds good",
+  "use that information",
+  "use the information i gave you"
 ];
 
 const NEGATIVE_EXACT_PHRASES = new Set([
@@ -306,6 +345,20 @@ const NEGATIVE_LEAD_TOKENS = new Set([
   "negative"
 ]);
 
+const CALLBACK_EXACT_MATCH_PROMPTS = [
+  ({ dateText, timeText }) => `Okay, yeah, I have ${dateText} at ${timeText} available. Can I go ahead and schedule that callback for you?`,
+  ({ dateText, timeText }) => `Yeah, I've got ${dateText} at ${timeText} available. Can I go ahead and book that callback for you?`,
+  ({ dateText, timeText }) => `Let's see. Yep, I have ${dateText} at ${timeText} available. Can I go ahead and schedule that callback for you?`
+];
+
+const CALLBACK_GENERIC_OFFER_PROMPTS = [
+  ({ dateText, timeText }) => `Okay, yeah, I have ${dateText} at ${timeText} available. Can I go ahead and schedule that callback for you?`,
+  ({ dateText, timeText }) => `Yep, I have ${dateText} at ${timeText} available. Do you want me to go ahead and schedule that callback for you?`,
+  ({ dateText, timeText }) => `Okay, I have ${dateText} at ${timeText} available. Would you like me to go ahead and schedule that callback for you?`
+];
+
+const BACKGROUND_AVAILABILITY_LOOKUPS = new Map();
+
 function getOrCreateCaller(phone) {
   if (!callerStore[phone]) {
     callerStore[phone] = {
@@ -324,8 +377,10 @@ function getOrCreateCaller(phone) {
 
       leadType: "service",
       projectType: "",
+      projectScope: "",
       timeline: "",
       proposalDeadline: "",
+      contactEmail: "",
       demoEmail: "",
       applianceType: "",
       applianceWarranty: "",
@@ -338,10 +393,12 @@ function getOrCreateCaller(phone) {
       appointmentDate: "",
       appointmentTime: "",
       requestedDate: "",
+      requestedExactTime: "",
       requestedTimePreference: "",
       pendingOfferedDate: "",
       pendingOfferedTime: "",
       pendingAvailabilityQuery: "",
+      pendingAvailabilityLookupId: "",
       calendarSlotConfirmed: false,
       bookingSent: false,
 
@@ -359,6 +416,7 @@ function getOrCreateCaller(phone) {
       silenceCount: 0,
       audioRepromptCount: 0,
       calendarPromptIndex: 0,
+      callbackOfferPromptIndex: 0,
       emergencyChoicePrompt: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -385,8 +443,10 @@ function resetCallerForNewCall(caller, phone) {
 
   caller.leadType = "service";
   caller.projectType = "";
+  caller.projectScope = "";
   caller.timeline = "";
   caller.proposalDeadline = "";
+  caller.contactEmail = "";
   caller.demoEmail = "";
   caller.applianceType = "";
   caller.applianceWarranty = "";
@@ -399,10 +459,12 @@ function resetCallerForNewCall(caller, phone) {
   caller.appointmentDate = "";
   caller.appointmentTime = "";
   caller.requestedDate = "";
+  caller.requestedExactTime = "";
   caller.requestedTimePreference = "";
   caller.pendingOfferedDate = "";
   caller.pendingOfferedTime = "";
   caller.pendingAvailabilityQuery = "";
+  caller.pendingAvailabilityLookupId = "";
   caller.calendarSlotConfirmed = false;
   caller.bookingSent = false;
 
@@ -419,6 +481,7 @@ function resetCallerForNewCall(caller, phone) {
   caller.lastStep = "ask_issue";
   caller.silenceCount = 0;
   caller.audioRepromptCount = 0;
+  caller.callbackOfferPromptIndex = 0;
   caller.updatedAt = new Date().toISOString();
 }
 
@@ -444,6 +507,154 @@ function normalizeIntentText(text) {
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function hasExplicitDateReference(text) {
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "today",
+    "tomorrow",
+    "next week",
+    "this week",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "next day",
+    "the next day",
+    "following day",
+    "the following day",
+    "day after",
+    "the day after"
+  ]);
+}
+
+function normalizeExtractedTime(hourText, minuteText, meridiemText) {
+  let hour = Number(hourText);
+  let minute = minuteText === undefined || minuteText === null || minuteText === "" ? 0 : Number(minuteText);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return "";
+
+  let meridiem = (meridiemText || "").toUpperCase();
+
+  if (!meridiem) {
+    if (hour >= 1 && hour <= 7) {
+      meridiem = "PM";
+    } else if (hour >= 8 && hour <= 11) {
+      meridiem = "AM";
+    } else if (hour === 12) {
+      meridiem = "PM";
+    } else {
+      meridiem = "AM";
+    }
+  }
+
+  return `${hour}:${String(minute).padStart(2, "0")} ${meridiem}`;
+}
+
+function extractSpecificTime(text) {
+  const raw = cleanForSpeech(text || "");
+  if (!raw) return "";
+
+  if (/\bnoon\b/i.test(raw)) return "12:00 PM";
+  if (/\bmidnight\b/i.test(raw)) return "12:00 AM";
+
+  let match = raw.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (match) {
+    return normalizeExtractedTime(match[1], match[2], match[3]);
+  }
+
+  match = raw.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (match) {
+    return normalizeExtractedTime(match[1], match[2], "");
+  }
+
+  return "";
+}
+
+function isFirstAvailableAcceptance(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+
+  if (AFFIRMATIVE_LEAD_TOKENS.has((t.split(/\s+/)[0] || "")) && containsAny(t, [
+    "whatever you have",
+    "whatever works",
+    "anything open",
+    "anything you have open",
+    "anything youve got open",
+    "anything you ve got open",
+    "anything available",
+    "first available",
+    "soonest available",
+    "earliest available",
+    "soonest you have",
+    "earliest you have",
+    "soonest opening",
+    "earliest opening",
+    "first opening",
+    "next opening",
+    "next available",
+    "first one you have",
+    "first one youve got",
+    "first one you ve got",
+    "anything is fine",
+    "any time is fine",
+    "anytime is fine",
+    "sooner the better"
+  ])) return true;
+
+  return containsAny(t, [
+    "whatever you have is fine",
+    "whatever works",
+    "thatll do",
+    "that ll do",
+    "thatll work",
+    "that ll work",
+    "first available is good",
+    "first available is fine",
+    "give me the first one you got",
+    "give me the first one you ve got",
+    "give me the first one youve got",
+    "ill take anything you have open",
+    "i ll take anything you have open",
+    "ill take anything open",
+    "i ll take anything open",
+    "anything you have open",
+    "anything open is fine",
+    "whatever is open",
+    "whatever youve got",
+    "whatever you ve got",
+    "whatever you got",
+    "soonest you have",
+    "earliest you have",
+    "sooner the better",
+    "im flexible",
+    "i am flexible",
+    "any time is fine",
+    "anytime is fine"
+  ]);
+}
+
+function isRepeatAvailabilityRequest(text) {
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "repeat that",
+    "say that again",
+    "can you repeat that",
+    "can you say that again",
+    "what was that",
+    "what time was that",
+    "i missed that",
+    "i missed the time",
+    "i didnt hear the time",
+    "i didn't hear the time",
+    "i didnt catch the time",
+    "i didn't catch the time",
+    "what was the time",
+    "can you repeat the time"
+  ]);
 }
 
 function wordCount(text) {
@@ -518,7 +729,7 @@ function getTtsCacheKey(text) {
 function rememberTtsPrompt(text) {
   pruneTtsStores();
   const safeText = cleanForSpeech(text || "");
-  const id = crypto.randomBytes(12).toString("hex");
+  const id = getTtsCacheKey(safeText);
   ttsPromptStore.set(id, {
     text: safeText,
     createdAt: Date.now()
@@ -558,7 +769,7 @@ function fetchElevenLabsAudio(text) {
         stability: 0.66,
         similarity_boost: 0.78,
         style: 0.08,
-        use_speaker_boost: true
+        use_speaker_boost: ELEVENLABS_USE_SPEAKER_BOOST
       }
     });
 
@@ -788,6 +999,9 @@ function isSameDayRelativeRequest(text) {
     "later that afternoon",
     "later that morning",
     "later that evening",
+    "later in the afternoon",
+    "later in the morning",
+    "later in the evening",
     "anything later today",
     "something later today",
     "anything later that day",
@@ -811,13 +1025,21 @@ function buildAvailabilityRawQuery(rawText, existingDate = "", existingTime = ""
   const raw = cleanForSpeech(rawText || "");
   if (!raw) return "";
 
-  if (existingDate && existingTime && isSameDayRelativeRequest(raw)) {
+  if (isFirstAvailableAcceptance(raw)) {
+    return "first available";
+  }
+
+  if (existingDate && existingTime && (isSameDayRelativeRequest(raw) || (!hasExplicitDateReference(raw) && /\blater\b/i.test(raw)))) {
     return `${raw} after ${existingTime} on ${existingDate}`;
   }
 
   if (existingDate && isNextDayRelativeRequest(raw)) {
     const shiftedDate = shiftSpokenDateText(existingDate, 1);
     if (shiftedDate) return `${raw} on ${shiftedDate}`;
+  }
+
+  if (existingDate && !hasExplicitDateReference(raw) && (detectTimePreference(raw) || extractSpecificTime(raw))) {
+    return `${raw} on ${existingDate}`;
   }
 
   return raw;
@@ -886,6 +1108,30 @@ function formatAddressForSpeech(address) {
   return `${streetNumberToSpeech(match[1])}${match[2]}`;
 }
 
+function addressConfirmationText(address) {
+  const safe = normalizeAddressInput(address || "");
+  if (!safe) return "";
+
+  let working = safe
+    .replace(/\b(FL|Florida)\b\.?\s*\d{5}(?:-\d{4})?$/i, "")
+    .replace(/,?\s*\b(FL|Florida)\b$/i, "")
+    .trim();
+
+  const commaParts = working.split(",").map((part) => cleanForSpeech(part)).filter(Boolean);
+  if (commaParts.length >= 2) {
+    return `${formatAddressForSpeech(commaParts[0])} in ${commaParts[1]}`;
+  }
+
+  const streetSuffixes = "street|st|avenue|ave|road|rd|lane|ln|drive|dr|boulevard|blvd|court|ct|circle|cir|place|pl|way|trail|trl|parkway|pkwy|highway|hwy|terrace|ter";
+  const match = working.match(new RegExp(`^(\\d{1,5}\\s+.+?\\b(?:${streetSuffixes})\\b)\\s+(.+)$`, "i"));
+
+  if (match) {
+    return `${formatAddressForSpeech(match[1])} in ${match[2]}`;
+  }
+
+  return formatAddressForSpeech(working);
+}
+
 function getSituationalAcknowledgment(issueText) {
   const t = normalizedText(issueText || "");
   if (!t) return "";
@@ -914,6 +1160,29 @@ function getSituationalAcknowledgment(issueText) {
     "coming over tonight"
   ])) {
     return "I'm sorry, that's got to be stressful.";
+  }
+
+  if (containsAny(t, [
+    "steaks",
+    "all that food",
+    "lose everything",
+    "losing everything",
+    "food spoil",
+    "food spoiling",
+    "food in there",
+    "all my groceries"
+  ])) {
+    return "Oh no, I can't imagine losing all that food.";
+  }
+
+  if (containsAny(t, [
+    "insulin",
+    "medication",
+    "medicine",
+    "baby formula",
+    "breast milk"
+  ])) {
+    return "Oh no, I know that's really stressful.";
   }
 
   return "";
@@ -1010,11 +1279,40 @@ function isMainLineEmergencyCandidate(text) {
   return mainLike && severeLike;
 }
 
+function isCriticalLeakEmergencyCandidate(issueText, issueSummary = "") {
+  const combined = normalizedText(`${issueText || ""} ${issueSummary || ""}`);
+
+  if (isMainLineEmergencyCandidate(combined)) return true;
+
+  if (containsAny(combined, [
+    "ceiling leak",
+    "roof leak",
+    "leaking water heater",
+    "water heater leak",
+    "burst pipe",
+    "flooding",
+    "flooded",
+    "water everywhere",
+    "pouring",
+    "gushing",
+    "sewer backup",
+    "sewage backup"
+  ])) return true;
+
+  const leakLike = containsAny(combined, ["leak", "leaking", "drip", "dripping", "water heater", "roof", "ceiling"]);
+  const locationLike = containsAny(combined, ["roof", "ceiling", "water heater", "yard", "main", "line", "outside"]);
+
+  return leakLike && locationLike;
+}
+
 function buildEmergencyChoicePrompt(caller) {
-  if (isMainLineEmergencyCandidate(caller.issue || "") || isUrgentLanguage(caller.issue || "")) {
-    return "I'm so sorry to hear that. It sounds like we need to get somebody out there right away. Do you want me to go ahead and mark this as an emergency call?";
+  const issueSummary = caller.issueSummary || "that issue";
+
+  if (isCriticalLeakEmergencyCandidate(caller.issue || "", issueSummary) || isUrgentLanguage(caller.issue || "")) {
+    return `I'm sorry you're dealing with ${issueSummary}. That sounds urgent. Do you want me to go ahead and mark this as an emergency call?`;
   }
-  return `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`;
+
+  return `I'm sorry you're dealing with ${issueSummary}. Do you want me to mark this as an emergency?`;
 }
 
 function nextCalendarCheckPrompt(caller) {
@@ -1582,6 +1880,7 @@ function isQuoteIntent(text) {
 
   if (containsAny(t, ["quote", "estimate", "proposal", "bid"])) return true;
   if (containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) return true;
+  if (isApplianceInstallationIntent(text)) return true;
 
   if (
     containsAny(t, ["install", "installation", "replace", "replacement", "new "]) &&
@@ -1703,9 +2002,34 @@ function cleanQuoteProjectText(text) {
     .trim();
 }
 
+function isApplianceInstallationIntent(text) {
+  const item = detectServiceItem(text);
+  if (!item || item.category !== "appliance") return false;
+
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "install",
+    "installation",
+    "hook up",
+    "hookup",
+    "set up",
+    "setup",
+    "put in",
+    "replace",
+    "replacement",
+    "swap out",
+    "new appliance"
+  ]);
+}
+
 function classifyProjectType(text) {
   const raw = cleanQuoteProjectText(text);
   const t = normalizedText(raw);
+  const item = detectServiceItem(text);
+
+  if (item && item.category === "appliance" && isApplianceInstallationIntent(text)) {
+    return `a ${item.label} installation`;
+  }
 
   if (containsAny(t, ["bathroom", "bath"]) && containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) {
     return "a bathroom remodel";
@@ -2145,6 +2469,9 @@ function isAlternateAvailabilityRequest(text) {
     t.includes("later that afternoon") ||
     t.includes("later that morning") ||
     t.includes("later that evening") ||
+    t.includes("later in the afternoon") ||
+    t.includes("later in the morning") ||
+    t.includes("later in the evening") ||
     t.includes("later on ") ||
     t.includes("any other times") ||
     t.includes("anything tomorrow") ||
@@ -2162,6 +2489,8 @@ function isAlternateAvailabilityRequest(text) {
 function isFlexibleSchedulingRequest(text) {
   const t = normalizedText(text);
   if (!t) return false;
+
+  if (isFirstAvailableAcceptance(t)) return true;
 
   if (containsAny(t, [
     "today", "tomorrow", "next week", "this week",
@@ -2181,7 +2510,9 @@ function isFlexibleSchedulingRequest(text) {
     "tuesday or",
     "wednesday or",
     "thursday or",
-    "friday or"
+    "friday or",
+    "anything later",
+    "what else do you have"
   ]);
 }
 
@@ -2272,7 +2603,17 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   const raw = cleanForSpeech(text || "");
   let datePart = extractDatePart(raw);
   const timePref = detectTimePreference(raw);
+  const exactTime = extractSpecificTime(raw);
   const enrichedRawQuery = buildAvailabilityRawQuery(raw, existingDate, existingTime);
+
+  if (isFirstAvailableAcceptance(raw)) {
+    return {
+      rawQuery: "first available",
+      requestedDate: "",
+      requestedExactTime: "",
+      requestedTimePreference: "anytime"
+    };
+  }
 
   if (!datePart && isSameDayRelativeRequest(raw) && existingDate) {
     datePart = cleanForSpeech(existingDate);
@@ -2282,7 +2623,11 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
     datePart = shiftSpokenDateText(existingDate, 1) || "";
   }
 
-  if (!datePart && isFlexibleSchedulingRequest(raw)) {
+  if (!datePart && existingDate && !hasExplicitDateReference(raw) && (timePref || exactTime)) {
+    datePart = cleanForSpeech(existingDate);
+  }
+
+  if (!datePart && isFlexibleSchedulingRequest(raw) && !hasExplicitDateReference(raw) && !existingDate) {
     datePart = raw;
   }
 
@@ -2296,6 +2641,7 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   return {
     rawQuery: enrichedRawQuery || raw,
     requestedDate: datePart || "",
+    requestedExactTime: exactTime || "",
     requestedTimePreference: convertPreferenceToMakeValue(timePref)
   };
 }
@@ -2313,16 +2659,16 @@ function normalizeAvailabilityResponse(response) {
 
 function nonDemoNotesPrompt(caller) {
   if (caller.leadType === "quote") {
-    return "Before I submit this quote request, are there any notes or details you'd like me to add?";
+    return "Is there anything else you'd like me to include with this quote request?";
   }
-  return "Before I submit this, is there anything else you'd like me to note for the technician?";
+  return "Is there anything else you'd like me to note for the technician?";
 }
 
 function postSubmitFollowupPrompt(caller) {
   if (caller.leadType === "demo") {
     return "Is there anything else I can help you with today?";
   }
-  return "How did you enjoy the demo? If you'd like, I can have someone from our team contact you to discuss how this could work for your company. Would you like me to do that?";
+  return "Would you like me to have one of our team members call you to discuss how this could help your company?";
 }
 
 function buildMakePayload(caller) {
@@ -2359,11 +2705,15 @@ function buildMakePayload(caller) {
       ? `${caller.notes ? caller.notes + " " : ""}Original caller request: ${caller.issue}`.trim()
       : (caller.notes || "");
 
-  const applianceNoteParts = [];
-  if (caller.applianceType) applianceNoteParts.push(`Appliance: ${caller.applianceType}`);
-  if (caller.applianceWarranty) applianceNoteParts.push(`Warranty: ${caller.applianceWarranty}`);
-  if (applianceNoteParts.length) {
-    effectiveNotes = `${effectiveNotes ? effectiveNotes + " " : ""}${applianceNoteParts.join(". ")}.`.trim();
+  const noteParts = [];
+  if (effectiveNotes) noteParts.push(effectiveNotes);
+  if (caller.projectScope) noteParts.push(`Project scope: ${caller.projectScope}`);
+  if (caller.applianceType) noteParts.push(`Appliance: ${caller.applianceType}`);
+  if (caller.applianceWarranty) noteParts.push(`Warranty: ${caller.applianceWarranty}`);
+
+  effectiveNotes = noteParts.join(". ").replace(/\.\./g, ".").trim();
+  if (effectiveNotes && !/[.!?]$/.test(effectiveNotes)) {
+    effectiveNotes += ".";
   }
 
   return {
@@ -2379,10 +2729,12 @@ function buildMakePayload(caller) {
     urgency: caller.urgency || "normal",
     emergencyAlert: caller.emergencyAlert === true,
     projectType: caller.projectType || "",
+    projectScope: caller.projectScope || "",
     applianceType: caller.applianceType || "",
     applianceWarranty: caller.applianceWarranty || "",
     timeline: caller.timeline || "",
     proposalDeadline: caller.proposalDeadline || "",
+    email: caller.contactEmail || "",
     demoEmail: caller.demoEmail || "",
     notes: effectiveNotes,
     status: effectiveStatus,
@@ -2397,7 +2749,7 @@ function buildDemoFollowupPayload(caller) {
   const fullName = caller.demoFollowupContactName || caller.fullName || "";
   const firstName = getFirstName(fullName) || caller.firstName || "";
   const callbackNumber = caller.demoFollowupCallbackNumber || caller.callbackNumber || caller.phone || "";
-  const demoEmail = caller.demoFollowupEmail || caller.demoEmail || "";
+  const demoEmail = caller.demoFollowupEmail || caller.demoEmail || caller.contactEmail || "";
 
   let notes = "Interested in a Blue Caller Automation follow-up after testing the demo line.";
   if (caller.issueSummary) notes += ` Original demo scenario: ${caller.issueSummary}.`;
@@ -2565,6 +2917,61 @@ function sendDemoFollowupToMake(caller) {
   caller.demoFollowupSent = true;
 }
 
+function buildLeadRecap(caller) {
+  if (caller.emergencyAlert) {
+    return `I'm marking this as an emergency for ${caller.issueSummary}, and I'm submitting it for review now. Someone from our service team will contact you shortly.`;
+  }
+
+  if (caller.leadType === "quote") {
+    return "Okay, I've got everything I need. Someone from the office will reach out to you about your quote request.";
+  }
+
+  if (caller.leadType === "demo") {
+    return "Okay, I've got everything I need. Someone from the office will contact you shortly about your demo request.";
+  }
+
+  if (caller.status === "scheduled") {
+    return `Okay, I've got you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone will reach out to you then.`;
+  }
+
+  if (caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime) {
+    return `Okay, I've got everything I need. Someone from the office will reach out to confirm the callback time.`;
+  }
+
+  return `Okay, I've got everything I need. Someone from the office will contact you shortly to go over this and get you scheduled.`;
+}
+
+function buildClosingPrompt(caller) {
+  if (caller.emergencyAlert) {
+    return "Thank you for calling. Take care.";
+  }
+
+  return caller.firstName
+    ? `Alright, ${caller.firstName}, you're all set. Thank you for calling.`
+    : "Alright, you're all set. Thank you for calling.";
+}
+
+function sendLeadRecapAndContinue(twiml, res, caller) {
+  addSpeechToResponse(twiml, buildLeadRecap(caller));
+  sendLeadToMake(caller);
+  sendBookingToMake(caller);
+
+  if (!POST_SUBMIT_FOLLOWUP_ENABLED) {
+    addSpeechToResponse(twiml, buildClosingPrompt(caller));
+    twiml.hangup();
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  caller.lastStep = "final_question";
+
+  return sayThenGather(
+    twiml,
+    res,
+    "/handle-input",
+    postSubmitFollowupPrompt(caller)
+  );
+}
+
 function checkCalendarAvailability(caller, requestDetails = {}) {
   return new Promise((resolve) => {
     try {
@@ -2576,6 +2983,7 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
         issueSummary: caller.issueSummary || "",
         address: caller.address || "",
         requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
+        requestedExactTime: requestDetails.requestedExactTime || caller.requestedExactTime || "",
         requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
         availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || "",
         currentDateLocal: currentDateInEastern(),
@@ -2634,6 +3042,87 @@ function checkCalendarAvailability(caller, requestDetails = {}) {
       resolve(null);
     }
   });
+}
+
+function pruneBackgroundAvailabilityLookups() {
+  const now = Date.now();
+  for (const [key, entry] of BACKGROUND_AVAILABILITY_LOOKUPS.entries()) {
+    if (!entry || !entry.createdAt || now - entry.createdAt > 60 * 1000) {
+      BACKGROUND_AVAILABILITY_LOOKUPS.delete(key);
+    }
+  }
+}
+
+function startBackgroundAvailabilityLookup(caller, requestDetails = {}) {
+  pruneBackgroundAvailabilityLookups();
+  const lookupId = crypto.randomBytes(10).toString("hex");
+
+  const entry = {
+    createdAt: Date.now(),
+    requestDetails,
+    result: undefined,
+    promise: null
+  };
+
+  entry.promise = checkCalendarAvailability(caller, requestDetails)
+    .then((result) => {
+      entry.result = result;
+      return result;
+    })
+    .catch((err) => {
+      console.error("[CALENDAR BACKGROUND LOOKUP ERROR]", err.message);
+      entry.result = null;
+      return null;
+    });
+
+  BACKGROUND_AVAILABILITY_LOOKUPS.set(lookupId, entry);
+  caller.pendingAvailabilityLookupId = lookupId;
+  return lookupId;
+}
+
+function isSameSpokenDate(dateA, dateB) {
+  const a = parseSpokenDateText(dateA || "");
+  const b = parseSpokenDateText(dateB || "");
+  if (!a || !b) {
+    return normalizedText(dateA || "") === normalizedText(dateB || "");
+  }
+  return a.month === b.month && a.day === b.day;
+}
+
+function nextCallbackOfferVariant(caller, variants) {
+  const index = Number.isInteger(caller.callbackOfferPromptIndex) ? caller.callbackOfferPromptIndex : 0;
+  caller.callbackOfferPromptIndex = (index + 1) % variants.length;
+  return variants[index % variants.length];
+}
+
+function buildCallbackOfferPrompt(caller, options = {}) {
+  const dateText = caller.pendingOfferedDate || "";
+  const timeText = caller.pendingOfferedTime || "";
+  const requestedDate = caller.requestedDate || "";
+  const requestedExactTime = caller.requestedExactTime || "";
+  const repeatLeadIn = options.repeatLeadIn ? `${options.repeatLeadIn.trim()} ` : "";
+
+  const exactMatch =
+    requestedDate &&
+    requestedExactTime &&
+    isSameSpokenDate(requestedDate, dateText) &&
+    normalizeIntentText(requestedExactTime) === normalizeIntentText(timeText);
+
+  if (exactMatch) {
+    const template = nextCallbackOfferVariant(caller, CALLBACK_EXACT_MATCH_PROMPTS);
+    return repeatLeadIn + template({ dateText, timeText });
+  }
+
+  if (requestedDate && requestedExactTime && isSameSpokenDate(requestedDate, dateText)) {
+    return `${repeatLeadIn}I don't have ${requestedDate} at ${requestedExactTime} available, but I do have ${timeText} available that same day. Would you like me to schedule that callback for you instead?`.trim();
+  }
+
+  if (requestedDate && requestedExactTime) {
+    return `${repeatLeadIn}I don't have ${requestedDate} at ${requestedExactTime} available, but I do have ${dateText} at ${timeText} available. Would you like me to schedule that callback for you instead?`.trim();
+  }
+
+  const template = nextCallbackOfferVariant(caller, CALLBACK_GENERIC_OFFER_PROMPTS);
+  return repeatLeadIn + template({ dateText, timeText });
 }
 
 function parseConfidence(rawConfidence) {
@@ -2703,16 +3192,83 @@ function nextChoppyAudioPrompt(caller) {
   return nextRotatingPrompt(caller, CHOPPY_AUDIO_PROMPTS);
 }
 
-function sayThenGather(twiml, res, actionUrl, prompt) {
-  const gather = twiml.gather({
+function inferGatherProfile(prompt) {
+  const t = normalizedText(prompt || "");
+
+  if (!t) return "standard";
+
+  if (containsAny(t, [
+    "please say yes or no",
+    "is that correct",
+    "a good number to reach you",
+    "would that callback time work for you",
+    "do you want me to mark this as an emergency",
+    "should i use the contact information you already gave me",
+    "would you like to include an email address with this quote request as well",
+    "would you like to include an email address as well",
+    "would you like me to have one of our team members call you",
+    "can i go ahead and schedule that callback",
+    "can i go ahead and book that callback",
+    "would you like me to schedule that callback",
+    "would you like me to book that callback",
+    "do you want me to go ahead and schedule that callback",
+    "do you want me to go ahead and book that callback"
+  ])) {
+    return "confirm";
+  }
+
+  if (containsAny(t, [
+    "how can i help you today",
+    "could you briefly tell me what is going on",
+    "what seems to be going on",
+    "can i start by getting your full name",
+    "could you please say your full name",
+    "can i get your last name",
+    "what's the best number to reach you",
+    "what is the best number to reach you",
+    "what is the service address",
+    "what is the project address",
+    "go ahead and spell that out for me",
+    "what is the projected timeline",
+    "can you give me a quick idea of what all you'd like done",
+    "what day works best for you",
+    "what callback time works best for you"
+  ])) {
+    return "long";
+  }
+
+  if (containsAny(t, [
+    "is there anything else you'd like me to note",
+    "is there anything else you'd like me to include",
+    "are there any notes or details you'd like me to add",
+    "do you have a deadline",
+    "deadline you’re working with",
+    "deadline you're working with",
+    "what is the best email address"
+  ])) {
+    return "short";
+  }
+
+  return "standard";
+}
+
+function createGather(twiml, actionUrl, profileName = "standard") {
+  const profile = GATHER_PROFILES[profileName] || GATHER_PROFILES.standard;
+
+  return twiml.gather({
     input: "speech",
     action: actionUrl,
     method: "POST",
-    speechTimeout: "auto",
-    timeout: 5,
-    actionOnEmptyResult: true,
+    speechTimeout: profile.speechTimeout,
+    timeout: profile.timeout,
+    actionOnEmptyResult: profile.actionOnEmptyResult,
     language: "en-US"
   });
+}
+
+function sayThenGather(twiml, res, actionUrl, prompt, options = {}) {
+  const profileName = options.profile || inferGatherProfile(prompt);
+  const gather = createGather(twiml, actionUrl, profileName);
 
   addSpeechToResponse(gather, prompt);
 
@@ -2738,7 +3294,7 @@ function proceedAfterConfirmedAddress(twiml, res, caller) {
       twiml,
       res,
       "/handle-input",
-      "Do you have a timeline in mind for this project?"
+      "What is the projected timeline or start date for this project?"
     );
   }
 
@@ -2919,16 +3475,19 @@ function moveToDemoNameOrPhoneStep(twiml, res, caller) {
 
 function resetPendingAvailability(caller) {
   caller.requestedDate = "";
+  caller.requestedExactTime = "";
   caller.requestedTimePreference = "";
   caller.pendingOfferedDate = "";
   caller.pendingOfferedTime = "";
   caller.pendingAvailabilityQuery = "";
+  caller.pendingAvailabilityLookupId = "";
 }
 
 function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
   const shouldHandle =
     isAvailabilityRequest(speech) ||
     isAlternateAvailabilityRequest(speech) ||
+    isFirstAvailableAcceptance(speech) ||
     (options.allowFlexibleDateRequest && isFlexibleSchedulingRequest(speech));
 
   if (!shouldHandle) return false;
@@ -2940,9 +3499,12 @@ function handleAvailabilityLookup(twiml, res, caller, speech, options = {}) {
   );
 
   caller.requestedDate = requestDetails.requestedDate;
+  caller.requestedExactTime = requestDetails.requestedExactTime || "";
   caller.requestedTimePreference = requestDetails.requestedTimePreference;
   caller.pendingAvailabilityQuery = requestDetails.rawQuery;
   caller.lastStep = "waiting_for_availability_lookup";
+
+  startBackgroundAvailabilityLookup(caller, requestDetails);
 
   return sayThenRedirect(
     twiml,
@@ -2966,7 +3528,7 @@ app.get("/tts/:promptId.mp3", async (req, res) => {
     const cached = getCachedTtsAudio(promptEntry.text);
     if (cached) {
       res.set("Content-Type", cached.contentType || "audio/mpeg");
-      res.set("Cache-Control", "public, max-age=86400");
+      res.set("Cache-Control", "public, max-age=86400, immutable");
       return res.send(cached.audioBuffer);
     }
 
@@ -2974,7 +3536,7 @@ app.get("/tts/:promptId.mp3", async (req, res) => {
     setCachedTtsAudio(promptEntry.text, audioBuffer, contentType);
 
     res.set("Content-Type", contentType || "audio/mpeg");
-    res.set("Cache-Control", "public, max-age=86400");
+    res.set("Cache-Control", "public, max-age=86400, immutable");
     return res.send(audioBuffer);
   } catch (err) {
     console.error("[ELEVENLABS TTS ERROR]", err.message);
@@ -2989,11 +3551,23 @@ app.post("/perform-availability-check", async (req, res) => {
 
   const requestDetails = {
     requestedDate: caller.requestedDate || "",
+    requestedExactTime: caller.requestedExactTime || "",
     requestedTimePreference: caller.requestedTimePreference || "",
     rawQuery: caller.pendingAvailabilityQuery || ""
   };
 
-  const availabilityRaw = await checkCalendarAvailability(caller, requestDetails);
+  let availabilityRaw = null;
+  const lookupId = caller.pendingAvailabilityLookupId || "";
+  const lookupEntry = lookupId ? BACKGROUND_AVAILABILITY_LOOKUPS.get(lookupId) : null;
+
+  if (lookupEntry) {
+    availabilityRaw = lookupEntry.result !== undefined ? lookupEntry.result : await lookupEntry.promise;
+    BACKGROUND_AVAILABILITY_LOOKUPS.delete(lookupId);
+    caller.pendingAvailabilityLookupId = "";
+  } else {
+    availabilityRaw = await checkCalendarAvailability(caller, requestDetails);
+  }
+
   const availability = normalizeAvailabilityResponse(availabilityRaw);
 
   if (availability && availability.date && availability.time) {
@@ -3006,7 +3580,7 @@ app.post("/perform-availability-check", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} for a callback. Would that callback time work for you?`
+      buildCallbackOfferPrompt(caller)
     );
   }
 
@@ -3022,7 +3596,7 @@ app.post("/perform-availability-check", async (req, res) => {
     twiml,
     res,
     "/handle-input",
-    "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. Before I submit this, is there anything else you'd like me to note for the technician?"
+    "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. Is there anything else you'd like me to note for the technician?"
   );
 });
 
@@ -3037,19 +3611,11 @@ app.post("/incoming-call", (req, res) => {
 
   resetCallerForNewCall(caller, phone);
 
-  const gather = twiml.gather({
-    input: "speech",
-    action: "/handle-input",
-    method: "POST",
-    speechTimeout: "auto",
-    timeout: 5,
-    actionOnEmptyResult: true,
-    language: "en-US"
-  });
+  const gather = createGather(twiml, "/handle-input", "long");
 
   addSpeechToResponse(
     gather,
-    "Thank you for calling Blue Caller Automation. This is Alex, your virtual receptionist. This is a demonstration line, so you can hear how I would handle calls for your business. You can speak to me just like any of your customers would if they were calling for a quote, a service call, or emergency service. How can I help you today?"
+    "Thank you for calling the Blue Caller Automation demo line. How can I help you?"
   );
 
   res.type("text/xml").send(twiml.toString());
@@ -3478,34 +4044,43 @@ app.post("/handle-input", async (req, res) => {
       );
     }
 
-    caller.callbackConfirmed = true;
+    if (isAffirmative(speech)) {
+      caller.callbackConfirmed = true;
 
-    if (caller.leadType === "quote") {
+      if (caller.leadType === "quote") {
+        caller.lastStep = "ask_address";
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          "What is the project address?"
+        );
+      }
+
+      if (caller.leadType === "demo") {
+        caller.lastStep = "ask_demo_email_offer";
+        return sayThenGather(
+          twiml,
+          res,
+          "/handle-input",
+          "Would you like to include an email address as well?"
+        );
+      }
+
       caller.lastStep = "ask_address";
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        "What is the project address?"
+        "What is the service address?"
       );
     }
 
-    if (caller.leadType === "demo") {
-      caller.lastStep = "ask_demo_email";
-      return sayThenGather(
-        twiml,
-        res,
-        "/handle-input",
-        "If you'd like, what is the best email address for the demo follow-up? You can also say skip."
-      );
-    }
-
-    caller.lastStep = "ask_address";
     return sayThenGather(
       twiml,
       res,
       "/handle-input",
-      "What is the service address?"
+      `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
     );
   }
 
@@ -3524,12 +4099,12 @@ app.post("/handle-input", async (req, res) => {
     }
 
     if (caller.leadType === "demo") {
-      caller.lastStep = "ask_demo_email";
+      caller.lastStep = "ask_demo_email_offer";
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        "If you'd like, what is the best email address for the demo follow-up? You can also say skip."
+        "Would you like to include an email address as well?"
       );
     }
 
@@ -3542,10 +4117,38 @@ app.post("/handle-input", async (req, res) => {
     );
   }
 
-  if (caller.lastStep === "ask_demo_email") {
-    if (!isSkipResponse(speech)) {
-      caller.demoEmail = cleanForSpeech(speech);
+  if (caller.lastStep === "ask_demo_email_offer") {
+    if (isAffirmative(speech)) {
+      caller.lastStep = "ask_demo_email_spelling";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Alright, go ahead and spell that out for me."
+      );
     }
+
+    if (isNegative(speech) || isSkipResponse(speech)) {
+      caller.lastStep = "ask_notes";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Before I submit this demo request, are there any notes or details you'd like me to add?"
+      );
+    }
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Would you like to include an email address as well?"
+    );
+  }
+
+  if (caller.lastStep === "ask_demo_email_spelling") {
+    caller.demoEmail = cleanForSpeech(speech);
+    caller.contactEmail = caller.demoEmail || caller.contactEmail || "";
     caller.lastStep = "ask_notes";
     return sayThenGather(
       twiml,
@@ -3563,7 +4166,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`
+      `Great, let me make sure I have this right. You said ${addressConfirmationText(caller.address)}. Is that correct?`
     );
   }
 
@@ -3587,7 +4190,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`
+      `Great, let me make sure I have this right. You said ${addressConfirmationText(caller.address)}. Is that correct?`
     );
   }
 
@@ -3606,12 +4209,25 @@ app.post("/handle-input", async (req, res) => {
     caller.leadType = "quote";
     caller.status = "quote_request";
     caller.timeline = cleanForSpeech(speech);
+    caller.lastStep = "ask_project_scope";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Can you give me a quick idea of what all you'd like done?"
+    );
+  }
+
+  if (caller.lastStep === "ask_project_scope") {
+    caller.leadType = "quote";
+    caller.status = "quote_request";
+    caller.projectScope = cleanForSpeech(speech);
     caller.lastStep = "ask_proposal_deadline";
     return sayThenGather(
       twiml,
       res,
       "/handle-input",
-      "Do you have a deadline for the proposal or estimate?"
+      "Is there a deadline you're working with for the estimate or proposal?"
     );
   }
 
@@ -3642,6 +4258,27 @@ app.post("/handle-input", async (req, res) => {
 
     const t = normalizedText(speech);
 
+    if (isFirstAvailableAcceptance(speech) || isAffirmative(speech)) {
+      caller.requestedDate = "";
+      caller.requestedExactTime = "";
+      caller.requestedTimePreference = "anytime";
+      caller.pendingAvailabilityQuery = "first available";
+      caller.lastStep = "waiting_for_availability_lookup";
+      startBackgroundAvailabilityLookup(caller, {
+        requestedDate: "",
+        requestedExactTime: "",
+        requestedTimePreference: "anytime",
+        rawQuery: "first available"
+      });
+
+      return sayThenRedirect(
+        twiml,
+        res,
+        nextCalendarCheckPrompt(caller),
+        "/perform-availability-check"
+      );
+    }
+
     if (
       t.includes("schedule") ||
       t.includes("book") ||
@@ -3671,7 +4308,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        "Alright. Someone from the office will call you to arrange the next available time. Before I submit this, is there anything else you'd like me to note for the technician?"
+        "Alright. Someone from the office will call you to arrange the next available time. Is there anything else you'd like me to note for the technician?"
       );
     }
 
@@ -3684,8 +4321,17 @@ app.post("/handle-input", async (req, res) => {
   }
 
   if (caller.lastStep === "confirm_first_available") {
+    if (isRepeatAvailabilityRequest(speech)) {
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        buildCallbackOfferPrompt(caller, { repeatLeadIn: "Sure." })
+      );
+    }
+
     const alternateAvailabilityHandled = handleAvailabilityLookup(twiml, res, caller, speech, {
-      existingDate: caller.requestedDate || caller.pendingOfferedDate || "",
+      existingDate: caller.pendingOfferedDate || caller.requestedDate || "",
       existingTimePreference: caller.requestedTimePreference || "",
       existingTime: caller.pendingOfferedTime || "",
       allowFlexibleDateRequest: true
@@ -3704,7 +4350,7 @@ app.post("/handle-input", async (req, res) => {
         twiml,
         res,
         "/handle-input",
-        `Alright. I've got your callback set for ${caller.appointmentDate} at ${caller.appointmentTime}. Before I submit this, is there anything else you'd like me to note for the technician?`
+        `Okay, I have you scheduled for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Is there anything else you'd like me to note for the technician?`
       );
     }
 
@@ -3727,7 +4373,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Would that callback time work for you? You can also ask for another time."
+      "I can repeat that, or you can ask for another time if you'd like."
     );
   }
 
@@ -3850,36 +4496,46 @@ app.post("/handle-input", async (req, res) => {
       caller.notes = cleanForSpeech(speech);
     }
 
-    let recap = "";
-
-    if (caller.emergencyAlert) {
-      recap = `Perfect. I am marking this as an emergency for ${caller.issueSummary}, and I am submitting it for review now. Someone from our service team will contact you shortly.`;
-    } else if (caller.leadType === "quote") {
-      recap = `Perfect. I'm submitting your quote request for ${caller.projectType || "this project"} now, and someone from the office will contact you shortly.`;
-    } else if (caller.leadType === "demo") {
-      recap = "Perfect. I'm submitting your demo request now, and someone from the office will contact you shortly.";
-    } else if (caller.status === "scheduled") {
-      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your requested callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will contact you if anything else is needed.`;
-    } else if (caller.status === "callback_requested" && caller.appointmentDate && caller.appointmentTime) {
-      recap = `Perfect. I'm submitting your service request for ${caller.issueSummary} with your callback preference for ${caller.appointmentDate} and ${caller.appointmentTime.toLowerCase()}. Someone from the office will reach out to confirm the exact callback time.`;
-    } else {
-      recap = `Perfect. I'm submitting your service call for ${caller.issueSummary} now, and someone from the office will contact you shortly to go over this and get you scheduled.`;
+    if (caller.leadType === "quote") {
+      caller.lastStep = "ask_quote_email_offer";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Would you like to include an email address with this quote request as well?"
+      );
     }
 
-    addSpeechToResponse(twiml, recap);
+    return sendLeadRecapAndContinue(twiml, res, caller);
+  }
 
-    sendLeadToMake(caller);
-    sendBookingToMake(caller);
+  if (caller.lastStep === "ask_quote_email_offer") {
+    if (isAffirmative(speech)) {
+      caller.lastStep = "ask_quote_email_spelling";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Alright, go ahead and spell that out for me."
+      );
+    }
 
-    caller.lastStep = "final_question";
-    twiml.pause({ length: 1 });
+    if (isNegative(speech) || isSkipResponse(speech)) {
+      caller.lastStep = "final_question";
+      return sendLeadRecapAndContinue(twiml, res, caller);
+    }
 
     return sayThenGather(
       twiml,
       res,
       "/handle-input",
-      postSubmitFollowupPrompt(caller)
+      "Would you like to include an email address with this quote request as well?"
     );
+  }
+
+  if (caller.lastStep === "ask_quote_email_spelling") {
+    caller.contactEmail = cleanForSpeech(speech);
+    return sendLeadRecapAndContinue(twiml, res, caller);
   }
 
   if (caller.lastStep === "final_question") {
@@ -3900,7 +4556,7 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          "Before I submit that, is the information you gave me during the demo the best contact information for you?"
+          "Okay, should I use the contact information you already gave me?"
         );
       }
 
@@ -3909,14 +4565,14 @@ app.post("/handle-input", async (req, res) => {
           twiml,
           res,
           "/handle-input",
-          "If you'd like, I can have someone from our team contact you to discuss how this could work for your company. Just let me know if you'd like someone to call you."
+          "Would you like me to have one of our team members call you to discuss how this could help your company?"
         );
       }
     }
 
     const goodbye = caller.emergencyAlert
       ? "Thank you for calling. Take care."
-      : "Perfect. Thank you for calling, and have a great day.";
+      : (caller.firstName ? `Alright, ${caller.firstName}, you're all set. Thank you for calling.` : "Alright, you're all set. Thank you for calling.");
 
     addSpeechToResponse(twiml, goodbye);
     twiml.hangup();
@@ -3928,13 +4584,23 @@ app.post("/handle-input", async (req, res) => {
       caller.demoFollowupContactName = caller.fullName || "";
       caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
       caller.demoFollowupEmail = caller.demoEmail || "";
-      caller.lastStep = "ask_demo_followup_email_optional";
 
+      if (caller.demoFollowupEmail) {
+        sendDemoFollowupToMake(caller);
+        addSpeechToResponse(
+          twiml,
+          "Okay, I'll have someone from our team reach out using that contact information. Thank you for calling."
+        );
+        twiml.hangup();
+        return res.type("text/xml").send(twiml.toString());
+      }
+
+      caller.lastStep = "ask_demo_followup_email_offer";
       return sayThenGather(
         twiml,
         res,
         "/handle-input",
-        "Perfect. If you'd like, what is the best email address for us to use regarding this demo? You can also say skip."
+        "Would you like to include an email address as well?"
       );
     }
 
@@ -3952,7 +4618,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Before I submit that, is the information you gave me during the demo the best contact information for you? Just let me know whether you want me to use that information or give me different contact details."
+      "Okay, should I use the contact information you already gave me?"
     );
   }
 
@@ -3981,26 +4647,52 @@ app.post("/handle-input", async (req, res) => {
 
   if (caller.lastStep === "ask_demo_followup_phone") {
     caller.demoFollowupCallbackNumber = cleanForSpeech(speech);
-    caller.lastStep = "ask_demo_followup_email_optional";
+    caller.lastStep = "ask_demo_followup_email_offer";
 
     return sayThenGather(
       twiml,
       res,
       "/handle-input",
-      "If you'd like, what is the best email address for us to use regarding this demo? You can also say skip."
+      "Would you like to include an email address as well?"
     );
   }
 
-  if (caller.lastStep === "ask_demo_followup_email_optional") {
-    if (!isSkipResponse(speech)) {
-      caller.demoFollowupEmail = cleanForSpeech(speech);
+  if (caller.lastStep === "ask_demo_followup_email_offer") {
+    if (isAffirmative(speech)) {
+      caller.lastStep = "ask_demo_followup_email_spelling";
+      return sayThenGather(
+        twiml,
+        res,
+        "/handle-input",
+        "Alright, go ahead and spell that out for me."
+      );
     }
 
+    if (isNegative(speech) || isSkipResponse(speech)) {
+      sendDemoFollowupToMake(caller);
+      addSpeechToResponse(
+        twiml,
+        "Okay, I'll have someone from our team reach out using that contact information. Thank you for calling."
+      );
+      twiml.hangup();
+      return res.type("text/xml").send(twiml.toString());
+    }
+
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      "Would you like to include an email address as well?"
+    );
+  }
+
+  if (caller.lastStep === "ask_demo_followup_email_spelling") {
+    caller.demoFollowupEmail = cleanForSpeech(speech);
     sendDemoFollowupToMake(caller);
 
     addSpeechToResponse(
       twiml,
-      "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling, and have a great day."
+      "Okay, I'll have someone from our team reach out using that contact information. Thank you for calling."
     );
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
