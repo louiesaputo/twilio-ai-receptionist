@@ -1,6 +1,6 @@
 
 /*************************************************
- VERSION: V106-COST-EFFICIENCY-PASS
+ VERSION: V107-COST-BASELINE-REFRESH
  DATE: 2026-04-03
 
  NOTES:
@@ -42,10 +42,13 @@
  - Adds lower-cost gather profiles so short confirmations do not keep long listening windows open
  - Disables the post-submit follow-up gather by default to cut one paid speech turn from completed calls
  - Uses stable hashed TTS prompt URLs for better audio cache reuse
- - Trims the demo opening slightly to reduce test-call duration
+ - Uses a very short demo opening to reduce test-call duration
+ - Starts ElevenLabs audio generation as soon as TwiML is built to reduce dead air before playback
+ - Reuses in-flight TTS fetches so dynamic prompts do not trigger duplicate audio generation
+ - Combines the final recap and closing into one spoken prompt when post-submit follow-up is disabled
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V106 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V107 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -57,7 +60,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V106-COST-EFFICIENCY-PASS";
+const APP_VERSION = "VOICE-FLOW-V107-COST-BASELINE-REFRESH";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -80,12 +83,12 @@ const GATHER_PROFILES = {
   },
   short: {
     speechTimeout: "auto",
-    timeout: 3,
+    timeout: 2,
     actionOnEmptyResult: true
   },
   standard: {
     speechTimeout: "auto",
-    timeout: 3,
+    timeout: 2,
     actionOnEmptyResult: true
   },
   long: {
@@ -102,6 +105,7 @@ app.use(express.static("public"));
 const callerStore = {};
 const ttsPromptStore = new Map();
 const ttsAudioCache = new Map();
+const ttsFetchPromises = new Map();
 
 const AMBIGUOUS_FIRST_NAMES = new Set([
   "john", "jon", "johnny", "jonny",
@@ -755,6 +759,30 @@ function setCachedTtsAudio(text, audioBuffer, contentType) {
   });
 }
 
+function warmTtsAudio(text) {
+  const safeText = cleanForSpeech(text || "");
+  if (!safeText || !isElevenLabsReady()) return null;
+
+  const cacheKey = getTtsCacheKey(safeText);
+  const cached = getCachedTtsAudio(safeText);
+  if (cached) return Promise.resolve(cached);
+
+  const inFlight = ttsFetchPromises.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const fetchPromise = fetchElevenLabsAudio(safeText)
+    .then(({ audioBuffer, contentType }) => {
+      setCachedTtsAudio(safeText, audioBuffer, contentType);
+      return getCachedTtsAudio(safeText);
+    })
+    .finally(() => {
+      ttsFetchPromises.delete(cacheKey);
+    });
+
+  ttsFetchPromises.set(cacheKey, fetchPromise);
+  return fetchPromise;
+}
+
 function fetchElevenLabsAudio(text) {
   return new Promise((resolve, reject) => {
     const safeText = cleanForSpeech(text || "");
@@ -820,6 +848,7 @@ function addSpeechToResponse(target, prompt) {
 
   if (isElevenLabsReady()) {
     const promptId = rememberTtsPrompt(safePrompt);
+    warmTtsAudio(safePrompt);
     target.play(`${getPublicBaseUrl()}/tts/${promptId}.mp3`);
     return;
   }
@@ -2952,15 +2981,17 @@ function buildClosingPrompt(caller) {
 }
 
 function sendLeadRecapAndContinue(twiml, res, caller) {
-  addSpeechToResponse(twiml, buildLeadRecap(caller));
   sendLeadToMake(caller);
   sendBookingToMake(caller);
 
   if (!POST_SUBMIT_FOLLOWUP_ENABLED) {
-    addSpeechToResponse(twiml, buildClosingPrompt(caller));
+    const combinedPrompt = `${buildLeadRecap(caller)} ${buildClosingPrompt(caller)}`.replace(/\s+/g, " ").trim();
+    addSpeechToResponse(twiml, combinedPrompt);
     twiml.hangup();
     return res.type("text/xml").send(twiml.toString());
   }
+
+  addSpeechToResponse(twiml, buildLeadRecap(caller));
 
   caller.lastStep = "final_question";
 
@@ -3530,6 +3561,13 @@ app.get("/tts/:promptId.mp3", async (req, res) => {
       res.set("Content-Type", cached.contentType || "audio/mpeg");
       res.set("Cache-Control", "public, max-age=86400, immutable");
       return res.send(cached.audioBuffer);
+    }
+
+    const warmed = await warmTtsAudio(promptEntry.text);
+    if (warmed && warmed.audioBuffer) {
+      res.set("Content-Type", warmed.contentType || "audio/mpeg");
+      res.set("Cache-Control", "public, max-age=86400, immutable");
+      return res.send(warmed.audioBuffer);
     }
 
     const { audioBuffer, contentType } = await fetchElevenLabsAudio(promptEntry.text);
