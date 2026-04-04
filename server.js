@@ -1,5 +1,5 @@
 /*************************************************
- VERSION: V107-COST-BASELINE-REFRESH
+ VERSION: V108-STABLE-BASELINE-COST-BASELINE-REFRESH
  DATE: 2026-04-03
 
  NOTES:
@@ -47,7 +47,7 @@
  - Combines the final recap and closing into one spoken prompt when post-submit follow-up is disabled
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V107 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V108 STABLE BASELINE LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -59,7 +59,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V107-COST-BASELINE-REFRESH";
+const APP_VERSION = "VOICE-FLOW-V108-STABLE-BASELINE-COST-BASELINE-REFRESH";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -77,22 +77,22 @@ const ELEVENLABS_USE_SPEAKER_BOOST = String(process.env.ELEVENLABS_USE_SPEAKER_B
 const GATHER_PROFILES = {
   confirm: {
     speechTimeout: "auto",
-    timeout: 2,
+    timeout: 3,
     actionOnEmptyResult: true
   },
   short: {
     speechTimeout: "auto",
-    timeout: 2,
+    timeout: 4,
     actionOnEmptyResult: true
   },
   standard: {
     speechTimeout: "auto",
-    timeout: 2,
+    timeout: 5,
     actionOnEmptyResult: true
   },
   long: {
     speechTimeout: "auto",
-    timeout: 4,
+    timeout: 6,
     actionOnEmptyResult: true
   }
 };
@@ -3267,18 +3267,6 @@ function inferGatherProfile(prompt) {
     return "long";
   }
 
-  if (containsAny(t, [
-    "is there anything else you'd like me to note",
-    "is there anything else you'd like me to include",
-    "are there any notes or details you'd like me to add",
-    "do you have a deadline",
-    "deadline you’re working with",
-    "deadline you're working with",
-    "what is the best email address"
-  ])) {
-    return "short";
-  }
-
   return "standard";
 }
 
@@ -3423,6 +3411,50 @@ function moveToNameOrPhoneStep(twiml, res, caller, options = {}) {
     "/handle-input",
     normalUnknownNamePrompt ||
       `${situationalLeadIn}I'm sorry you're dealing with ${caller.issueSummary}. I'd be more than happy to help you with that. Can I start by getting your full name, please?`
+  );
+}
+
+
+function moveToStandardServiceAfterLeakDecline(twiml, res, caller) {
+  caller.emergencyAlert = false;
+  caller.urgency = "normal";
+  caller.leadType = "service";
+  caller.status = "new_lead";
+  caller.leakNeedsEmergencyChoice = false;
+  caller.emergencyChoicePrompt = "";
+
+  if (caller.firstName && caller.fullName && !hasFullName(caller.fullName)) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "ask_last_name");
+    if (spellingPrompt) return spellingPrompt;
+
+    caller.lastStep = "ask_last_name";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
+    );
+  }
+
+  if (caller.fullName && caller.firstName) {
+    const spellingPrompt = maybeAskFirstNameSpelling(twiml, res, caller, "confirm_phone");
+    if (spellingPrompt) return spellingPrompt;
+
+    caller.lastStep = "confirm_phone";
+    return sayThenGather(
+      twiml,
+      res,
+      "/handle-input",
+      `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+    );
+  }
+
+  caller.lastStep = "ask_name";
+  return sayThenGather(
+    twiml,
+    res,
+    "/handle-input",
+    "Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?"
   );
 }
 
@@ -3946,18 +3978,7 @@ app.post("/handle-input", async (req, res) => {
     }
 
     if (isNegative(normalizedEmergencyReply)) {
-      caller.emergencyAlert = false;
-      caller.urgency = "normal";
-      caller.leadType = "service";
-      caller.status = "new_lead";
-      caller.leakNeedsEmergencyChoice = false;
-      caller.emergencyChoicePrompt = "";
-
-      return moveToNameOrPhoneStep(twiml, res, caller, {
-        normalKnownNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`,
-        normalUnknownNamePrompt: "Alright. I've got this as a standard service request. I just need to gather a few details so someone from the office can reach out and get this scheduled for you. Can I start with your full name?",
-        askLastNamePrompt: `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
-      });
+      return moveToStandardServiceAfterLeakDecline(twiml, res, caller);
     }
 
     return sayThenGather(
