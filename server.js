@@ -1,5 +1,6 @@
+
 /*************************************************
- VERSION: V103-VOICE-EMERGENCY-CORRECTION
+ VERSION: V104-NATURAL-CONFIRMATION-HANDLING
  DATE: 2026-04-03
 
  NOTES:
@@ -37,9 +38,10 @@
  - Adds brief situational acknowledgments before returning to task
  - Restores more natural, warmer ElevenLabs delivery after V102 became too flat
  - Strengthens emergency detection for popped/broken main-line and severe yard-leak wording
+ - Substantially broadens natural confirmation phrases like yes please, no thank you, yeah let’s do that, and that works
 *************************************************/
 
-console.log("🔥 BLUE CALLER SERVER V103 LOADED 🔥");
+console.log("🔥 BLUE CALLER SERVER V104 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -51,7 +53,7 @@ const app = express();
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "VOICE-FLOW-V103-VOICE-EMERGENCY-CORRECTION";
+const APP_VERSION = "VOICE-FLOW-V104-NATURAL-CONFIRMATION-HANDLING";
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
@@ -106,6 +108,203 @@ const CALENDAR_CHECK_FILLERS = [
   "Sure, I'll take a look and see what we have.",
   "Give me just a moment while I check what's open."
 ];
+
+const AFFIRMATIVE_EXACT_PHRASES = new Set([
+  "yes",
+  "yes please",
+  "yeah",
+  "yeah please",
+  "yep",
+  "yep please",
+  "yup",
+  "sure",
+  "sure thing",
+  "sure please",
+  "okay",
+  "ok",
+  "okay please",
+  "ok please",
+  "alright",
+  "all right",
+  "absolutely",
+  "definitely",
+  "certainly",
+  "of course",
+  "correct",
+  "right",
+  "thats right",
+  "that is right",
+  "thats correct",
+  "that is correct",
+  "please do",
+  "go ahead",
+  "do that",
+  "book it",
+  "schedule it",
+  "lets do that",
+  "let s do that",
+  "lets go with that",
+  "let s go with that",
+  "sounds good",
+  "sounds great",
+  "that sounds good",
+  "that sounds great",
+  "that works",
+  "that will work",
+  "thatll work",
+  "works for me",
+  "that works for me",
+  "that is fine",
+  "thats fine",
+  "that is okay",
+  "thats okay",
+  "that is perfect",
+  "thats perfect",
+  "that should work",
+  "that should be fine",
+  "ill take it",
+  "i will take it",
+  "ill take that",
+  "i will take that",
+  "i think so",
+  "i guess so",
+  "probably",
+  "mm hmm",
+  "mmhmm",
+  "mhm",
+  "uh huh",
+  "uhhuh"
+]);
+
+const AFFIRMATIVE_CONTAINS_PHRASES = [
+  "yeah lets do that",
+  "yeah let s do that",
+  "yes lets do that",
+  "yes let s do that",
+  "yeah go ahead",
+  "yes go ahead",
+  "sure go ahead",
+  "okay go ahead",
+  "ok go ahead",
+  "that appointment works",
+  "that time works",
+  "that will be fine",
+  "this works for me",
+  "go ahead with that",
+  "go ahead and do that",
+  "please go ahead",
+  "please do that",
+  "mark this as an emergency",
+  "make this an emergency",
+  "this is an emergency",
+  "it is an emergency",
+  "its an emergency",
+  "as soon as possible",
+  "right away",
+  "immediately",
+  "have someone call me",
+  "have somebody call me",
+  "someone can call me",
+  "somebody can call me"
+];
+
+const NEGATIVE_EXACT_PHRASES = new Set([
+  "no",
+  "no thanks",
+  "no thank you",
+  "nope",
+  "nah",
+  "negative",
+  "not now",
+  "not right now",
+  "not really",
+  "dont",
+  "do not",
+  "pass",
+  "skip",
+  "not yet",
+  "rather not",
+  "id rather not",
+  "i would rather not",
+  "maybe not",
+  "mm mm",
+  "mmmm"
+]);
+
+const NEGATIVE_CONTAINS_PHRASES = [
+  "not an emergency",
+  "not emergency",
+  "non emergency",
+  "nonemergency",
+  "not urgent",
+  "non urgent",
+  "nonurgent",
+  "standard service",
+  "standard call",
+  "standard appointment",
+  "standard request",
+  "standard service request",
+  "regular service",
+  "regular appointment",
+  "normal service",
+  "normal appointment",
+  "during business hours",
+  "normal business hours",
+  "business hours is fine",
+  "business hours are fine",
+  "can wait",
+  "no rush",
+  "that wont work",
+  "that won't work",
+  "that does not work",
+  "that doesnt work",
+  "that doesn't work",
+  "something else",
+  "another time",
+  "different time",
+  "wrong number",
+  "different number",
+  "new number",
+  "not that number",
+  "thats not right",
+  "that is not right",
+  "incorrect"
+];
+
+const AMBIGUOUS_CONFIRMATION_PHRASES = [
+  "not unless",
+  "depends",
+  "maybe",
+  "im not sure",
+  "i am not sure",
+  "not sure",
+  "i dont know",
+  "i do not know",
+  "hold on",
+  "hang on"
+];
+
+const AFFIRMATIVE_LEAD_TOKENS = new Set([
+  "yes",
+  "yeah",
+  "yep",
+  "yup",
+  "sure",
+  "okay",
+  "ok",
+  "alright",
+  "absolutely",
+  "definitely",
+  "correct",
+  "right"
+]);
+
+const NEGATIVE_LEAD_TOKENS = new Set([
+  "no",
+  "nope",
+  "nah",
+  "negative"
+]);
 
 function getOrCreateCaller(phone) {
   if (!callerStore[phone]) {
@@ -638,7 +837,7 @@ function numberUnder100ToWords(num) {
 
 function numberToWordsStandard(num) {
   const n = Number(num);
-  if (!Number.isFinite(n) || n < 0) return String(num || "");
+  if (!Number.isFinite(n) || n < 0) return String(num);
   if (n < 100) return numberUnder100ToWords(n);
   if (n < 1000) {
     const hundreds = Math.floor(n / 100);
@@ -1118,129 +1317,135 @@ function formatPhoneNumberForSpeech(phone) {
   return digits.split("").join(" ");
 }
 
-function isAffirmative(text) {
-  const t = normalizeIntentText(text);
+function getConfirmationIntent(text) {
+  let t = normalizeIntentText(text);
+  if (!t) return "unknown";
 
-  if (containsAny(t, [
-    "not an emergency",
-    "not emergency",
-    "non emergency",
-    "nonemergency",
-    "not urgent",
-    "non urgent",
-    "nonurgent"
-  ])) {
-    return false;
+  const rawLower = normalizedText(text || "");
+
+  if (
+    t.includes("yeah no") ||
+    t.includes("yes no") ||
+    t.includes("no yeah")
+  ) {
+    if (
+      containsAny(t, [
+        "that works",
+        "that will work",
+        "thatll work",
+        "sounds good",
+        "sounds great",
+        "go ahead",
+        "please do",
+        "lets do that",
+        "let s do that",
+        "mark this as an emergency"
+      ])
+    ) {
+      return "affirmative";
+    }
+    return "negative";
   }
 
-  return (
-    t === "yes" ||
-    t === "yeah" ||
-    t === "yep" ||
-    t === "yup" ||
-    t === "sure" ||
-    t === "correct" ||
-    t === "right" ||
-    t === "ok" ||
-    t === "okay" ||
-    t === "absolutely" ||
-    t === "definitely" ||
-    t === "please do" ||
-    t === "go ahead" ||
-    t === "do that" ||
-    t === "sounds good" ||
-    t === "sounds great" ||
-    t === "that works" ||
-    t === "that will work" ||
-    t === "thatll work" ||
-    t === "works for me" ||
-    t === "that works for me" ||
-    t === "that is fine" ||
-    t === "thats fine" ||
-    t === "that is okay" ||
-    t === "thats okay" ||
-    t === "that is perfect" ||
-    t === "thats perfect" ||
-    t === "that should work" ||
-    t === "that should be fine" ||
-    t === "yes please" ||
-    t === "yeah please" ||
-    t === "yep please" ||
-    t === "sure please" ||
-    t === "okay please" ||
-    t === "ok please" ||
-    t === "ill take it" ||
-    t === "i will take it" ||
-    t === "ill take that" ||
-    t === "i will take that" ||
-    t === "book it" ||
-    t === "schedule it" ||
-    t === "lets do that" ||
-    t === "let s do that" ||
-    t.includes("that appointment works") ||
-    t.includes("that time works") ||
-    t.includes("that will be fine") ||
-    t.includes("that sounds good") ||
-    t.includes("that sounds great") ||
-    t.includes("perfect") ||
-    t.includes("mark this as an emergency") ||
-    t.includes("make this an emergency") ||
-    t.includes("this is an emergency") ||
-    t.includes("its an emergency") ||
-    t.includes("it is an emergency") ||
-    t.includes("as soon as possible") ||
-    t.includes("right away") ||
-    t.includes("immediately")
-  );
+  if (AFFIRMATIVE_EXACT_PHRASES.has(t)) return "affirmative";
+  if (NEGATIVE_EXACT_PHRASES.has(t)) return "negative";
+
+  if (containsAny(t, NEGATIVE_CONTAINS_PHRASES)) return "negative";
+  if (containsAny(t, AFFIRMATIVE_CONTAINS_PHRASES)) return "affirmative";
+
+  if (/\bno thank(s| you)?\b/.test(rawLower)) return "negative";
+  if (/\byes please\b/.test(rawLower)) return "affirmative";
+  if (/\byeah please\b/.test(rawLower)) return "affirmative";
+  if (/\byep please\b/.test(rawLower)) return "affirmative";
+
+  if (containsAny(t, AMBIGUOUS_CONFIRMATION_PHRASES)) {
+    return "unknown";
+  }
+
+  const tokens = t.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return "unknown";
+
+  const firstToken = tokens[0];
+  const firstTwo = tokens.slice(0, 2).join(" ");
+  const firstThree = tokens.slice(0, 3).join(" ");
+
+  if (
+    firstThree === "yes please go" ||
+    firstTwo === "go ahead" ||
+    firstTwo === "please do" ||
+    firstTwo === "sounds good" ||
+    firstTwo === "sounds great" ||
+    firstTwo === "mm hmm" ||
+    firstTwo === "uh huh"
+  ) {
+    return "affirmative";
+  }
+
+  if (
+    firstTwo === "no thanks" ||
+    firstThree === "no thank you" ||
+    firstTwo === "not now" ||
+    firstTwo === "not really" ||
+    firstTwo === "not yet"
+  ) {
+    return "negative";
+  }
+
+  if (NEGATIVE_LEAD_TOKENS.has(firstToken)) return "negative";
+  if (AFFIRMATIVE_LEAD_TOKENS.has(firstToken)) return "affirmative";
+
+  if (t.startsWith("i think so") || t.startsWith("i guess so")) return "affirmative";
+  if (t.startsWith("id rather not") || t.startsWith("i would rather not")) return "negative";
+
+  if (
+    containsAny(t, [
+      "works for me",
+      "that works for me",
+      "that should work",
+      "that should be fine",
+      "that is fine",
+      "thats fine",
+      "that is okay",
+      "thats okay",
+      "that is perfect",
+      "thats perfect",
+      "perfect",
+      "book it",
+      "schedule it"
+    ])
+  ) {
+    return "affirmative";
+  }
+
+  if (
+    containsAny(t, [
+      "wrong number",
+      "different number",
+      "new number",
+      "not that number",
+      "another time",
+      "different time",
+      "something else"
+    ])
+  ) {
+    return "negative";
+  }
+
+  return "unknown";
+}
+
+function isAffirmative(text) {
+  return getConfirmationIntent(text) === "affirmative";
 }
 
 function isNegative(text) {
-  const t = normalizeIntentText(text);
-
-  return (
-    t === "no" ||
-    t === "nope" ||
-    t === "nah" ||
-    t === "no thanks" ||
-    t === "no thank you" ||
-    t === "not now" ||
-    t === "not really" ||
-    t === "dont" ||
-    t === "do not" ||
-    t === "pass" ||
-    t === "skip" ||
-    t.includes("not an emergency") ||
-    t.includes("not emergency") ||
-    t.includes("non emergency") ||
-    t.includes("nonemergency") ||
-    t.includes("not urgent") ||
-    t.includes("non urgent") ||
-    t.includes("nonurgent") ||
-    t.includes("standard") ||
-    t.includes("normal") ||
-    t.includes("regular") ||
-    t.includes("during business hours") ||
-    t.includes("normal business hours") ||
-    t.includes("business hours is fine") ||
-    t.includes("can wait") ||
-    t.includes("no rush") ||
-    t.includes("that wont work") ||
-    t.includes("that won't work") ||
-    t.includes("that does not work") ||
-    t.includes("that doesnt work") ||
-    t.includes("that doesn't work") ||
-    t.includes("something else") ||
-    t.includes("another time") ||
-    t.includes("different time")
-  );
+  return getConfirmationIntent(text) === "negative";
 }
 
 function isPhoneCorrection(text) {
   const t = normalizeIntentText(text);
   return (
-    t === "no" ||
-    t === "nope" ||
-    t === "nah" ||
+    isNegative(t) ||
     t.includes("wrong number") ||
     t.includes("different number") ||
     t.includes("new number") ||
@@ -1255,13 +1460,14 @@ function isSkipResponse(text) {
   const t = normalizeIntentText(text);
   return (
     t === "skip" ||
-    t === "no" ||
-    t === "nope" ||
-    t === "nah" ||
     t === "none" ||
     t === "not right now" ||
     t === "id rather skip that" ||
-    t === "i would rather skip that"
+    t === "i would rather skip that" ||
+    t === "you can skip that" ||
+    t === "lets skip that" ||
+    t === "let s skip that" ||
+    isNegative(t)
   );
 }
 
@@ -3155,7 +3361,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      (caller.emergencyChoicePrompt || "Do you want me to mark this as an emergency?") + " Please say yes or no."
+      (caller.emergencyChoicePrompt || "Do you want me to mark this as an emergency?") + " Just let me know if you would like me to mark it as an emergency or keep it as a standard service request."
     );
   }
 
@@ -3415,7 +3621,7 @@ app.post("/handle-input", async (req, res) => {
 
     const t = normalizedText(speech);
 
-    if (t === "no" || t === "nope" || t === "not really" || t === "not sure" || t.includes("no deadline")) {
+    if (isNegative(speech) || t === "not sure" || t.includes("no deadline")) {
       caller.proposalDeadline = "";
     } else {
       caller.proposalDeadline = cleanForSpeech(speech);
@@ -3746,7 +3952,7 @@ app.post("/handle-input", async (req, res) => {
       twiml,
       res,
       "/handle-input",
-      "Before I submit that, is the information you gave me during the demo the best contact information for you? Please say yes or no."
+      "Before I submit that, is the information you gave me during the demo the best contact information for you? Just let me know whether you want me to use that information or give me different contact details."
     );
   }
 
