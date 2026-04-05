@@ -1,11 +1,11 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V1
- DATE: 2026-04-04
+ CONVERSATIONRELAY BASELINE V3
+ DATE: 2026-04-05
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
  - Keeps Make.com lead, availability, and booking webhooks
- - Uses Twilio ConversationRelay + ElevenLabs for lower turn latency
+ - Uses Twilio ConversationRelay + Twilio-managed default ElevenLabs voice for lower turn latency
  - Preserves core service / emergency / quote / demo flows
  - Preserves address readback as street + city only
  - Preserves callback wording preferences where practical
@@ -19,10 +19,7 @@
  - TWILIO_ACCOUNT_SID
  - TWILIO_AUTH_TOKEN
  - PUBLIC_BASE_URL              (for the Twilio webhook + wss URL base)
- - ELEVENLABS_CONVERSATIONRELAY_VOICE
-   Example value:
-   NYC9WEgkq1u4jiqBseQ9-turbo_v2_5-1.0_0.75_0.8
-
+ 
  OPTIONAL ENV VARS:
  - PORT
  - MAKE_WEBHOOK_URL
@@ -31,7 +28,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V1 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V3 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -49,7 +46,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V1";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V3";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -422,17 +419,24 @@ function isAffirmative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent"])) return false;
-  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right"].includes(t)) return true;
+
+  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right", "fine"].includes(t)) return true;
+
+  if (/\bthat\s+(works|will work|ll work|should work)\b/.test(t)) return true;
+  if (/\bthat\s+(is|s)\s+(fine|okay|ok|good|great)\b/.test(t)) return true;
+  if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
+  if (/\bthat\s+(ll|will)\s+do\b/.test(t)) return true;
+  if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
+
   if (containsAny(t, [
-    "yes please", "yeah please", "that works", "thatll work", "that'll work",
-    "sounds good", "sounds great", "go ahead", "please do", "do that",
-    "lets do that", "let s do that", "book it", "schedule it", "book that",
-    "schedule that", "i'll take it", "ill take it", "i'll take that", "ill take that",
-    "mark this as an emergency", "make this an emergency", "this is an emergency",
-    "it is an emergency", "its an emergency", "yeah have someone call me",
-    "have someone call me", "have somebody call me", "that sounds good", "that sounds fine",
-    "that is fine", "thats fine", "that is okay", "thats okay", "whatever works"
+    "yes please", "yeah please", "sounds good", "sounds great", "sounds fine",
+    "lets do that", "let s do that", "mark this as an emergency", "make this an emergency",
+    "this is an emergency", "it is an emergency", "its an emergency",
+    "yeah have someone call me", "have someone call me", "have somebody call me",
+    "whatever works", "that sounds good", "that sounds fine", "that is fine", "thats fine",
+    "that s fine", "that is okay", "thats okay", "that s okay", "that is good", "that s good"
   ])) return true;
+
   return false;
 }
 
@@ -443,7 +447,8 @@ function isNegative(text) {
   return containsAny(t, [
     "no thanks", "no thank you", "not now", "not really", "dont", "do not",
     "not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent",
-    "standard service", "normal service", "regular service", "something else", "another time", "different time"
+    "standard service", "normal service", "regular service", "something else", "another time", "different time",
+    "that s all right", "thats all right", "that is all right", "that s alright", "thats alright", "that is alright"
   ]);
 }
 
@@ -712,6 +717,60 @@ function parseCallbackDateAndTimeToLocal(dateText, timeText) {
   return { startLocal, endLocal };
 }
 
+function nextPromptIndex(caller, key) {
+  const current = Number.isInteger(caller[key]) ? caller[key] : 0;
+  caller[key] = current + 1;
+  return current;
+}
+
+function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
+  const t = normalizedText(rawText || "");
+
+  const firstAvailablePrompts = [
+    "I already have the calendar up. Let me see what the first available is.",
+    "Let's see what the first available is.",
+    "Let me see what I have available first."
+  ];
+
+  const specificDatePrompts = [
+    "Alright, let me see if that date is available.",
+    "Let me see if that date is open.",
+    "I already have the calendar up. Let me see if that date is available."
+  ];
+
+  const alternatePrompts = [
+    "Let's see what else I have available.",
+    "Let me see what I have later that day.",
+    "Alright, let me see what else is open."
+  ];
+
+  const generalPrompts = [
+    "Let me see what's available.",
+    "I already have the calendar up. Let me see what's available.",
+    "Let me take a look and see what I have open."
+  ];
+
+  let options = generalPrompts;
+  if (mode === "first_available" || isFirstAvailableRequest(rawText)) options = firstAvailablePrompts;
+  else if (mode === "alternate" || isAlternateAvailabilityRequest(rawText)) options = alternatePrompts;
+  else if (mode === "specific_date" || extractDatePart(rawText)) options = specificDatePrompts;
+
+  const index = nextPromptIndex(caller, "calendarPromptIndex");
+  return options[index % options.length];
+}
+
+function buildCallbackOfferPrompt(caller, dateText, timeText) {
+  const phrase = spokenAvailabilityPhrase(dateText, timeText);
+  const variants = [
+    `I have ${phrase} available. Can I go ahead and schedule that callback for you?`,
+    `Alright, I have ${phrase} available. Would you like me to schedule that callback?`,
+    `I've got ${phrase} available. Can I go ahead and book that callback for you?`
+  ];
+
+  const index = nextPromptIndex(caller, "callbackOfferIndex");
+  return variants[index % variants.length];
+}
+
 function getOrCreateCaller(key) {
   if (!callerStore[key]) {
     callerStore[key] = {
@@ -752,6 +811,8 @@ function getOrCreateCaller(key) {
       demoFollowupContactName: "",
       demoFollowupCallbackNumber: "",
       demoFollowupEmail: "",
+      calendarPromptIndex: 0,
+      callbackOfferIndex: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -771,11 +832,22 @@ function sendText(ws, text, options = {}) {
   }));
 }
 
+function estimateSpeechDurationMs(text) {
+  const safe = cleanForSpeech(text || "");
+  if (!safe) return 0;
+
+  const commaCount = (safe.match(/[,;:]/g) || []).length;
+  const stopCount = (safe.match(/[.!?]/g) || []).length;
+  const estimated = 1800 + (safe.length * 72) + (commaCount * 180) + (stopCount * 320);
+
+  return Math.max(6500, Math.min(22000, estimated));
+}
+
 function closeSession(ws, text) {
   if (text) sendText(ws, text, { interruptible: false, preemptible: false });
   setTimeout(() => {
     try { ws.close(); } catch (err) {}
-  }, text ? 1200 : 0);
+  }, text ? estimateSpeechDurationMs(text) : 0);
 }
 
 function buildMakePayload(caller) {
@@ -1244,7 +1316,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery;
-        sendText(ws, "Give me just one second while I look at the calendar and see what I have available for you.");
+        sendText(ws, buildCalendarLookupPrompt(caller, text, isFirstAvailableRequest(text) ? "first_available" : "general"));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -1255,7 +1327,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         caller.lastStep = "confirm_first_available";
-        sendText(ws, `Okay, yeah, I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} available. Can I go ahead and schedule that callback for you?`);
+        sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
 
@@ -1277,7 +1349,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || cleanForSpeech(text);
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
-        sendText(ws, "Give me just one second while I look at the calendar and see what I have available for you.");
+        sendText(ws, buildCalendarLookupPrompt(caller, text, extractDatePart(text) ? "specific_date" : "general"));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -1288,7 +1360,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         caller.lastStep = "confirm_first_available";
-        sendText(ws, `Okay, yeah, I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} available. Can I go ahead and schedule that callback for you?`);
+        sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
       caller.appointmentDate = cleanForSpeech(text);
@@ -1303,7 +1375,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || caller.appointmentDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
-        sendText(ws, "Give me just one second while I look at the calendar and see what I have available for you.");
+        sendText(ws, buildCalendarLookupPrompt(caller, text, isAlternateAvailabilityRequest(text) ? "alternate" : (extractDatePart(text) ? "specific_date" : "general")));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -1315,7 +1387,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         caller.lastStep = "confirm_first_available";
-        sendText(ws, `Okay, yeah, I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} available. Can I go ahead and schedule that callback for you?`);
+        sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
       caller.appointmentTime = cleanForSpeech(text);
@@ -1327,7 +1399,7 @@ async function handlePrompt(ws, caller, speech) {
 
     case "confirm_first_available": {
       if (isRepeatTimeRequest(text)) {
-        sendText(ws, `Sure. I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} available. Can I go ahead and schedule that callback for you?`);
+        sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
 
@@ -1336,7 +1408,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || caller.pendingOfferedDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
-        sendText(ws, "Give me just one second while I look at the calendar and see what I have available for you.");
+        sendText(ws, buildCalendarLookupPrompt(caller, text, "alternate"));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           sendText(ws, "I'm sorry, I wasn't able to pull another option right now. Someone from the office will reach out to confirm the exact callback time.");
@@ -1367,7 +1439,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      sendText(ws, `I have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} available. Can I go ahead and schedule that callback for you?`);
+      sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
       return;
     }
 
