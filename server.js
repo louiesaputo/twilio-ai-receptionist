@@ -1,5 +1,5 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V3
+ CONVERSATIONRELAY BASELINE V4
  DATE: 2026-04-05
 
  PURPOSE:
@@ -28,7 +28,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V3 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V4 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -46,7 +46,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V3";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V4";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -420,21 +420,24 @@ function isAffirmative(text) {
   if (!t) return false;
   if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent"])) return false;
 
-  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right", "fine"].includes(t)) return true;
+  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right", "fine", "works"].includes(t)) return true;
 
-  if (/\bthat\s+(works|will work|ll work|should work)\b/.test(t)) return true;
-  if (/\bthat\s+(is|s)\s+(fine|okay|ok|good|great)\b/.test(t)) return true;
+  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is alright|is all right)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
-  if (/\bthat\s+(ll|will)\s+do\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
 
   if (containsAny(t, [
-    "yes please", "yeah please", "sounds good", "sounds great", "sounds fine",
+    "yes please", "yeah please", "sounds good", "sounds great", "sounds fine", "sounds okay",
     "lets do that", "let s do that", "mark this as an emergency", "make this an emergency",
     "this is an emergency", "it is an emergency", "its an emergency",
     "yeah have someone call me", "have someone call me", "have somebody call me",
-    "whatever works", "that sounds good", "that sounds fine", "that is fine", "thats fine",
-    "that s fine", "that is okay", "thats okay", "that s okay", "that is good", "that s good"
+    "whatever works", "that sounds good", "that sounds fine", "that sounds okay",
+    "that is fine", "thats fine", "that s fine", "that is okay", "thats okay", "that s okay",
+    "that is good", "that s good", "that is alright", "thats alright", "that s alright",
+    "that is all right", "thats all right", "that s all right", "thatll work", "that ll work",
+    "thatll do", "that ll do", "fine with me", "works for me", "go ahead and do that",
+    "go ahead and book it", "go ahead and schedule it", "ill take that", "i ll take that",
+    "ill take it", "i ll take it", "that should be okay", "that should be fine"
   ])) return true;
 
   return false;
@@ -808,6 +811,7 @@ function getOrCreateCaller(key) {
       pendingPromptText: "",
       promptBuffer: "",
       demoFollowupRequested: false,
+      demoFollowupSent: false,
       demoFollowupContactName: "",
       demoFollowupCallbackNumber: "",
       demoFollowupEmail: "",
@@ -838,9 +842,9 @@ function estimateSpeechDurationMs(text) {
 
   const commaCount = (safe.match(/[,;:]/g) || []).length;
   const stopCount = (safe.match(/[.!?]/g) || []).length;
-  const estimated = 1800 + (safe.length * 72) + (commaCount * 180) + (stopCount * 320);
+  const estimated = 3800 + (safe.length * 88) + (commaCount * 260) + (stopCount * 420);
 
-  return Math.max(6500, Math.min(22000, estimated));
+  return Math.max(14000, Math.min(32000, estimated));
 }
 
 function closeSession(ws, text) {
@@ -957,6 +961,51 @@ async function sendBookingToMake(caller) {
   if (!payload) return;
   await postJsonToWebhook(BOOKING_WEBHOOK_URL, payload, "BOOKING");
   caller.bookingSent = true;
+}
+
+function buildDemoFollowupPayload(caller) {
+  const fullName = caller.demoFollowupContactName || caller.fullName || "";
+  const firstName = getFirstName(fullName) || caller.firstName || "";
+  const callbackNumber = caller.demoFollowupCallbackNumber || caller.callbackNumber || caller.phone || "";
+  const demoEmail = caller.demoFollowupEmail || caller.demoEmail || "";
+
+  let notes = "Interested in a Blue Caller Automation follow-up after testing the demo line.";
+  if (caller.issueSummary) notes += ` Original demo scenario: ${caller.issueSummary}.`;
+  if (caller.notes) notes += ` Original notes: ${caller.notes}`;
+
+  return {
+    leadType: "demo",
+    fullName,
+    firstName,
+    phone: callbackNumber,
+    callbackNumber,
+    callbackConfirmed: true,
+    address: caller.address || "",
+    issue: "demo follow-up request",
+    issueSummary: "demo follow-up request",
+    urgency: "normal",
+    emergencyAlert: false,
+    projectType: "",
+    applianceType: "",
+    applianceWarranty: "",
+    timeline: "",
+    proposalDeadline: "",
+    demoEmail,
+    notes: notes.trim(),
+    status: "demo_followup_request",
+    appointmentDate: "",
+    appointmentTime: "",
+    source: "AI Receptionist",
+    timestamp: new Date().toISOString()
+  };
+}
+
+async function sendDemoFollowupToMake(caller) {
+  if (caller.demoFollowupSent) return;
+  const payload = buildDemoFollowupPayload(caller);
+  if (!payload.fullName || (!payload.phone && !payload.demoEmail)) return;
+  await postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "DEMO FOLLOWUP");
+  caller.demoFollowupSent = true;
 }
 
 async function checkCalendarAvailability(caller, requestDetails = {}) {
@@ -1448,52 +1497,103 @@ async function handlePrompt(ws, caller, speech) {
       await sendLeadToMake(caller);
       await sendBookingToMake(caller);
 
+      if (caller.leadType === "demo") {
+        caller.lastStep = "final_question";
+        sendText(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about the demo. Is there anything else I can help you with before I let you go?");
+        return;
+      }
+
+      caller.lastStep = "offer_demo_followup";
+
       if (caller.emergencyAlert) {
-        if (POST_SUBMIT_FOLLOWUP_ENABLED) {
-          caller.lastStep = "final_question";
-          sendText(ws, `Okay, I've got this marked as an emergency for ${caller.issueSummary}, and someone from our service team will contact you shortly. Is there anything else I can help you with before I let you go?`);
-          return;
-        }
-        closeSession(ws, `Okay, I've got this marked as an emergency for ${caller.issueSummary}, and someone from our service team will contact you shortly. Thank you for calling.`);
+        sendText(ws, `Okay, I've got this marked as an emergency for ${caller.issueSummary}, and someone from our service team will contact you shortly. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
         return;
       }
 
       if (caller.leadType === "quote") {
-        if (POST_SUBMIT_FOLLOWUP_ENABLED) {
-          caller.lastStep = "final_question";
-          sendText(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about your quote request. Is there anything else I can help you with before I let you go?");
-          return;
-        }
-        closeSession(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about your quote request. Thank you for calling.");
-        return;
-      }
-
-      if (caller.leadType === "demo") {
-        if (POST_SUBMIT_FOLLOWUP_ENABLED) {
-          caller.lastStep = "final_question";
-          sendText(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about the demo. Is there anything else I can help you with before I let you go?");
-          return;
-        }
-        closeSession(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about the demo. Thank you for calling.");
+        sendText(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about your quote request. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?");
         return;
       }
 
       if (caller.status === "scheduled") {
-        if (POST_SUBMIT_FOLLOWUP_ENABLED) {
-          caller.lastStep = "final_question";
-          sendText(ws, `Okay, I've got you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone will reach out to you then. Before I let you go, is there anything else I can help you with?`);
-          return;
-        }
-        closeSession(ws, `Okay, I've got you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone will reach out to you then. Alright, ${caller.firstName || "there"}, you're all set. Thank you for calling.`);
+        sendText(ws, `Okay, I've got you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone will reach out to you then. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
         return;
       }
 
-      if (POST_SUBMIT_FOLLOWUP_ENABLED) {
-        caller.lastStep = "final_question";
-        sendText(ws, `Okay, I've got everything I need. Someone from the office will contact you shortly about ${caller.issueSummary}. Is there anything else I can help you with before I let you go?`);
+      sendText(ws, `Okay, I've got everything I need. Someone from the office will contact you shortly about ${caller.issueSummary}. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
+      return;
+    }
+
+    case "offer_demo_followup": {
+      if (isAffirmative(text)) {
+        caller.demoFollowupRequested = true;
+        caller.lastStep = "confirm_demo_followup_info";
+        sendText(ws, "Okay, should I use the contact information you already gave me?");
         return;
       }
-      closeSession(ws, `Okay, I've got everything I need. Someone from the office will contact you shortly about ${caller.issueSummary}. Alright, ${caller.firstName || "there"}, you're all set. Thank you for calling.`);
+      if (isNegative(text) || isEndCallPhrase(text)) {
+        closeSession(ws, `Alright, ${caller.firstName || "there"}, you're all set. Thank you for calling.`);
+        return;
+      }
+      sendText(ws, "Would you like me to have one of our team members call you to discuss how this could help your company?");
+      return;
+    }
+
+    case "confirm_demo_followup_info": {
+      if (isAffirmative(text)) {
+        caller.demoFollowupContactName = caller.fullName || "";
+        caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
+        caller.demoFollowupEmail = caller.demoEmail || "";
+        caller.lastStep = "ask_demo_followup_email_optional";
+        sendText(ws, "Would you like to include an email address as well?");
+        return;
+      }
+      if (isNegative(text)) {
+        caller.lastStep = "ask_demo_followup_contact_name";
+        sendText(ws, "What is the best contact name for us to use regarding this demo?");
+        return;
+      }
+      sendText(ws, "Okay, should I use the contact information you already gave me?");
+      return;
+    }
+
+    case "ask_demo_followup_contact_name": {
+      const parsedName = parseFullNameFromSpeech(text);
+      if (!parsedName) {
+        sendText(ws, "I'm sorry, I didn't quite catch the contact name. What is the best contact name for us to use regarding this demo?");
+        return;
+      }
+      caller.demoFollowupContactName = parsedName;
+      caller.lastStep = "ask_demo_followup_phone";
+      sendText(ws, "What is the best callback number for us to use regarding this demo?");
+      return;
+    }
+
+    case "ask_demo_followup_phone": {
+      caller.demoFollowupCallbackNumber = cleanForSpeech(text);
+      caller.lastStep = "ask_demo_followup_email_optional";
+      sendText(ws, "Would you like to include an email address as well?");
+      return;
+    }
+
+    case "ask_demo_followup_email_optional": {
+      if (isAffirmative(text)) {
+        caller.lastStep = "capture_demo_followup_email";
+        sendText(ws, "Alright, go ahead and spell that out for me.");
+        return;
+      }
+      if (!isNegative(text) && text.includes("@")) {
+        caller.demoFollowupEmail = cleanForSpeech(text);
+      }
+      await sendDemoFollowupToMake(caller);
+      closeSession(ws, "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+      return;
+    }
+
+    case "capture_demo_followup_email": {
+      caller.demoFollowupEmail = cleanForSpeech(text);
+      await sendDemoFollowupToMake(caller);
+      closeSession(ws, "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
       return;
     }
 
