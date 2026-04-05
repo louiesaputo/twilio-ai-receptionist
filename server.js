@@ -58,10 +58,6 @@ const BOOKING_WEBHOOK_URL = process.env.BOOKING_WEBHOOK_URL || "https://hook.us2
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-const ELEVENLABS_CONVERSATIONRELAY_VOICE =
-  process.env.ELEVENLABS_CONVERSATIONRELAY_VOICE ||
-  process.env.ELEVENLABS_VOICE_ID ||
-  "";
 const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
 
 const callerStore = {};
@@ -1470,9 +1466,6 @@ app.post("/incoming-call", (req, res) => {
   if (!PUBLIC_BASE_URL) {
     return res.status(500).send("Missing PUBLIC_BASE_URL");
   }
-  if (!ELEVENLABS_CONVERSATIONRELAY_VOICE) {
-    return res.status(500).send("Missing ELEVENLABS_CONVERSATIONRELAY_VOICE");
-  }
 
   const twiml = new twilio.twiml.VoiceResponse();
   const connect = twiml.connect();
@@ -1482,7 +1475,6 @@ app.post("/incoming-call", (req, res) => {
     welcomeGreetingInterruptible: "speech",
     language: "en-US",
     ttsProvider: "ElevenLabs",
-    voice: ELEVENLABS_CONVERSATIONRELAY_VOICE,
     elevenlabsTextNormalization: "on",
     interruptible: "speech",
     interruptSensitivity: "medium",
