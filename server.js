@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V7
- DATE: 2026-04-05 (v7 merge)
+ CONVERSATIONRELAY BASELINE V8
+ DATE: 2026-04-05 (v8 parser + pacing pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V7 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V8 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V7";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V8";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -239,6 +239,28 @@ function parseFullNameFromSpeech(rawName) {
   return normalizeNameCandidate(rawName);
 }
 
+function firstNameNeedsSpelling(name) {
+  const first = normalizedText(name).replace(/[^a-z]/g, "");
+  return Boolean(first && AMBIGUOUS_FIRST_NAMES.has(first));
+}
+
+function normalizeSpelledFirstName(text, fallback = "") {
+  const letters = cleanForSpeech(text || "").replace(/[^a-zA-Z]/g, "");
+  if (letters.length >= 2 && letters.length <= 15) {
+    return toTitleCase(letters);
+  }
+  return fallback || "";
+}
+
+function maybeQueueFirstNameSpelling(caller, nextStep) {
+  if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
+    caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
+    caller.lastStep = "ask_first_name_spelling";
+    return `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?`;
+  }
+  return "";
+}
+
 function stripIssueLeadIn(text) {
   if (!text) return "";
   return cleanForSpeech(text)
@@ -248,6 +270,18 @@ function stripIssueLeadIn(text) {
     .replace(/^(and\s+)?i\s+would\s+like\s+/i, "")
     .replace(/^(and\s+)?i\'?d\s+like\s+/i, "")
     .replace(/^(and\s+)?i\s+want\s+/i, "")
+    .replace(/^(and\s+)?i\s+am\s+interested\s+in\s+/i, "")
+    .replace(/^(and\s+)?i\'?m\s+interested\s+in\s+/i, "")
+    .replace(/^i\s+need\s+someone\s+to\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^i\s+need\s+somebody\s+to\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^i\s+need\s+someone\s+to\s+check\s+/i, "")
+    .replace(/^i\s+need\s+somebody\s+to\s+check\s+/i, "")
+    .replace(/^can\s+someone\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^can\s+somebody\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^can\s+someone\s+check\s+/i, "")
+    .replace(/^can\s+somebody\s+check\s+/i, "")
+    .replace(/^come\s+look\s+at\s+/i, "")
+    .replace(/^come\s+check\s+/i, "")
     .replace(/^calling\s+about\s+/i, "")
     .replace(/^calling\s+with\s+/i, "")
     .replace(/^calling\s+for\s+/i, "")
@@ -288,14 +322,14 @@ function looksLikeIssueText(text) {
       t.includes("issue") ||
       t.includes("refrigerator") ||
       t.includes("fridge") ||
+      t.includes("freezer") ||
       t.includes("oven") ||
       t.includes("dishwasher") ||
       t.includes("washer") ||
       t.includes("dryer") ||
       t.includes("range") ||
       t.includes("stove") ||
-      t.includes("light") ||
-      t.includes("door") ||
+      t.includes("cooktop") ||
       t.includes("faucet") ||
       t.includes("sink") ||
       t.includes("toilet") ||
@@ -312,14 +346,54 @@ function extractOpeningNameAndIssue(text) {
   if (!original) return { name: null, issueText: "" };
 
   const normalized = stripGreetingPrefix(original);
+  const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
+
+  if (introMarker) {
+    const remainder = normalized.slice(introMarker[0].length).trim();
+    const issueMarkers = [
+      /\s+and\s+i\s+have\b/i,
+      /\s+i\s+have\b/i,
+      /\s+my\b/i,
+      /\s+the\b/i,
+      /\s+our\b/i,
+      /\s+i\s+need\b/i,
+      /\s+i\'?m\s+having\b/i,
+      /\s+i\s+am\s+having\b/i,
+      /\s+can\s+someone\b/i,
+      /\s+can\s+somebody\b/i,
+      /\s+can\s+you\b/i,
+      /\s+there\s+is\b/i,
+      /\s+because\b/i,
+      /\s+about\b/i,
+      /\s+with\b/i,
+      /\s+regarding\b/i
+    ];
+
+    let earliestIndex = -1;
+    for (const marker of issueMarkers) {
+      const m = remainder.match(marker);
+      if (!m || typeof m.index !== "number") continue;
+      if (earliestIndex === -1 || m.index < earliestIndex) earliestIndex = m.index;
+    }
+
+    if (earliestIndex > 0) {
+      const possibleName = normalizeNameCandidate(remainder.slice(0, earliestIndex));
+      const issueText = stripIssueLeadIn(remainder.slice(earliestIndex));
+      if (possibleName && issueText) return { name: possibleName, issueText };
+    }
+
+    const possibleNameOnly = normalizeNameCandidate(remainder);
+    if (possibleNameOnly) return { name: possibleNameOnly, issueText: "" };
+  }
 
   const patterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s*,\s*|\s+and\s+)(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(my\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(the\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\s+need\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i'?m\s+having\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\'?m\s+having\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+someone\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+somebody\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+you\s+.+)$/i
   ];
 
@@ -421,7 +495,7 @@ function formatPhoneNumberForSpeech(phone) {
     const a = digits.slice(0, 3).split("").map(toWord).join(" ");
     const b = digits.slice(3, 6).split("").map(toWord).join(" ");
     const c = digits.slice(6).split("").map(toWord).join(" ");
-    return `${a}, ${b}, ${c}`;
+    return `${a}, then ${b}, then ${c}`;
   }
   return digits.split("").map(toWord).join(" ");
 }
@@ -536,6 +610,86 @@ function classifyProjectType(text) {
   return raw || "this project";
 }
 
+function detectServiceItem(issue) {
+  const text = normalizedText(issue)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const items = [
+    { pattern: /\b(refrigerator|refrigerators|fridge|fridges|freezer|freezers)\b/, label: "refrigerator", prompt: "your refrigerator", category: "appliance" },
+    { pattern: /\b(dishwasher|dish washer|dishdrawer|dish drawer)\b/, label: "dishwasher", prompt: "your dishwasher", category: "appliance" },
+    { pattern: /\b(oven|wall oven|double oven)\b/, label: "oven", prompt: "your oven", category: "appliance" },
+    { pattern: /\b(cooktop|cook top)\b/, label: "cooktop", prompt: "your cooktop", category: "appliance" },
+    { pattern: /\b(range)\b/, label: "range", prompt: "your range", category: "appliance" },
+    { pattern: /\b(stove|stovetop|stove top|burner|burners)\b/, label: "stove", prompt: "your stove", category: "appliance" },
+    { pattern: /\b(washer|washing machine)\b/, label: "washer", prompt: "your washer", category: "appliance" },
+    { pattern: /\b(dryer|clothes dryer)\b/, label: "dryer", prompt: "your dryer", category: "appliance" },
+    { pattern: /\b(microwave|built in microwave)\b/, label: "microwave", prompt: "your microwave", category: "appliance" },
+    { pattern: /\b(garbage disposal|disposal)\b/, label: "garbage disposal", prompt: "your garbage disposal", category: "appliance" },
+    { pattern: /\b(faucet|tap)\b/, label: "faucet", prompt: "your faucet", category: "fixture" },
+    { pattern: /\b(sink)\b/, label: "sink", prompt: "your sink", category: "fixture" },
+    { pattern: /\b(toilet)\b/, label: "toilet", prompt: "your toilet", category: "fixture" },
+    { pattern: /\b(water heater)\b/, label: "water heater", prompt: "your water heater", category: "fixture" }
+  ];
+
+  for (const item of items) {
+    if (item.pattern.test(text)) return item;
+  }
+  return null;
+}
+
+function hasSpecificProblemDetail(issue) {
+  const text = normalizedText(issue);
+  return containsAny(text, [
+    "not working", "isn't working", "isnt working", "stopped working", "won't work", "wont work",
+    "not cooling", "isn't cooling", "isnt cooling", "not heating", "isn't heating", "isnt heating",
+    "not drying", "isn't drying", "isnt drying", "not draining", "won't drain", "wont drain",
+    "not turning on", "won't turn on", "wont turn on", "not starting", "won't start", "wont start",
+    "not igniting", "not making ice", "not producing ice", "making too much ice", "overproducing",
+    "won't stop", "wont stop", "stopped", "broken", "cracked", "loose", "leak", "leaking",
+    "drip", "dripping", "clog", "clogged", "overflow", "overflowing", "backed up", "backing up",
+    "making noise", "noisy", "noise", "sparking", "smoke", "smoking", "burning smell", "gas smell",
+    "water everywhere", "flooding", "freezing", "too warm", "too hot", "pilot", "not flushing",
+    "running constantly", "not responding", "burner", "burners"
+  ]);
+}
+
+function detectMissingProblemItem(issue) {
+  const item = detectServiceItem(issue);
+  if (!item) return null;
+  if (hasSpecificProblemDetail(issue)) return null;
+  if (isQuoteIntent(issue) || isDemoIntent(issue) || isHardEmergency(issue) || isLeakLikeIssue(issue)) return null;
+  return item;
+}
+
+function combineItemAndDetail(item, detail) {
+  const safeItem = cleanForSpeech(item || "");
+  const safeDetail = cleanForSpeech(detail || "");
+  return `${safeItem} ${safeDetail}`.trim();
+}
+
+function buildApplianceIssueSummary(issue, item) {
+  const t = normalizedText(issue);
+  if (!item || item.category !== "appliance") return "";
+  if ((item.label === "stove" || item.label === "range" || item.label === "cooktop") && containsAny(t, ["burner", "burners", "not turning on", "won't turn on", "wont turn on", "not igniting", "won't ignite", "wont ignite"])) {
+    return `a ${item.label} burner that is not turning on`;
+  }
+  if (item.label === "oven" && containsAny(t, ["not heating", "isn't heating", "isnt heating"])) return "an oven that is not heating properly";
+  if (item.label === "refrigerator" && containsAny(t, ["not cooling", "isn't cooling", "isnt cooling", "too warm"])) return "a refrigerator that is not cooling";
+  if (item.label === "dishwasher" && containsAny(t, ["not draining", "won't drain", "wont drain"])) return "a dishwasher that is not draining";
+  if (item.label === "washer" && containsAny(t, ["not draining", "won't drain", "wont drain"])) return "a washer that is not draining";
+  if (item.label === "dryer" && containsAny(t, ["not heating", "isn't heating", "isnt heating", "not drying"])) return "a dryer that is not heating properly";
+  if (containsAny(t, ["not turning on", "won't turn on", "wont turn on"])) return `a ${item.label} that is not turning on`;
+  if (containsAny(t, ["not working", "isn't working", "isnt working", "stopped working"])) return `a ${item.label} that is not working`;
+  if (containsAny(t, ["not cooling", "isn't cooling", "isnt cooling"])) return `a ${item.label} that is not cooling`;
+  if (containsAny(t, ["not heating", "isn't heating", "isnt heating"])) return `a ${item.label} that is not heating properly`;
+  if (containsAny(t, ["not draining", "won't drain", "wont drain"])) return `a ${item.label} that is not draining`;
+  if (containsAny(t, ["making noise", "noisy", "noise"])) return `a noisy ${item.label}`;
+  if (containsAny(t, ["leak", "leaking", "drip", "dripping"])) return `a leaking ${item.label}`;
+  return `an issue with ${item.prompt}`;
+}
+
 function buildUnknownIssueSummary(issue) {
   const cleaned = cleanForSpeech(issue || "");
   if (!cleaned) return "the issue you described";
@@ -569,6 +723,10 @@ function isLeakLikeIssue(text) {
 
 function classifyIssue(issue) {
   const text = normalizedText(issue);
+  const serviceItem = detectServiceItem(issue);
+  const applianceSummary = buildApplianceIssueSummary(issue, serviceItem);
+  if (serviceItem && serviceItem.category === "appliance" && applianceSummary) return { summary: applianceSummary };
+  if (serviceItem && serviceItem.category === "fixture" && !hasSpecificProblemDetail(issue)) return { summary: `an issue with ${serviceItem.prompt}` };
   if (isMainLineEmergencyCandidate(text)) return { summary: "a possible broken water main in your yard" };
   if ((text.includes("faucet") || text.includes("sink")) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking faucet" };
   if (text.includes("water heater") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking water heater" };
@@ -821,6 +979,9 @@ function getOrCreateCaller(key) {
       makeSent: false,
       lastStep: "ask_issue",
       pendingNameNextStep: "",
+      nameSpellingConfirmed: false,
+      pendingIssueItem: "",
+      pendingIssuePrompt: "",
       pendingPromptText: "",
       promptBuffer: "",
       demoFollowupRequested: false,
@@ -838,11 +999,21 @@ function getOrCreateCaller(key) {
   return callerStore[key];
 }
 
+function lightlyPaceText(text) {
+  const safe = cleanForSpeech(text || "");
+  if (!safe) return "";
+  return safe
+    .replace(/\b(Alright|Okay|Perfect|Absolutely)\. /g, "$1, ")
+    .replace(/\b(Thank you)\. /g, "$1, ")
+    .trim();
+}
+
 function sendText(ws, text, options = {}) {
   if (!ws || ws.readyState !== 1) return;
+  const pacedText = options.raw === true ? String(text || "") : lightlyPaceText(text);
   ws.send(JSON.stringify({
     type: "text",
-    token: text,
+    token: pacedText,
     last: true,
     interruptible: options.interruptible !== false,
     preemptible: options.preemptible === true
@@ -1136,6 +1307,7 @@ async function handlePrompt(ws, caller, speech) {
       if (parsed.name) {
         caller.fullName = parsed.name;
         caller.firstName = getFirstName(parsed.name);
+        caller.nameSpellingConfirmed = false;
       }
       if (!parsed.issueText) {
         caller.lastStep = "ask_issue_again";
@@ -1144,19 +1316,41 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.issue = cleanForSpeech(parsed.issueText);
       afterIssueCaptured(caller);
+      const missingProblemItem = detectMissingProblemItem(caller.issue);
+      if (missingProblemItem) {
+        caller.pendingIssueItem = missingProblemItem.label;
+        caller.pendingIssuePrompt = missingProblemItem.prompt;
+        caller.lastStep = "ask_item_issue_detail";
+        sendText(ws, `What seems to be going on with ${missingProblemItem.prompt}?`);
+        return;
+      }
 
       if (caller.leadType === "demo") {
-        caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
         sendText(ws, caller.fullName
-          ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
 
       if (caller.leadType === "quote") {
-        caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
         sendText(ws, caller.fullName
-          ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
@@ -1167,14 +1361,24 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+      if (spellingPrompt) {
+        sendText(ws, spellingPrompt);
+        return;
+      }
+      caller.lastStep = nextStep;
       if (caller.emergencyAlert) {
         sendText(ws, caller.fullName
-          ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. Before I go any further, can I get your last name as well?`
           : `I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`);
       } else {
         sendText(ws, caller.fullName
-          ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. Before I go any further, can I get your last name as well?`
           : `I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Can I start by getting your full name, please?`);
       }
       return;
@@ -1183,10 +1387,26 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_issue_again": {
       caller.issue = cleanForSpeech(text);
       afterIssueCaptured(caller);
+      const missingProblemItem = detectMissingProblemItem(caller.issue);
+      if (missingProblemItem) {
+        caller.pendingIssueItem = missingProblemItem.label;
+        caller.pendingIssuePrompt = missingProblemItem.prompt;
+        caller.lastStep = "ask_item_issue_detail";
+        sendText(ws, `What seems to be going on with ${missingProblemItem.prompt}?`);
+        return;
+      }
       if (caller.leadType === "quote" || caller.leadType === "demo") {
-        caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
         sendText(ws, caller.fullName
-          ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Thank you, ${caller.firstName}. Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
@@ -1195,28 +1415,77 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`);
         return;
       }
-      caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+      if (spellingPrompt) {
+        sendText(ws, spellingPrompt);
+        return;
+      }
+      caller.lastStep = nextStep;
       sendText(ws, caller.fullName
-        ? `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+        ? hasFullName(caller.fullName)
+          ? `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          : `Thank you, ${caller.firstName}. Can I get your last name as well?`
         : "Can I start by getting your full name, please?");
+      return;
+    }
+
+    case "ask_item_issue_detail": {
+      caller.issue = combineItemAndDetail(caller.pendingIssueItem, text);
+      caller.issueSummary = classifyIssue(caller.issue).summary;
+      caller.pendingIssueItem = "";
+      caller.pendingIssuePrompt = "";
+      if (isHardEmergency(caller.issue)) {
+        markEmergency(caller);
+      } else {
+        markStandardService(caller);
+      }
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+      if (spellingPrompt) {
+        sendText(ws, spellingPrompt);
+        return;
+      }
+      caller.lastStep = nextStep;
+      sendText(ws, caller.fullName
+        ? hasFullName(caller.fullName)
+          ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          : `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. Before I go any further, can I get your last name as well?`
+        : `I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Can I start by getting your full name, please?`);
       return;
     }
 
     case "leak_emergency_choice": {
       if (isAffirmative(text)) {
         markEmergency(caller);
-        caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
         sendText(ws, caller.fullName
-          ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`
           : "Alright. I'm going to mark this as an emergency so our service team can review it right away. Can I start with your full name?");
         return;
       }
 
       if (isNegative(text)) {
         markStandardService(caller);
-        caller.lastStep = caller.fullName ? "confirm_phone" : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
         sendText(ws, caller.fullName
-          ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? hasFullName(caller.fullName)
+            ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
           : "Alright. I've got this as a standard service request. I just need to gather a few details from you. Can I start with your full name?");
         return;
       }
@@ -1233,6 +1502,13 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.fullName = parsedName;
       caller.firstName = getFirstName(parsedName);
+      caller.nameSpellingConfirmed = false;
+      const nextStep = hasFullName(parsedName) ? "confirm_phone" : "ask_last_name";
+      const spellingPrompt = maybeQueueFirstNameSpelling(caller, nextStep);
+      if (spellingPrompt) {
+        sendText(ws, spellingPrompt);
+        return;
+      }
       if (!hasFullName(parsedName)) {
         caller.lastStep = "ask_last_name";
         sendText(ws, `Thank you, ${caller.firstName}. Can I get your last name as well?`);
@@ -1240,6 +1516,24 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.lastStep = "confirm_phone";
       sendText(ws, `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      return;
+    }
+
+    case "ask_first_name_spelling": {
+      const spelledFirstName = normalizeSpelledFirstName(text, caller.firstName || "");
+      const remainingParts = cleanForSpeech(caller.fullName || "").split(/\s+/).filter(Boolean).slice(1).join(" ");
+      caller.firstName = spelledFirstName || caller.firstName;
+      caller.fullName = remainingParts ? `${caller.firstName} ${toTitleCase(remainingParts)}` : caller.firstName;
+      caller.nameSpellingConfirmed = true;
+      const nextStep = caller.pendingNameNextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
+      caller.pendingNameNextStep = "";
+      if (nextStep === "ask_last_name") {
+        caller.lastStep = "ask_last_name";
+        sendText(ws, "Thank you. Can I get your last name as well?");
+        return;
+      }
+      caller.lastStep = "confirm_phone";
+      sendText(ws, `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
 
@@ -1251,6 +1545,11 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.fullName = possibleFullName;
       caller.firstName = getFirstName(possibleFullName);
+      const spellingPrompt = maybeQueueFirstNameSpelling(caller, "confirm_phone");
+      if (spellingPrompt) {
+        sendText(ws, spellingPrompt);
+        return;
+      }
       caller.lastStep = "confirm_phone";
       sendText(ws, `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
