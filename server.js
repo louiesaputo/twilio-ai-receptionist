@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V6
- DATE: 2026-04-05 (v6 patch)
+ CONVERSATIONRELAY BASELINE V7
+ DATE: 2026-04-05 (v7 merge)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V6 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V7 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -41,6 +41,7 @@ const https = require("https");
 const http = require("http");
 const crypto = require("crypto");
 const path = require("path");
+const fs = require("fs");
 const { WebSocketServer } = require("ws");
 
 const app = express();
@@ -53,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V6";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V7";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -61,6 +62,9 @@ const BOOKING_WEBHOOK_URL = process.env.BOOKING_WEBHOOK_URL || "https://hook.us2
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+const TWILIO_API_KEY_SID = process.env.TWILIO_API_KEY_SID || "";
+const TWILIO_API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET || "";
+const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
 
@@ -270,13 +274,28 @@ function looksLikeIssueText(text) {
       t.startsWith("my ") ||
       t.startsWith("the ") ||
       t.startsWith("our ") ||
-      t.includes(" leak") ||
-      t.includes("clog") ||
+      t.includes(" not ") ||
+      t.includes("isn't") ||
+      t.includes("isnt") ||
+      t.includes("won't") ||
+      t.includes("wont") ||
+      t.includes("leak") ||
+      t.includes("cool") ||
+      t.includes("heat") ||
       t.includes("drain") ||
-      t.includes("not working") ||
+      t.includes("noise") ||
+      t.includes("problem") ||
+      t.includes("issue") ||
       t.includes("refrigerator") ||
       t.includes("fridge") ||
+      t.includes("oven") ||
       t.includes("dishwasher") ||
+      t.includes("washer") ||
+      t.includes("dryer") ||
+      t.includes("range") ||
+      t.includes("stove") ||
+      t.includes("light") ||
+      t.includes("door") ||
       t.includes("faucet") ||
       t.includes("sink") ||
       t.includes("toilet") ||
@@ -293,49 +312,15 @@ function extractOpeningNameAndIssue(text) {
   if (!original) return { name: null, issueText: "" };
 
   const normalized = stripGreetingPrefix(original);
-  const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
-  if (introMarker) {
-    const remainder = normalized.slice(introMarker[0].length).trim();
-    const issueMarkers = [
-      /\s+and\s+i\s+have\b/i,
-      /\s+i\s+have\b/i,
-      /\s+my\b/i,
-      /\s+the\b/i,
-      /\s+our\b/i,
-      /\s+i\s+need\b/i,
-      /\s+i\'?m\s+having\b/i,
-      /\s+i\s+am\s+having\b/i,
-      /\s+can\s+someone\b/i,
-      /\s+can\s+you\b/i,
-      /\s+there\s+is\b/i,
-      /\s+because\b/i,
-      /\s+about\b/i,
-      /\s+with\b/i,
-      /\s+regarding\b/i
-    ];
-
-    let earliestIndex = -1;
-    for (const marker of issueMarkers) {
-      const m = remainder.match(marker);
-      if (!m || typeof m.index !== "number") continue;
-      if (earliestIndex === -1 || m.index < earliestIndex) earliestIndex = m.index;
-    }
-
-    if (earliestIndex > 0) {
-      const possibleName = normalizeNameCandidate(remainder.slice(0, earliestIndex));
-      const issueText = stripIssueLeadIn(remainder.slice(earliestIndex));
-      if (possibleName && issueText) return { name: possibleName, issueText };
-    }
-
-    const possibleNameOnly = normalizeNameCandidate(remainder);
-    if (possibleNameOnly) return { name: possibleNameOnly, issueText: "" };
-  }
 
   const patterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s*,\s*|\s+and\s+)(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(my\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(the\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\s+need\s+.+)$/i
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\s+need\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i'?m\s+having\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+someone\s+.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+you\s+.+)$/i
   ];
 
   for (const pattern of patterns) {
@@ -343,7 +328,15 @@ function extractOpeningNameAndIssue(text) {
     if (!match) continue;
     const possibleName = normalizeNameCandidate(match[1]);
     const issueText = stripIssueLeadIn(match[2]);
-    if (possibleName && issueText) return { name: possibleName, issueText };
+    if (possibleName && issueText) {
+      return { name: possibleName, issueText };
+    }
+  }
+
+  const markerOnly = normalized.match(/^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+)$/i);
+  if (markerOnly) {
+    const possibleName = normalizeNameCandidate(markerOnly[1]);
+    if (possibleName) return { name: possibleName, issueText: "" };
   }
 
   if (looksLikeIssueText(normalized)) {
@@ -438,7 +431,7 @@ function isAffirmative(text) {
   if (!t) return false;
   if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent"])) return false;
 
-  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right", "fine", "works"].includes(t)) return true;
+  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right", "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay", "that is fine", "thats fine"].includes(t)) return true;
 
   if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is alright|is all right)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
@@ -450,6 +443,8 @@ function isAffirmative(text) {
     "this is an emergency", "it is an emergency", "its an emergency",
     "yeah have someone call me", "have someone call me", "have somebody call me",
     "whatever works", "that sounds good", "that sounds fine", "that sounds okay",
+    "that date works", "the date works", "that time works", "the time works", "that should work for me",
+    "sure that works", "sure that is fine", "sure that s fine", "fine by me", "okay that works",
     "that is fine", "thats fine", "that s fine", "that is okay", "thats okay", "that s okay",
     "that is good", "that s good", "that is alright", "thats alright", "that s alright",
     "that is all right", "thats all right", "that s all right", "thatll work", "that ll work",
@@ -1621,6 +1616,14 @@ async function handlePrompt(ws, caller, speech) {
 }
 
 
+function serveBrowserCallingIndex(res) {
+  const indexPath = path.join(__dirname, "public", "index.html");
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  return res.send(`Server is running - ${APP_VERSION}`);
+}
+
 function buildBrowserCallingIdentity(req) {
   const requested = cleanForSpeech(req.query.identity || "");
   if (requested) return requested.replace(/[^\w.-]/g, "").slice(0, 64) || "browser-user";
@@ -1637,7 +1640,7 @@ function createBrowserCallingToken(identity) {
   });
   token.addGrant(new VoiceGrant({
     outgoingApplicationSid: TWILIO_TWIML_APP_SID,
-    incomingAllow: true
+    incomingAllow: false
   }));
   return token.toJwt();
 }
@@ -1655,22 +1658,33 @@ function verifyTwilioRequest(req) {
 }
 
 app.get("/twilio-token", (req, res) => {
-  const identity = buildBrowserCallingIdentity(req);
-  const token = createBrowserCallingToken(identity);
-
-  if (!token) {
-    return res.status(500).send("Missing browser calling environment variables");
+  try {
+    const identity = buildBrowserCallingIdentity(req);
+    const token = createBrowserCallingToken(identity);
+    if (!token) {
+      throw new Error("Missing TWILIO_ACCOUNT_SID or browser calling environment variables");
+    }
+    res.json({ token });
+  } catch (err) {
+    console.error("TOKEN ERROR:", err);
+    res.status(500).send("Token error: " + err.message);
   }
+});
 
-  if ((req.get("accept") || "").includes("application/json")) {
-    return res.json({ identity, token });
-  }
+app.get("/health", (req, res) => {
+  res.send(`Server is running - ${APP_VERSION}`);
+});
 
-  res.type("text/plain").send(token);
+app.get("/browser-call", (req, res) => {
+  return serveBrowserCallingIndex(res);
+});
+
+app.get("/pc-call", (req, res) => {
+  return serveBrowserCallingIndex(res);
 });
 
 app.get("/", (req, res) => {
-  res.send(`Server is running - ${APP_VERSION}`);
+  return serveBrowserCallingIndex(res);
 });
 
 app.post("/incoming-call", (req, res) => {
@@ -1686,7 +1700,7 @@ app.post("/incoming-call", (req, res) => {
   const connect = twiml.connect();
   connect.conversationRelay({
     url: `${PUBLIC_BASE_URL.replace(/^http/i, "ws")}/conversation-relay`,
-    welcomeGreeting: "Thank you for calling the Blue Caller Automation demo line. How can I help you?",
+    welcomeGreeting: "Thank you for calling the Blue Caller Automation demo line. How can I help you today?",
     welcomeGreetingInterruptible: "speech",
     language: "en-US",
     ttsProvider: "ElevenLabs",
