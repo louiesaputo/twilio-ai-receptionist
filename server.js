@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V8
- DATE: 2026-04-05 (v8 parser + pacing pass)
+ CONVERSATIONRELAY BASELINE V9
+ DATE: 2026-04-06 (v9 scheduling structure pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V8 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V9 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V8";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V9";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -898,8 +898,6 @@ function nextPromptIndex(caller, key) {
 }
 
 function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
-  const t = normalizedText(rawText || "");
-
   const firstAvailablePrompts = [
     "I already have the calendar up. Let me see what the first available is.",
     "Let's see what the first available is.",
@@ -931,6 +929,17 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
   const index = nextPromptIndex(caller, "calendarPromptIndex");
   return options[index % options.length];
+}
+
+function buildSchedulingChoicePrompt(caller) {
+  const variants = [
+    "Alright, now let's talk about getting you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a date in mind, or would you rather have someone from the office call you?",
+    "Now let's talk about getting you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a specific date in mind, or would you rather have someone from the office call you?",
+    "Let's get you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a date in mind, or would you rather have someone from the office call you?"
+  ];
+
+  const index = nextPromptIndex(caller, "scheduleChoicePromptIndex");
+  return variants[index % variants.length];
 }
 
 function buildCallbackOfferPrompt(caller, dateText, timeText) {
@@ -1283,7 +1292,7 @@ function buildNextPrompt(caller) {
   }
 
   if (caller.lastStep === "schedule_or_callback") {
-    return "Alright, I've got all the information I need. Now let's talk about a callback time that works best for you. Do you have something in mind, or would you like me to find the first available for you?";
+    return buildSchedulingChoicePrompt(caller);
   }
 
   return "How can I help you?";
@@ -1601,7 +1610,7 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = "schedule_or_callback";
-        sendText(ws, "Alright, I've got all the information I need. Now let's talk about a callback time that works best for you. Do you have something in mind, or would you like me to find the first available for you?");
+        sendText(ws, buildSchedulingChoicePrompt(caller));
         return;
       }
       if (isNegative(text)) {
@@ -1677,7 +1686,6 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery;
-        sendText(ws, buildCalendarLookupPrompt(caller, text, isFirstAvailableRequest(text) ? "first_available" : "general"));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -1710,7 +1718,6 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || cleanForSpeech(text);
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
-        sendText(ws, buildCalendarLookupPrompt(caller, text, extractDatePart(text) ? "specific_date" : "general"));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -1736,7 +1743,6 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || caller.appointmentDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
-        sendText(ws, buildCalendarLookupPrompt(caller, text, isAlternateAvailabilityRequest(text) ? "alternate" : (extractDatePart(text) ? "specific_date" : "general")));
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
