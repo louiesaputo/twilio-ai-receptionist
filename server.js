@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V5
- DATE: 2026-04-05 (v5 patch)
+ CONVERSATIONRELAY BASELINE V6
+ DATE: 2026-04-05 (v6 patch)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -19,6 +19,9 @@
  - TWILIO_ACCOUNT_SID
  - TWILIO_AUTH_TOKEN
  - PUBLIC_BASE_URL              (for the Twilio webhook + wss URL base)
+ - TWILIO_API_KEY_SID           (for browser/PC calling token route)
+ - TWILIO_API_KEY_SECRET        (for browser/PC calling token route)
+ - TWILIO_TWIML_APP_SID         (for browser/PC calling token route)
  
  OPTIONAL ENV VARS:
  - PORT
@@ -28,10 +31,12 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V5 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V6 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
+const AccessToken = twilio.jwt.AccessToken;
+const VoiceGrant = AccessToken.VoiceGrant;
 const https = require("https");
 const http = require("http");
 const crypto = require("crypto");
@@ -48,7 +53,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V5";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V6";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -1615,6 +1620,28 @@ async function handlePrompt(ws, caller, speech) {
   }
 }
 
+
+function buildBrowserCallingIdentity(req) {
+  const requested = cleanForSpeech(req.query.identity || "");
+  if (requested) return requested.replace(/[^\w.-]/g, "").slice(0, 64) || "browser-user";
+  return "browser-user";
+}
+
+function createBrowserCallingToken(identity) {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_API_KEY_SID || !TWILIO_API_KEY_SECRET || !TWILIO_TWIML_APP_SID) {
+    return null;
+  }
+  const token = new AccessToken(TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, {
+    identity,
+    ttl: 3600
+  });
+  token.addGrant(new VoiceGrant({
+    outgoingApplicationSid: TWILIO_TWIML_APP_SID,
+    incomingAllow: true
+  }));
+  return token.toJwt();
+}
+
 function verifyTwilioRequest(req) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) return true;
   try {
@@ -1626,6 +1653,21 @@ function verifyTwilioRequest(req) {
     return false;
   }
 }
+
+app.get("/twilio-token", (req, res) => {
+  const identity = buildBrowserCallingIdentity(req);
+  const token = createBrowserCallingToken(identity);
+
+  if (!token) {
+    return res.status(500).send("Missing browser calling environment variables");
+  }
+
+  if ((req.get("accept") || "").includes("application/json")) {
+    return res.json({ identity, token });
+  }
+
+  res.type("text/plain").send(token);
+});
 
 app.get("/", (req, res) => {
   res.send(`Server is running - ${APP_VERSION}`);
