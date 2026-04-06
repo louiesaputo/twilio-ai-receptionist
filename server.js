@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V4
- DATE: 2026-04-05
+ CONVERSATIONRELAY BASELINE V5
+ DATE: 2026-04-05 (v5 patch)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -28,13 +28,14 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V4 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V5 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
 const https = require("https");
 const http = require("http");
 const crypto = require("crypto");
+const path = require("path");
 const { WebSocketServer } = require("ws");
 
 const app = express();
@@ -42,11 +43,12 @@ app.set("trust proxy", true);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+app.use(express.static(path.join(__dirname, "public")));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V4";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V5";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -412,7 +414,18 @@ function formatPhoneNumberForSpeech(phone) {
   if (!phone) return "unknown";
   let digits = String(phone).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) digits = digits.substring(1);
-  return digits.split("").join(" ");
+  // Speak phone numbers a little slower by converting digits to words and adding light pauses.
+  const toWord = (d) => {
+    const n = Number(d);
+    return Number.isFinite(n) ? SMALL_NUMBER_WORDS[n] : d;
+  };
+  if (digits.length === 10) {
+    const a = digits.slice(0, 3).split("").map(toWord).join(" ");
+    const b = digits.slice(3, 6).split("").map(toWord).join(" ");
+    const c = digits.slice(6).split("").map(toWord).join(" ");
+    return `${a}, ${b}, ${c}`;
+  }
+  return digits.split("").map(toWord).join(" ");
 }
 
 function isAffirmative(text) {
@@ -1525,35 +1538,23 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "offer_demo_followup": {
+      // IMPORTANT: check for "no" first. With streaming transcripts, the "no" can be merged or clipped.
+      // We prefer honoring a decline rather than accidentally treating it as a yes.
+      if (isNegative(text) || isEndCallPhrase(text)) {
+        caller.demoFollowupRequested = false;
+        caller.lastStep = "final_question";
+        sendText(ws, "No problem. Before I let you go, is there anything else I can help you with?");
+        return;
+      }
+
       if (isAffirmative(text)) {
         caller.demoFollowupRequested = true;
-        caller.lastStep = "confirm_demo_followup_info";
-        sendText(ws, "Okay, should I use the contact information you already gave me?");
-        return;
-      }
-      if (isNegative(text) || isEndCallPhrase(text)) {
-        closeSession(ws, `Alright, ${caller.firstName || "there"}, you're all set. Thank you for calling.`);
-        return;
-      }
-      sendText(ws, "Would you like me to have one of our team members call you to discuss how this could help your company?");
-      return;
-    }
-
-    case "confirm_demo_followup_info": {
-      if (isAffirmative(text)) {
-        caller.demoFollowupContactName = caller.fullName || "";
-        caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
-        caller.demoFollowupEmail = caller.demoEmail || "";
-        caller.lastStep = "ask_demo_followup_email_optional";
-        sendText(ws, "Would you like to include an email address as well?");
-        return;
-      }
-      if (isNegative(text)) {
         caller.lastStep = "ask_demo_followup_contact_name";
-        sendText(ws, "What is the best contact name for us to use regarding this demo?");
+        sendText(ws, "Great. Who should we reach out to about the demo?");
         return;
       }
-      sendText(ws, "Okay, should I use the contact information you already gave me?");
+
+      sendText(ws, "Would you like for me to have one of our team members call you to discuss how this could help your company?");
       return;
     }
 
@@ -1586,14 +1587,14 @@ async function handlePrompt(ws, caller, speech) {
         caller.demoFollowupEmail = cleanForSpeech(text);
       }
       await sendDemoFollowupToMake(caller);
-      closeSession(ws, "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+      closeSession(ws, "Alright. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
       return;
     }
 
     case "capture_demo_followup_email": {
       caller.demoFollowupEmail = cleanForSpeech(text);
       await sendDemoFollowupToMake(caller);
-      closeSession(ws, "Perfect. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+      closeSession(ws, "Alright. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
       return;
     }
 
@@ -1697,7 +1698,7 @@ wss.on("connection", (ws, request) => {
 
       if (type === "prompt") {
         if (data.voicePrompt) {
-          caller.promptBuffer = `${caller.promptBuffer || ""}${data.voicePrompt}`;
+          caller.promptBuffer = `${caller.promptBuffer ? caller.promptBuffer + " " : ""}${data.voicePrompt}`;
         }
         if (data.last === false) return;
         const completePrompt = cleanSpeechText(caller.promptBuffer || data.voicePrompt || "");
