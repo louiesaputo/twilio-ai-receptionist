@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V9
- DATE: 2026-04-06 (v9 scheduling structure pass)
+ CONVERSATIONRELAY BASELINE V10
+ DATE: 2026-04-06 (v10 yes-no + repeat + phone + name followup pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V9 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V10 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V9";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V10";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -301,6 +301,18 @@ function stripGreetingPrefix(text) {
     .trim();
 }
 
+function normalizeGenericServiceIssue(text) {
+  const stripped = stripIssueLeadIn(text || "");
+  const item = detectServiceItem(stripped);
+  if (!item) return cleanForSpeech(stripped);
+  if (hasSpecificProblemDetail(stripped)) return cleanForSpeech(stripped);
+  if (/ (i|we)\s+need /i.test(stripped) || / (look|check|come) /i.test(stripped)) {
+    return item.label;
+  }
+  return cleanForSpeech(stripped);
+}
+
+
 function looksLikeIssueText(text) {
   const t = normalizedText(text || "");
   return Boolean(
@@ -350,6 +362,14 @@ function extractOpeningNameAndIssue(text) {
 
   if (introMarker) {
     const remainder = normalized.slice(introMarker[0].length).trim();
+
+    const commaSplit = remainder.match(/^([^,]+),\s*(.+)$/);
+    if (commaSplit) {
+      const possibleName = normalizeNameCandidate(commaSplit[1]);
+      const issueText = stripIssueLeadIn(commaSplit[2]);
+      if (possibleName && issueText) return { name: possibleName, issueText };
+    }
+
     const issueMarkers = [
       /\s+and\s+i\s+have\b/i,
       /\s+i\s+have\b/i,
@@ -486,7 +506,6 @@ function formatPhoneNumberForSpeech(phone) {
   if (!phone) return "unknown";
   let digits = String(phone).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) digits = digits.substring(1);
-  // Speak phone numbers a little slower by converting digits to words and adding light pauses.
   const toWord = (d) => {
     const n = Number(d);
     return Number.isFinite(n) ? SMALL_NUMBER_WORDS[n] : d;
@@ -495,7 +514,7 @@ function formatPhoneNumberForSpeech(phone) {
     const a = digits.slice(0, 3).split("").map(toWord).join(" ");
     const b = digits.slice(3, 6).split("").map(toWord).join(" ");
     const c = digits.slice(6).split("").map(toWord).join(" ");
-    return `${a}, then ${b}, then ${c}`;
+    return `${a}, ${b}, ${c}`;
   }
   return digits.split("").map(toWord).join(" ");
 }
@@ -534,12 +553,69 @@ function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (["no", "nope", "nah", "skip", "pass"].includes(t)) return true;
+  if (/^(no|nope|nah) /.test(t)) return true;
   return containsAny(t, [
     "no thanks", "no thank you", "not now", "not really", "dont", "do not",
     "not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent",
     "standard service", "normal service", "regular service", "something else", "another time", "different time",
-    "that s all right", "thats all right", "that is all right", "that s alright", "thats alright", "that is alright"
+    "that s all right", "thats all right", "that is all right", "that s alright", "thats alright", "that is alright",
+    "that s okay", "thats okay", "that is okay", "that s fine", "thats fine", "that is fine",
+    "that s not necessary", "thats not necessary", "that is not necessary",
+    "that s not needed", "thats not needed", "that is not needed",
+    "that won t be necessary", "that wont be necessary", "that will not be necessary",
+    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that"
   ]);
+}
+
+function isRepeatRequest(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "what was that", "what did you say", "say that again", "can you say that again",
+    "repeat that", "can you repeat that", "i missed that", "i didn t catch that",
+    "i didnt catch that", "i m sorry what was that", "im sorry what was that",
+    "i m sorry can you repeat that", "im sorry can you repeat that", "repeat the number",
+    "repeat the address", "repeat the time", "what was the number", "what was the address",
+    "what was the time", "can you repeat the number", "can you repeat the address",
+    "can you repeat the time"
+  ]);
+}
+
+function lowercaseFirst(value) {
+  const safe = String(value || "").trim();
+  if (!safe) return "";
+  return safe.charAt(0).toLowerCase() + safe.slice(1);
+}
+
+function parseLastNameResponse(text) {
+  const safe = cleanForSpeech(text || "")
+    .replace(/^my last name is\s+/i, "")
+    .replace(/^it(?: is|'s)?\s+/i, "")
+    .trim();
+  if (!safe) return "";
+
+  const direct = safe.match(/^([A-Za-z'-]+)(?:\s*,?\s*(?:[A-Za-z][\s-]*){2,})?$/);
+  if (direct) return toTitleCase(direct[1]);
+
+  const lettersOnly = safe.replace(/[^A-Za-z]/g, "");
+  if (lettersOnly.length >= 2 && lettersOnly.length <= 20) return toTitleCase(lettersOnly);
+
+  const firstWord = safe.match(/^([A-Za-z'-]+)/);
+  if (firstWord) return toTitleCase(firstWord[1]);
+
+  return "";
+}
+
+function buildRepeatPrompt(caller) {
+  const prompt = cleanForSpeech(caller.pendingPromptText || "");
+  if (!prompt) return "";
+  const variants = [
+    `Oh, yeah, I'm sorry — I was asking, ${lowercaseFirst(prompt)}`,
+    `Certainly — I was asking, ${lowercaseFirst(prompt)}`,
+    `I'm sorry about that — I was asking, ${lowercaseFirst(prompt)}`
+  ];
+  const index = nextPromptIndex(caller, "repeatPromptIndex");
+  return variants[index % variants.length];
 }
 
 function isPhoneCorrection(text) {
@@ -992,6 +1068,7 @@ function getOrCreateCaller(key) {
       pendingIssueItem: "",
       pendingIssuePrompt: "",
       pendingPromptText: "",
+      repeatPromptIndex: 0,
       promptBuffer: "",
       demoFollowupRequested: false,
       demoFollowupSent: false,
@@ -1019,6 +1096,10 @@ function lightlyPaceText(text) {
 
 function sendText(ws, text, options = {}) {
   if (!ws || ws.readyState !== 1) return;
+  const caller = ws.sessionKey ? getOrCreateCaller(ws.sessionKey) : null;
+  if (caller && options.remember !== false) {
+    caller.pendingPromptText = cleanForSpeech(text || "");
+  }
   const pacedText = options.raw === true ? String(text || "") : lightlyPaceText(text);
   ws.send(JSON.stringify({
     type: "text",
@@ -1041,7 +1122,7 @@ function estimateSpeechDurationMs(text) {
 }
 
 function closeSession(ws, text) {
-  if (text) sendText(ws, text, { interruptible: false, preemptible: false });
+  if (text) sendText(ws, text, { interruptible: false, preemptible: false, remember: false });
   setTimeout(() => {
     try { ws.close(); } catch (err) {}
   }, text ? estimateSpeechDurationMs(text) : 0);
@@ -1144,6 +1225,8 @@ function buildBookingPayload(caller) {
     appointmentTime: caller.appointmentTime || "",
     bookingStartDateTimeLocal: slotTimes.startLocal,
     bookingEndDateTimeLocal: slotTimes.endLocal,
+    start: slotTimes.startLocal,
+    end: slotTimes.endLocal,
     source: "AI Receptionist"
   };
 }
@@ -1310,6 +1393,14 @@ async function handlePrompt(ws, caller, speech) {
     return;
   }
 
+  if (isRepeatRequest(text)) {
+    const repeatPrompt = buildRepeatPrompt(caller);
+    if (repeatPrompt) {
+      sendText(ws, repeatPrompt);
+      return;
+    }
+  }
+
   switch (caller.lastStep) {
     case "ask_issue": {
       const parsed = extractOpeningNameAndIssue(text);
@@ -1323,7 +1414,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?");
         return;
       }
-      caller.issue = cleanForSpeech(parsed.issueText);
+      caller.issue = normalizeGenericServiceIssue(parsed.issueText);
       afterIssueCaptured(caller);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
@@ -1394,7 +1485,7 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_issue_again": {
-      caller.issue = cleanForSpeech(text);
+      caller.issue = normalizeGenericServiceIssue(text);
       afterIssueCaptured(caller);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
@@ -1547,7 +1638,13 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_last_name": {
-      const possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${text}`);
+      let possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${text}`);
+      if (!possibleFullName || !hasFullName(possibleFullName)) {
+        const parsedLastName = parseLastNameResponse(text);
+        if (parsedLastName) {
+          possibleFullName = `${caller.firstName} ${parsedLastName}`;
+        }
+      }
       if (!possibleFullName || !hasFullName(possibleFullName)) {
         sendText(ws, "I'm sorry, I didn't quite catch the last name. Could you please repeat it?");
         return;
