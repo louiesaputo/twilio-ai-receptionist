@@ -496,6 +496,12 @@ function buildPostNotesTransition(caller, hadNotes) {
   return "Alright, let me get this wrapped up for us.";
 }
 
+function buildAddressRequestPrompt(caller) {
+  return caller.leadType === "quote"
+    ? "Got it. Can I get the project address?"
+    : "Got it. Can I get the service address?";
+}
+
 function appendAdditionalIssue(caller, issueText) {
   const safe = cleanForSpeech(issueText || "");
   if (!safe) return;
@@ -642,7 +648,9 @@ function isAffirmative(text) {
     "let me know when you re ready and i ll give it to you", "let me know when youre ready and ill give it to you",
     "okay let me know when you re ready and i ll give it to you", "okay let me know when youre ready and ill give it to you",
     "yeah we better add that", "we better add that", "yeah let s add one", "yeah lets add one",
-    "okay i ll give it to you", "okay ill give it to you", "yes i ll give it to you", "yes ill give it to you"
+    "yeah let s add that", "yeah lets add that", "let s add that", "lets add that",
+    "okay i ll give it to you", "okay ill give it to you", "yes i ll give it to you", "yes ill give it to you",
+    "okay let me know when you re ready and i ll give it to you", "okay let me know when youre ready and ill give it to you"
   ]);
 }
 
@@ -1358,6 +1366,11 @@ async function sendBookingToMake(caller) {
   caller.bookingSent = true;
 }
 
+async function submitPrimaryLeadAndBooking(caller) {
+  await sendLeadToMake(caller);
+  await sendBookingToMake(caller);
+}
+
 function buildDemoFollowupPayload(caller) {
   const fullName = caller.demoFollowupContactName || caller.fullName || "";
   const firstName = getFirstName(fullName) || caller.firstName || "";
@@ -1486,7 +1499,7 @@ function buildNextPrompt(caller) {
   }
 
   if (caller.lastStep === "ask_address") {
-    return caller.leadType === "quote" ? "What is the project address?" : "What is the service address?";
+    return buildAddressRequestPrompt(caller);
   }
 
   if (caller.lastStep === "confirm_address") {
@@ -1802,7 +1815,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
-      sendText(ws, caller.leadType === "quote" ? "What is the project address?" : "What is the service address?");
+      sendText(ws, buildAddressRequestPrompt(caller));
       return;
     }
 
@@ -1810,7 +1823,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.callbackNumber = cleanForSpeech(text);
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
-      sendText(ws, caller.leadType === "quote" ? "What is the project address?" : "What is the service address?");
+      sendText(ws, buildAddressRequestPrompt(caller));
       return;
     }
 
@@ -2048,6 +2061,8 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_notes": {
       const hadNotes = !isEndCallPhrase(text);
       if (hadNotes) caller.notes = cleanForSpeech(text);
+
+      await submitPrimaryLeadAndBooking(caller);
 
       if (caller.leadType === "demo") {
         caller.lastStep = "final_question";
