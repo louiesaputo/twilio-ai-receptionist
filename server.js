@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V10
- DATE: 2026-04-06 (v10 yes-no + repeat + phone + name followup pass)
+ CONVERSATIONRELAY BASELINE V11
+ DATE: 2026-04-06 (v11 intro + parser + demo-contact reuse pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V10 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V11 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V10";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V11";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -302,14 +302,25 @@ function stripGreetingPrefix(text) {
 }
 
 function normalizeGenericServiceIssue(text) {
-  const stripped = stripIssueLeadIn(text || "");
+  const stripped = cleanForSpeech(stripIssueLeadIn(text || ""));
   const item = detectServiceItem(stripped);
-  if (!item) return cleanForSpeech(stripped);
-  if (hasSpecificProblemDetail(stripped)) return cleanForSpeech(stripped);
-  if (/ (i|we)\s+need /i.test(stripped) || / (look|check|come) /i.test(stripped)) {
+  if (!item) return stripped;
+  if (hasSpecificProblemDetail(stripped)) return stripped;
+
+  const lowered = normalizedText(stripped);
+  if (containsAny(lowered, [
+    "someone to come look at", "somebody to come look at",
+    "someone to check", "somebody to check",
+    "look at", "check", "come look at", "come check"
+  ])) {
     return item.label;
   }
-  return cleanForSpeech(stripped);
+
+  if (/^(my|the|our)\s+/.test(lowered)) {
+    return stripped;
+  }
+
+  return item.label;
 }
 
 
@@ -407,7 +418,7 @@ function extractOpeningNameAndIssue(text) {
   }
 
   const patterns = [
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s*,\s*|\s+and\s+)(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s+here)?(?:\s*,\s*|\s+and\s+)(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(my\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(the\s+.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\s+need\s+.+)$/i,
@@ -567,6 +578,18 @@ function isNegative(text) {
   ]);
 }
 
+function isUseSameContactInfo(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "use the same", "use same", "same info", "same information", "same contact info",
+    "same contact information", "same as the demo", "same as demo", "same as i already gave you",
+    "same as what i already gave you", "use what i already gave you", "use what i gave you",
+    "use the contact information you already have", "use the information you already have",
+    "use the previous contact information", "use the info from the demo", "the same as the demo"
+  ]) || /^(yes|yeah|yep|sure) .* same /.test(t) || /^(no|nope|nah) .* same /.test(t);
+}
+
 function isRepeatRequest(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -609,10 +632,16 @@ function parseLastNameResponse(text) {
 function buildRepeatPrompt(caller) {
   const prompt = cleanForSpeech(caller.pendingPromptText || "");
   if (!prompt) return "";
+
+  const lowered = lowercaseFirst(prompt);
+  const questionLike = /^(is|are|was|were|can|could|would|will|do|does|did|have|has|had) /i.test(prompt);
+  const whLike = /^(what|when|where|which|who|how) /i.test(prompt);
+  const repeated = questionLike ? `if ${lowered}` : whLike ? lowered : lowered;
+
   const variants = [
-    `Oh, yeah, I'm sorry — I was asking, ${lowercaseFirst(prompt)}`,
-    `Certainly — I was asking, ${lowercaseFirst(prompt)}`,
-    `I'm sorry about that — I was asking, ${lowercaseFirst(prompt)}`
+    `Oh, yeah, I'm sorry — I was asking ${repeated}`,
+    `Certainly — I was asking ${repeated}`,
+    `I'm sorry about that — I was asking ${repeated}`
   ];
   const index = nextPromptIndex(caller, "repeatPromptIndex");
   return variants[index % variants.length];
@@ -1940,8 +1969,6 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "offer_demo_followup": {
-      // IMPORTANT: check for "no" first. With streaming transcripts, the "no" can be merged or clipped.
-      // We prefer honoring a decline rather than accidentally treating it as a yes.
       if (isNegative(text) || isEndCallPhrase(text)) {
         caller.demoFollowupRequested = false;
         caller.lastStep = "final_question";
@@ -1951,12 +1978,39 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isAffirmative(text)) {
         caller.demoFollowupRequested = true;
-        caller.lastStep = "ask_demo_followup_contact_name";
-        sendText(ws, "Great. Who should we reach out to about the demo?");
+        caller.lastStep = "confirm_demo_followup_info";
+        sendText(ws, "Okay, should I use the contact information you already gave me?");
         return;
       }
 
       sendText(ws, "Would you like for me to have one of our team members call you to discuss how this could help your company?");
+      return;
+    }
+
+    case "confirm_demo_followup_info": {
+      if (isUseSameContactInfo(text) || isAffirmative(text)) {
+        caller.demoFollowupContactName = caller.fullName || "";
+        caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
+        caller.demoFollowupEmail = caller.demoEmail || caller.demoFollowupEmail || "";
+
+        if (caller.demoFollowupEmail) {
+          await sendDemoFollowupToMake(caller);
+          closeSession(ws, "Alright. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+          return;
+        }
+
+        caller.lastStep = "ask_demo_followup_email_optional";
+        sendText(ws, "Would you like to include an email address as well?");
+        return;
+      }
+
+      if (isNegative(text)) {
+        caller.lastStep = "ask_demo_followup_contact_name";
+        sendText(ws, "What is the best contact name for us to use regarding this demo?");
+        return;
+      }
+
+      sendText(ws, "Okay, should I use the contact information you already gave me?");
       return;
     }
 
@@ -2102,7 +2156,7 @@ app.post("/incoming-call", (req, res) => {
   const connect = twiml.connect();
   connect.conversationRelay({
     url: `${PUBLIC_BASE_URL.replace(/^http/i, "ws")}/conversation-relay`,
-    welcomeGreeting: "Thank you for calling the Blue Caller Automation demo line. How can I help you today?",
+    welcomeGreeting: "Thank you for calling the Blue Caller Automation demo line. This is Alex. How can I help you today?",
     welcomeGreetingInterruptible: "speech",
     language: "en-US",
     ttsProvider: "ElevenLabs",
