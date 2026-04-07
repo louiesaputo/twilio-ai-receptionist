@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V11
- DATE: 2026-04-06 (v11 intro + parser + demo-contact reuse pass)
+ CONVERSATIONRELAY BASELINE V12
+ DATE: 2026-04-07 (v12 close-flow + no-handling + additional-issue pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V11 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V12 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V11";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V12";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -272,14 +272,22 @@ function stripIssueLeadIn(text) {
     .replace(/^(and\s+)?i\s+want\s+/i, "")
     .replace(/^(and\s+)?i\s+am\s+interested\s+in\s+/i, "")
     .replace(/^(and\s+)?i\'?m\s+interested\s+in\s+/i, "")
+    .replace(/^i\s+need\s+someone\s+to\s+call\s+me\s+about\s+/i, "")
+    .replace(/^i\s+need\s+somebody\s+to\s+call\s+me\s+about\s+/i, "")
     .replace(/^i\s+need\s+someone\s+to\s+(come\s+)?look\s+at\s+/i, "")
     .replace(/^i\s+need\s+somebody\s+to\s+(come\s+)?look\s+at\s+/i, "")
     .replace(/^i\s+need\s+someone\s+to\s+check\s+/i, "")
     .replace(/^i\s+need\s+somebody\s+to\s+check\s+/i, "")
+    .replace(/^can\s+someone\s+call\s+me\s+about\s+/i, "")
+    .replace(/^can\s+somebody\s+call\s+me\s+about\s+/i, "")
     .replace(/^can\s+someone\s+(come\s+)?look\s+at\s+/i, "")
     .replace(/^can\s+somebody\s+(come\s+)?look\s+at\s+/i, "")
     .replace(/^can\s+someone\s+check\s+/i, "")
     .replace(/^can\s+somebody\s+check\s+/i, "")
+    .replace(/^someone\s+to\s+call\s+me\s+about\s+/i, "")
+    .replace(/^somebody\s+to\s+call\s+me\s+about\s+/i, "")
+    .replace(/^someone\s+to\s+(come\s+)?look\s+at\s+/i, "")
+    .replace(/^somebody\s+to\s+(come\s+)?look\s+at\s+/i, "")
     .replace(/^come\s+look\s+at\s+/i, "")
     .replace(/^come\s+check\s+/i, "")
     .replace(/^calling\s+about\s+/i, "")
@@ -293,6 +301,7 @@ function stripIssueLeadIn(text) {
     .replace(/^for\s+/i, "")
     .trim();
 }
+
 
 function stripGreetingPrefix(text) {
   return cleanSpeechText(text || "")
@@ -369,6 +378,20 @@ function extractOpeningNameAndIssue(text) {
   if (!original) return { name: null, issueText: "" };
 
   const normalized = stripGreetingPrefix(original);
+
+  const directIntroPatterns = [
+    /^(?:this is|my name is|i am|i\'m)\s+([a-zA-Z\' -]+?)\s*,\s*and\s+(.+)$/i,
+    /^(?:this is|my name is|i am|i\'m)\s+([a-zA-Z\' -]+?)\s+and\s+(.+)$/i,
+    /^([a-zA-Z\' -]+?)\s+here\s*,?\s*(.+)$/i
+  ];
+
+  for (const pattern of directIntroPatterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+    const possibleName = normalizeNameCandidate(match[1]);
+    const issueText = stripIssueLeadIn(match[2]);
+    if (possibleName && issueText) return { name: possibleName, issueText };
+  }
   const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
 
   if (introMarker) {
@@ -449,6 +472,50 @@ function extractOpeningNameAndIssue(text) {
   }
 
   return { name: null, issueText: original };
+}
+
+
+function buildPostNotesTransition(caller, hadNotes) {
+  if (hadNotes) {
+    return caller.leadType === "quote"
+      ? "Alright, I've added that for the quote request."
+      : "Alright, I've added that for the technician.";
+  }
+  return "Alright, let me get this wrapped up for us.";
+}
+
+function appendAdditionalIssue(caller, issueText) {
+  const safe = cleanForSpeech(issueText || "");
+  if (!safe) return;
+  caller.additionalIssues = Array.isArray(caller.additionalIssues) ? caller.additionalIssues : [];
+  caller.additionalIssues.push(safe);
+  caller.notes = caller.notes ? `${caller.notes} Additional issue: ${safe}` : `Additional issue: ${safe}`;
+}
+
+function buildFinalSubmissionPrompt(caller) {
+  if (caller.emergencyAlert) {
+    return "Okay, if there's nothing else, I'll go ahead and get this submitted as an emergency and have somebody from our service team reach out to you.";
+  }
+  if (caller.leadType === "quote") {
+    return "Okay, if there's nothing else, I'll go ahead and get this submitted and have somebody from the office reach out to you about your quote request.";
+  }
+  if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
+    return `Okay, if there's nothing else, I'll go ahead and get this submitted and have somebody call you on ${caller.appointmentDate} at ${caller.appointmentTime}.`;
+  }
+  return "Okay, if there's nothing else, I'll go ahead and get this submitted and have somebody from the office reach out to you.";
+}
+
+function buildFinalSubmissionClose(caller) {
+  if (caller.emergencyAlert) {
+    return "Alright, I'll go ahead and get this submitted as an emergency, and somebody from our service team will reach out to you shortly. Thank you for calling.";
+  }
+  if (caller.leadType === "quote") {
+    return "Alright, I'll go ahead and get this submitted, and somebody from the office will reach out to you about your quote request. Thank you for calling.";
+  }
+  if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
+    return `Alright, I'll go ahead and get this submitted, and somebody will reach out to you for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Thank you for calling.`;
+  }
+  return "Alright, I'll go ahead and get this submitted, and somebody from the office will reach out to you shortly. Thank you for calling.";
 }
 
 function collapseSpacedDigits(value) {
@@ -534,14 +601,20 @@ function isAffirmative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent"])) return false;
+  if (isNegative(t)) return false;
 
-  if (["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct", "right", "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay", "that is fine", "thats fine"].includes(t)) return true;
+  const directYes = new Set([
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct",
+    "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay",
+    "that is fine", "thats fine", "all right", "alright"
+  ]);
+  if (directYes.has(t)) return true;
 
-  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is alright|is all right)\b/.test(t)) return true;
+  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
 
-  if (containsAny(t, [
+  return containsAny(t, [
     "yes please", "yeah please", "sounds good", "sounds great", "sounds fine", "sounds okay",
     "lets do that", "let s do that", "mark this as an emergency", "make this an emergency",
     "this is an emergency", "it is an emergency", "its an emergency",
@@ -549,22 +622,19 @@ function isAffirmative(text) {
     "whatever works", "that sounds good", "that sounds fine", "that sounds okay",
     "that date works", "the date works", "that time works", "the time works", "that should work for me",
     "sure that works", "sure that is fine", "sure that s fine", "fine by me", "okay that works",
-    "that is fine", "thats fine", "that s fine", "that is okay", "thats okay", "that s okay",
-    "that is good", "that s good", "that is alright", "thats alright", "that s alright",
-    "that is all right", "thats all right", "that s all right", "thatll work", "that ll work",
-    "thatll do", "that ll do", "fine with me", "works for me", "go ahead and do that",
-    "go ahead and book it", "go ahead and schedule it", "ill take that", "i ll take that",
-    "ill take it", "i ll take it", "that should be okay", "that should be fine"
-  ])) return true;
-
-  return false;
+    "that is good", "that s good", "thatll do", "that ll do", "fine with me", "works for me",
+    "go ahead and do that", "go ahead and book it", "go ahead and schedule it", "ill take that", "i ll take that",
+    "ill take it", "i ll take it", "that should be okay", "that should be fine",
+    "we d better add one", "wed better add one", "better add one", "let s add one", "lets add one",
+    "i ll give it to you", "ill give it to you", "add one", "yes add one", "yeah add one"
+  ]);
 }
 
 function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (["no", "nope", "nah", "skip", "pass"].includes(t)) return true;
-  if (/^(no|nope|nah) /.test(t)) return true;
+  if (/^(no|nope|nah)\b/.test(t)) return true;
   return containsAny(t, [
     "no thanks", "no thank you", "not now", "not really", "dont", "do not",
     "not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent",
@@ -577,6 +647,7 @@ function isNegative(text) {
     "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that"
   ]);
 }
+
 
 function isUseSameContactInfo(text) {
   const t = normalizeIntentText(text);
@@ -1104,6 +1175,7 @@ function getOrCreateCaller(key) {
       demoFollowupContactName: "",
       demoFollowupCallbackNumber: "",
       demoFollowupEmail: "",
+      additionalIssues: [],
       calendarPromptIndex: 0,
       callbackOfferIndex: 0,
       createdAt: new Date().toISOString(),
@@ -1937,34 +2009,18 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_notes": {
-      if (!isEndCallPhrase(text)) caller.notes = cleanForSpeech(text);
-      await sendLeadToMake(caller);
-      await sendBookingToMake(caller);
+      const hadNotes = !isEndCallPhrase(text);
+      if (hadNotes) caller.notes = cleanForSpeech(text);
 
       if (caller.leadType === "demo") {
         caller.lastStep = "final_question";
-        sendText(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about the demo. Is there anything else I can help you with before I let you go?");
+        sendText(ws, `${buildPostNotesTransition(caller, hadNotes)} ${buildFinalSubmissionPrompt(caller)}`);
         return;
       }
 
       caller.lastStep = "offer_demo_followup";
-
-      if (caller.emergencyAlert) {
-        sendText(ws, `Okay, I've got this marked as an emergency for ${caller.issueSummary}, and someone from our service team will contact you shortly. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
-        return;
-      }
-
-      if (caller.leadType === "quote") {
-        sendText(ws, "Okay, I've got everything I need. Someone from the office will reach out to you about your quote request. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?");
-        return;
-      }
-
-      if (caller.status === "scheduled") {
-        sendText(ws, `Okay, I've got you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone will reach out to you then. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
-        return;
-      }
-
-      sendText(ws, `Okay, I've got everything I need. Someone from the office will contact you shortly about ${caller.issueSummary}. How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
+      const transition = buildPostNotesTransition(caller, hadNotes);
+      sendText(ws, `${transition} How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
       return;
     }
 
@@ -1972,7 +2028,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isNegative(text) || isEndCallPhrase(text)) {
         caller.demoFollowupRequested = false;
         caller.lastStep = "final_question";
-        sendText(ws, "No problem. Before I let you go, is there anything else I can help you with?");
+        sendText(ws, buildFinalSubmissionPrompt(caller));
         return;
       }
 
@@ -1987,6 +2043,7 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "confirm_demo_followup_info": {
       if (isUseSameContactInfo(text) || isAffirmative(text)) {
         caller.demoFollowupContactName = caller.fullName || "";
@@ -1995,7 +2052,8 @@ async function handlePrompt(ws, caller, speech) {
 
         if (caller.demoFollowupEmail) {
           await sendDemoFollowupToMake(caller);
-          closeSession(ws, "Alright. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+          caller.lastStep = "final_question";
+          sendText(ws, buildFinalSubmissionPrompt(caller));
           return;
         }
 
@@ -2043,25 +2101,37 @@ async function handlePrompt(ws, caller, speech) {
         caller.demoFollowupEmail = cleanForSpeech(text);
       }
       await sendDemoFollowupToMake(caller);
-      closeSession(ws, "Alright. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+      caller.lastStep = "final_question";
+      sendText(ws, buildFinalSubmissionPrompt(caller));
       return;
     }
 
     case "capture_demo_followup_email": {
       caller.demoFollowupEmail = cleanForSpeech(text);
       await sendDemoFollowupToMake(caller);
-      closeSession(ws, "Alright. I'll have someone from our team reach out about the demo using that contact information. Thank you for calling.");
+      caller.lastStep = "final_question";
+      sendText(ws, buildFinalSubmissionPrompt(caller));
       return;
     }
 
     case "final_question": {
-      if (isNegative(text) || isEndCallPhrase(text)) {
-        closeSession(ws, `Alright, ${caller.firstName || "there"}, you're all set. Thank you for calling.`);
+      if (isPricingQuestion(text)) {
+        sendText(ws, `${pricingResponse()} ${buildFinalSubmissionPrompt(caller)}`);
         return;
       }
-      closeSession(ws, `Alright, ${caller.firstName || "there"}, you're all set. Thank you for calling.`);
+
+      if (isNegative(text) || isEndCallPhrase(text)) {
+        await sendLeadToMake(caller);
+        await sendBookingToMake(caller);
+        closeSession(ws, buildFinalSubmissionClose(caller));
+        return;
+      }
+
+      appendAdditionalIssue(caller, text);
+      sendText(ws, `Got it — I'll add that as well. ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
+
 
     default: {
       caller.lastStep = "ask_issue";
