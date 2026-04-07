@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V12
- DATE: 2026-04-07 (v12 close-flow + no-handling + additional-issue pass)
+ CONVERSATIONRELAY BASELINE V13
+ DATE: 2026-04-07 (v13 emergency-intro + close-loop + email-yes pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V12 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V13 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V12";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V13";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -373,6 +373,18 @@ function looksLikeIssueText(text) {
   );
 }
 
+function isGenericEmergencyIssue(text) {
+  const t = normalizedText(text || "");
+  if (!t) return false;
+  if (!containsAny(t, ["emergency", "urgent", "right away", "as soon as possible", "immediately"])) return false;
+  return !containsAny(t, [
+    "leak", "burst", "pipe", "faucet", "sink", "toilet", "roof", "ceiling", "water heater",
+    "refrigerator", "fridge", "freezer", "dishwasher", "washer", "dryer", "oven", "stove",
+    "range", "cooktop", "water main", "yard", "sewer", "sewage", "gas leak", "flood", "drain",
+    "clog", "clogged", "spigot", "remodel", "quote", "estimate", "installation"
+  ]);
+}
+
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
@@ -626,7 +638,11 @@ function isAffirmative(text) {
     "go ahead and do that", "go ahead and book it", "go ahead and schedule it", "ill take that", "i ll take that",
     "ill take it", "i ll take it", "that should be okay", "that should be fine",
     "we d better add one", "wed better add one", "better add one", "let s add one", "lets add one",
-    "i ll give it to you", "ill give it to you", "add one", "yes add one", "yeah add one"
+    "i ll give it to you", "ill give it to you", "add one", "yes add one", "yeah add one",
+    "let me know when you re ready and i ll give it to you", "let me know when youre ready and ill give it to you",
+    "okay let me know when you re ready and i ll give it to you", "okay let me know when youre ready and ill give it to you",
+    "yeah we better add that", "we better add that", "yeah let s add one", "yeah lets add one",
+    "okay i ll give it to you", "okay ill give it to you", "yes i ll give it to you", "yes ill give it to you"
   ]);
 }
 
@@ -738,7 +754,9 @@ function isEndCallPhrase(text) {
   return containsAny(t, [
     "that's all", "that is all", "nothing else", "i'm good", "im good", "all set",
     "that'll do it", "that will do it", "that's everything", "that is everything",
-    "that's all i need", "that is all i need", "we're good", "we are good", "that should do it"
+    "that's all i need", "that is all i need", "we're good", "we are good", "that should do it",
+    "i think that's it", "i think that is it", "no i think that's it", "no i think that is it",
+    "no that's all", "no that is all", "no that's it", "no that is it", "okay bye", "bye bye", "goodbye"
   ]);
 }
 
@@ -1515,6 +1533,15 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?");
         return;
       }
+      if (isGenericEmergencyIssue(parsed.issueText)) {
+        caller.issue = "";
+        caller.issueSummary = "";
+        caller.lastStep = "ask_issue_again";
+        sendText(ws, caller.fullName
+          ? `I'm sorry you're dealing with that, ${caller.firstName}. What exactly is going on so I can note the emergency correctly?`
+          : "I'm sorry you're dealing with that. What exactly is going on so I can note the emergency correctly?");
+        return;
+      }
       caller.issue = normalizeGenericServiceIssue(parsed.issueText);
       afterIssueCaptured(caller);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
@@ -1586,6 +1613,10 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_issue_again": {
+      if (isGenericEmergencyIssue(text)) {
+        sendText(ws, "I understand this is urgent. What exactly is going on so I can note the emergency correctly?");
+        return;
+      }
       caller.issue = normalizeGenericServiceIssue(text);
       afterIssueCaptured(caller);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
@@ -1657,23 +1688,6 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "leak_emergency_choice": {
-      if (isAffirmative(text)) {
-        markEmergency(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
-        if (spellingPrompt) {
-          sendText(ws, spellingPrompt);
-          return;
-        }
-        caller.lastStep = nextStep;
-        sendText(ws, caller.fullName
-          ? hasFullName(caller.fullName)
-            ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`
-          : "Alright. I'm going to mark this as an emergency so our service team can review it right away. Can I start with your full name?");
-        return;
-      }
-
       if (isNegative(text)) {
         markStandardService(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
@@ -1688,6 +1702,23 @@ async function handlePrompt(ws, caller, speech) {
             ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
           : "Alright. I've got this as a standard service request. I just need to gather a few details from you. Can I start with your full name?");
+        return;
+      }
+
+      if (isAffirmative(text)) {
+        markEmergency(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, caller.fullName
+          ? hasFullName(caller.fullName)
+            ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`
+          : "Alright. I'm going to mark this as an emergency so our service team can review it right away. Can I start with your full name?");
         return;
       }
 
@@ -1848,6 +1879,9 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
       }
+      if (!isNegative(text) && text.includes("@")) {
+        caller.demoEmail = cleanForSpeech(text);
+      }
       caller.lastStep = "ask_notes";
       sendText(ws, "Is there anything else you'd like me to include with this quote request?");
       return;
@@ -1865,6 +1899,9 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = "capture_demo_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
+      }
+      if (!isNegative(text) && text.includes("@")) {
+        caller.demoEmail = cleanForSpeech(text);
       }
       caller.lastStep = "ask_notes";
       sendText(ws, "Before I submit this demo request, are there any notes or details you'd like me to add?");
@@ -2121,6 +2158,13 @@ async function handlePrompt(ws, caller, speech) {
       }
 
       if (isNegative(text) || isEndCallPhrase(text)) {
+        await sendLeadToMake(caller);
+        await sendBookingToMake(caller);
+        closeSession(ws, buildFinalSubmissionClose(caller));
+        return;
+      }
+
+      if (/^(no|nope|nah) /.test(normalizeIntentText(text)) || containsAny(normalizedText(text), ["i think that's it", "i think that is it", "that s all", "thats all", "that is all", "bye", "goodbye"])) {
         await sendLeadToMake(caller);
         await sendBookingToMake(caller);
         closeSession(ws, buildFinalSubmissionClose(caller));
