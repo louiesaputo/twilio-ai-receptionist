@@ -617,7 +617,16 @@ function isBrowserCaller(caller) {
 }
 
 function buildBrowserCallbackPrompt() {
-  return "I see you're calling from a browser. Is there a good number to reach you should we get disconnected?";
+  return "It looks like your number didn't come through on my end. Can you give me a good callback number in case we get disconnected?";
+}
+
+function getPhoneCollectionStep(caller) {
+  return isBrowserCaller(caller) ? "get_new_phone" : "confirm_phone";
+}
+
+function isLikelyPhoneNumberResponse(text) {
+  const digits = String(text || "").replace(/\D/g, "");
+  return digits.length >= 7;
 }
 
 function formatPhoneNumberForSpeech(phone) {
@@ -1645,7 +1654,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
@@ -1684,7 +1693,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       if (caller.leadType === "quote" || caller.leadType === "demo") {
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -1703,7 +1712,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`);
         return;
       }
-      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
@@ -1728,7 +1737,7 @@ async function handlePrompt(ws, caller, speech) {
       } else {
         markStandardService(caller);
       }
-      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
@@ -1746,7 +1755,7 @@ async function handlePrompt(ws, caller, speech) {
     case "leak_emergency_choice": {
       if (isNegative(text)) {
         markStandardService(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -1763,7 +1772,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isAffirmative(text)) {
         markEmergency(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -1791,7 +1800,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.fullName = parsedName;
       caller.firstName = getFirstName(parsedName);
       caller.nameSpellingConfirmed = false;
-      const nextStep = hasFullName(parsedName) ? "confirm_phone" : "ask_last_name";
+      const nextStep = hasFullName(parsedName) ? getPhoneCollectionStep(caller) : "ask_last_name";
       const spellingPrompt = maybeQueueFirstNameSpelling(caller, nextStep);
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
@@ -1802,7 +1811,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `Thank you, ${caller.firstName}. Can I get your last name as well?`);
         return;
       }
-      caller.lastStep = "confirm_phone";
+      caller.lastStep = getPhoneCollectionStep(caller);
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
@@ -1813,15 +1822,15 @@ async function handlePrompt(ws, caller, speech) {
       caller.firstName = spelledFirstName || caller.firstName;
       caller.fullName = remainingParts ? `${caller.firstName} ${toTitleCase(remainingParts)}` : caller.firstName;
       caller.nameSpellingConfirmed = true;
-      const nextStep = caller.pendingNameNextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
+      const nextStep = caller.pendingNameNextStep || (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name");
       caller.pendingNameNextStep = "";
       if (nextStep === "ask_last_name") {
         caller.lastStep = "ask_last_name";
         sendText(ws, "Thank you. Can I get your last name as well?");
         return;
       }
-      caller.lastStep = "confirm_phone";
-      sendText(ws, `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      caller.lastStep = getPhoneCollectionStep(caller);
+      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
 
@@ -1839,12 +1848,12 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.fullName = possibleFullName;
       caller.firstName = getFirstName(possibleFullName);
-      const spellingPrompt = maybeQueueFirstNameSpelling(caller, "confirm_phone");
+      const spellingPrompt = maybeQueueFirstNameSpelling(caller, getPhoneCollectionStep(caller));
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
       }
-      caller.lastStep = "confirm_phone";
+      caller.lastStep = getPhoneCollectionStep(caller);
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
@@ -1869,6 +1878,13 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "get_new_phone": {
+      if (!isLikelyPhoneNumberResponse(text)) {
+        caller.callbackConfirmed = false;
+        sendText(ws, isBrowserCaller(caller)
+          ? "I'm sorry, I still need a callback number in case we get disconnected. What is the best number to reach you?"
+          : "I'm sorry, I still need a callback number. What is the best number to reach you?");
+        return;
+      }
       caller.callbackNumber = cleanForSpeech(text);
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
@@ -1887,7 +1903,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isAffirmative(text)) {
         if (caller.leadType === "quote") {
           caller.lastStep = "ask_project_timeline";
-          sendText(ws, "What is the projected timeline or start date for this project?");
+          sendText(ws, "What is the projected timeline or anticipated start date for this project?");
           return;
         }
         if (caller.leadType === "demo") {
