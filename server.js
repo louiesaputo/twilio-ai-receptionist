@@ -493,16 +493,24 @@ function wantsOptionalEmail(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (t.includes("@")) return true;
-  return isAffirmative(t) || containsAny(t, [
+  if (isAffirmative(t)) return true;
+
+  if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email)\b/.test(t)) return true;
+  if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(do that|do it|let s do that|lets do that|let s add that|lets add that|let s add one|lets add one)\b/.test(t)) return true;
+  if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(i ll|ill|let me)\b.*\b(give|add|include)\b/.test(t)) return true;
+
+  return containsAny(t, [
     "we better add one", "we d better add one", "wed better add one",
     "we better add that", "we d better add that", "wed better add that",
     "let s add one", "lets add one", "let s add that", "lets add that",
+    "let s do that", "lets do that", "let s do it", "lets do it",
     "add one", "add that", "include one", "include that",
     "i ll give it to you", "ill give it to you", "let me give it to you",
     "okay let me know when you re ready and i ll give it to you",
     "okay let me know when youre ready and ill give it to you",
     "yeah that ll do", "yeah thatll do", "yeah we better add one", "yeah we better add that",
     "yeah let s add one", "yeah lets add one", "yeah let s add that", "yeah lets add that",
+    "yeah let s do that", "yeah lets do that", "yeah let s do it", "yeah lets do it",
     "yes please", "sure add one", "sure add that", "go ahead"
   ]);
 }
