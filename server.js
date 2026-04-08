@@ -1,6 +1,6 @@
-﻿/*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 1 STABILITY FIXES
- DATE: 2026-04-08 (V15 pass 1 stability fixes: closing/emergency/alternate-slot)
+/*************************************************
+ CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES
+ DATE: 2026-04-08 (V15 pass 2 core routing fixes: yes/no, callback intent, booking, spoken times, repeat fallback, address correction)
 
 
  PURPOSE:
@@ -35,7 +35,7 @@
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 1 STABILITY FIXES LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES LOADED 🔥");
 
 
 const express = require("express");
@@ -62,7 +62,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS1-STABILITY-FIXES";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS2-CORE-ROUTING-FIXES";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -624,6 +624,9 @@ function buildFinalSubmissionPrompt(caller) {
   if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
     return `If there's nothing else, can I go ahead and get this submitted and have somebody call you on ${caller.appointmentDate} at ${caller.appointmentTime}?`;
   }
+  if (caller.status === "scheduled_pending_confirmation" && caller.appointmentDate && caller.appointmentTime) {
+    return `If there's nothing else, can I go ahead and get this submitted and have somebody from the office confirm your requested callback time on ${caller.appointmentDate} at ${caller.appointmentTime}?`;
+  }
   return "If there's nothing else, can I go ahead and get this submitted and have somebody from the office reach out to you?";
 }
 
@@ -800,8 +803,6 @@ function isNegative(text) {
     "no thanks", "no thank you", "not now", "not really", "dont", "do not",
     "not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent",
     "standard service", "normal service", "regular service", "something else", "another time", "different time",
-    "that s all right", "thats all right", "that is all right", "that s alright", "thats alright", "that is alright",
-    "that s okay", "thats okay", "that is okay", "that s fine", "thats fine", "that is fine",
     "that s not necessary", "thats not necessary", "that is not necessary",
     "that s not needed", "thats not needed", "that is not needed",
     "that won t be necessary", "that wont be necessary", "that will not be necessary",
@@ -1246,7 +1247,12 @@ function detectTimePreference(text) {
 
 function isSpecificTime(text) {
   const t = normalizedText(text);
-  return /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t) || /\b(noon|midnight)\b/i.test(t) || /\b\d{1,2}:\d{2}\b/i.test(t);
+  const numericTime = /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t) || /\b\d{1,2}:\d{2}\b/i.test(t);
+  const namedTime = /\b(noon|midnight)\b/i.test(t);
+  const spokenClock = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(o[' ]?clock|thirty|fifteen|forty[- ]?five)?\b/i.test(t);
+  const spokenParts = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(in\s+the\s+morning|in\s+the\s+afternoon|in\s+the\s+evening)\b/i.test(t);
+  const halfPast = /\bhalf\s+past\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i.test(t);
+  return numericTime || namedTime || spokenClock || spokenParts || halfPast;
 }
 
 
@@ -1265,6 +1271,31 @@ function isAlternateAvailabilityRequest(text) {
 function isRepeatTimeRequest(text) {
   const t = normalizedText(text);
   return containsAny(t, REPEAT_TIME_PHRASES);
+}
+
+
+function wantsOfficeCallback(text) {
+  const t = normalizedText(text);
+  return containsAny(t, [
+    "have someone call me", "have somebody call me", "call me back", "callback",
+    "just have the office call", "office can call", "have the office call",
+    "someone from the office can call", "somebody from the office can call"
+  ]);
+}
+
+
+function looksLikeAddressCorrection(text) {
+  const t = normalizedText(text);
+  if (!t) return false;
+  const multiWord = t.split(/\s+/).filter(Boolean).length >= 3;
+  return /\d/.test(t)
+    || containsAny(t, [
+      "street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr",
+      "boulevard", "blvd", "court", "ct", "circle", "cir", "way", "highway", "hwy",
+      "parkway", "pkwy", "suite", "unit", "apartment", "apt", "city"
+    ])
+    || /^((no\s+wait)|(actually)|(it s)|(its)|(it is)|(wait))\b/.test(t)
+    || multiWord;
 }
 
 
@@ -1918,6 +1949,8 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, repeatPrompt);
       return;
     }
+    sendText(ws, "I'm sorry, could you say that again?");
+    return;
   }
 
 
@@ -2278,7 +2311,12 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, caller.leadType === "quote" ? "I'm sorry about that. Let's try it again. What is the project address?" : "I'm sorry about that. Let's try it again. What is the service address?");
         return;
       }
-      sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`);
+      if (looksLikeAddressCorrection(text)) {
+        caller.address = normalizeAddressInput(text);
+        sendText(ws, `Got it. Let me read that back — ${formatAddressForSpeech(caller.address)}. Is that correct?`);
+        return;
+      }
+      sendText(ws, `I just need a yes or no — is ${formatAddressForSpeech(caller.address)} correct?`);
       return;
     }
 
@@ -2374,7 +2412,7 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
-      if (normalizedText(text).includes("call") || normalizedText(text).includes("callback")) {
+      if (wantsOfficeCallback(text)) {
         caller.status = "callback_requested";
         caller.lastStep = "ask_notes";
         sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. Is there anything else you'd like me to note for the technician?");
@@ -2435,9 +2473,10 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.appointmentTime = cleanForSpeech(text);
-      caller.status = "scheduled";
+      caller.status = "scheduled_pending_confirmation";
+      caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
-      sendText(ws, "Okay, I have you scheduled for your callback. Is there anything else you'd like me to note for the technician?");
+      sendText(ws, `Okay, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will confirm the exact callback time. Is there anything else you'd like me to note for the technician?`);
       return;
     }
 
@@ -2845,6 +2884,9 @@ wss.on("connection", (ws, request) => {
 
   ws.on("close", () => {
     wsBySession.delete(ws.sessionKey);
+    setTimeout(() => {
+      delete callerStore[ws.sessionKey];
+    }, 5000);
   });
 
 
