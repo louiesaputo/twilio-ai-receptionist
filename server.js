@@ -727,9 +727,61 @@ function getPhoneCollectionStep(caller) {
 }
 
 
+const SPOKEN_PHONE_DIGIT_MAP = {
+  zero: "0", oh: "0", o: "0",
+  one: "1",
+  two: "2", too: "2", to: "2",
+  three: "3",
+  four: "4", for: "4",
+  five: "5",
+  six: "6",
+  seven: "7",
+  eight: "8", ate: "8",
+  nine: "9"
+};
+
+
+function extractPhoneDigits(text) {
+  const raw = cleanForSpeech(text || "");
+  if (!raw) return "";
+
+  const numericDigits = raw.replace(/\D/g, "");
+  if (numericDigits.length >= 7) return numericDigits;
+
+  const fillerWords = new Set([
+    "my", "callback", "number", "is", "it", "s", "its", "the", "best", "good", "reach", "me",
+    "at", "can", "you", "use", "to", "call", "back", "phone", "cell", "home", "office", "area", "code"
+  ]);
+
+  const tokens = normalizeIntentText(raw)
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !fillerWords.has(token));
+
+  if (!tokens.length) return "";
+
+  let digits = "";
+  let recognizedCount = 0;
+  for (const token of tokens) {
+    if (SPOKEN_PHONE_DIGIT_MAP[token]) {
+      digits += SPOKEN_PHONE_DIGIT_MAP[token];
+      recognizedCount += 1;
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      digits += token;
+      recognizedCount += token.length;
+      continue;
+    }
+    return "";
+  }
+
+  return recognizedCount >= 7 ? digits : "";
+}
+
+
 function isLikelyPhoneNumberResponse(text) {
-  const digits = String(text || "").replace(/\D/g, "");
-  return digits.length >= 7;
+  return extractPhoneDigits(text).length >= 7;
 }
 
 
@@ -761,12 +813,13 @@ function isAffirmative(text) {
   const directYes = new Set([
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct",
     "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay",
-    "that is fine", "thats fine", "all right", "alright"
+    "that is fine", "thats fine", "all right", "alright", "that is correct", "thats correct"
   ]);
   if (directYes.has(t)) return true;
 
 
-  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great)\b/.test(t)) return true;
+  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is correct)\b/.test(t)) return true;
+  if (/^(yes|yeah|yep|yup|correct|absolutely|ok|okay)\b.*\b(correct|right)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
 
@@ -1287,15 +1340,19 @@ function wantsOfficeCallback(text) {
 function looksLikeAddressCorrection(text) {
   const t = normalizedText(text);
   if (!t) return false;
-  const multiWord = t.split(/\s+/).filter(Boolean).length >= 3;
-  return /\d/.test(t)
+  if (isAffirmative(t) || isNegative(t)) return false;
+
+  const startsLikeCorrection = /^((no\s+wait)|(actually)|(it s)|(its)|(it is)|(wait)|(sorry))\b/.test(t);
+  const hasAddressSignals = /\d/.test(t)
     || containsAny(t, [
       "street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr",
       "boulevard", "blvd", "court", "ct", "circle", "cir", "way", "highway", "hwy",
       "parkway", "pkwy", "suite", "unit", "apartment", "apt", "city"
-    ])
-    || /^((no\s+wait)|(actually)|(it s)|(its)|(it is)|(wait))\b/.test(t)
-    || multiWord;
+    ]);
+
+  if (hasAddressSignals) return true;
+  if (startsLikeCorrection && t.split(/\s+/).filter(Boolean).length >= 2) return true;
+  return false;
 }
 
 
@@ -2268,7 +2325,7 @@ async function handlePrompt(ws, caller, speech) {
           : "I'm sorry, I still need a callback number. What is the best number to reach you?");
         return;
       }
-      caller.callbackNumber = cleanForSpeech(text);
+      caller.callbackNumber = extractPhoneDigits(text) || cleanForSpeech(text);
       caller.callbackConfirmed = true;
       caller.lastStep = "ask_address";
       sendText(ws, buildAddressRequestPrompt(caller));
