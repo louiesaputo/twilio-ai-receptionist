@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15
- DATE: 2026-04-07 (v15 deep parser + closing + optional-email reliability pass)
+ CONVERSATIONRELAY BASELINE V15 SMALL FIXES V2
+ DATE: 2026-04-08 (V15 browser/email baseline + pending narrow fixes)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 SMALL FIXES V2 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-SMALL-FIXES-V2";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -498,6 +498,8 @@ function wantsOptionalEmail(text) {
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(do that|do it|let s do that|lets do that|let s add that|lets add that|let s add one|lets add one)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(i ll|ill|let me)\b.*\b(give|add|include)\b/.test(t)) return true;
+  if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email|let s|lets|give)\b/.test(t)) return true;
+  if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(that|one|that one|that too|that as well|that also)\b/.test(t) && /\b(add|include|email|give|do)\b/.test(t)) return true;
 
   return containsAny(t, [
     "we better add one", "we d better add one", "wed better add one",
@@ -553,7 +555,7 @@ function buildFinalSubmissionPrompt(caller) {
 
 
 function buildFinalSubmissionClose(caller) {
-  return "Okay, great. Thank you for calling, and you'll hear from us very soon.";
+  return "Thank you for calling Blue Caller Automation, and you'll hear from us very soon.";
 }
 
 
@@ -801,12 +803,15 @@ function isSkipResponse(text) {
 
 function isEndCallPhrase(text) {
   const t = normalizedText(text);
+  if (/^(yes|yeah|yep|yup)\b.*\b(that ll do it|thatll do it|that will do it|that s all|thats all|that s it|thats it|we re good|were good|i m good|im good|all set)\b/.test(normalizeIntentText(text))) return true;
   return containsAny(t, [
     "that's all", "that is all", "nothing else", "i'm good", "im good", "all set",
     "that'll do it", "that will do it", "that's everything", "that is everything",
     "that's all i need", "that is all i need", "we're good", "we are good", "that should do it",
     "i think that's it", "i think that is it", "no i think that's it", "no i think that is it",
-    "no that's all", "no that is all", "no that's it", "no that is it", "okay bye", "bye bye", "goodbye"
+    "no that's all", "no that is all", "no that's it", "no that is it", "okay bye", "bye bye", "goodbye",
+    "yeah that'll do it", "yeah thatll do it", "yeah that will do it", "yeah that's all", "yeah thats all",
+    "yeah that's it", "yeah thats it", "yeah we're good", "yeah we are good"
   ]);
 }
 
@@ -948,7 +953,7 @@ function isMainLineEmergencyCandidate(text) {
     "water main", "main line", "main leak", "main broke", "main broken", "main popped",
     "main in my yard", "main in the yard", "water line", "service line", "broken line", "burst line"
   ]) || (containsAny(t, ["main", "line", "water"]) && yardLike);
-  const severeLike = containsAny(t, ["popped", "burst", "broke", "broken", "water coming up", "water coming out", "leak", "leaking", "gushing", "pouring"]);
+  const severeLike = containsAny(t, ["popped", "burst", "broke", "broken", "busted", "just busted", "water coming up", "water coming out", "leak", "leaking", "gushing", "pouring"]);
   return mainLike && severeLike;
 }
 
@@ -971,7 +976,12 @@ function classifyIssue(issue) {
   const applianceSummary = buildApplianceIssueSummary(issue, serviceItem);
   if (serviceItem && serviceItem.category === "appliance" && applianceSummary) return { summary: applianceSummary };
   if (serviceItem && serviceItem.category === "fixture" && !hasSpecificProblemDetail(issue)) return { summary: `an issue with ${serviceItem.prompt}` };
-  if (isMainLineEmergencyCandidate(text)) return { summary: "a possible broken water main in your yard" };
+  if (isMainLineEmergencyCandidate(text)) {
+    if (containsAny(text, ["front yard", "front lawn"])) return { summary: "a broken main in your front yard" };
+    if (containsAny(text, ["back yard", "back lawn"])) return { summary: "a broken main in your back yard" };
+    if (text.includes("yard")) return { summary: "a broken main in your yard" };
+    return { summary: "a possible broken water main" };
+  }
   if ((text.includes("faucet") || text.includes("sink")) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking faucet" };
   if (text.includes("water heater") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking water heater" };
   if (text.includes("roof") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a roof leak" };
