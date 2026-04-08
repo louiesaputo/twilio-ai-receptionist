@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES
- DATE: 2026-04-08 (V15 pass 2 core routing fixes: yes/no, callback intent, booking, spoken times, repeat fallback, address correction)
+ CONVERSATIONRELAY BASELINE V15 PASS 4 BROWSER PHONE FLOW FIX
+ DATE: 2026-04-08 (V15 pass 4 browser callback capture + browser confirm-phone guard)
 
 
  PURPOSE:
@@ -35,7 +35,7 @@
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 4 BROWSER PHONE FLOW FIX LOADED 🔥");
 
 
 const express = require("express");
@@ -62,7 +62,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS2-CORE-ROUTING-FIXES";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS4-BROWSER-PHONE-FLOW-FIX";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -292,7 +292,7 @@ function normalizeSpelledFirstName(text, fallback = "") {
 
 function maybeQueueFirstNameSpelling(caller, nextStep) {
   if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
-    caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
+    caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name");
     caller.lastStep = "ask_first_name_spelling";
     return `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?`;
   }
@@ -1963,6 +1963,7 @@ function buildNextPrompt(caller) {
 
 
   if (caller.lastStep === "confirm_phone") {
+    if (isBrowserCaller(caller) && !caller.callbackNumber) return buildBrowserCallbackPrompt();
     return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
   }
 
@@ -2046,15 +2047,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (caller.leadType === "demo") {
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
         }
-        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? isBrowserCaller(caller)
+              ? "Absolutely. Can I get the best callback number in case we get disconnected?"
+              : `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -2062,15 +2066,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (caller.leadType === "quote") {
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
         }
-        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "ask_name";
+        caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? isBrowserCaller(caller)
+              ? "Absolutely. Can I get the best callback number in case we get disconnected?"
+              : `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -2299,6 +2306,12 @@ async function handlePrompt(ws, caller, speech) {
 
     case "confirm_phone": {
       if (isBrowserCaller(caller)) {
+        if (caller.callbackNumber) {
+          caller.callbackConfirmed = true;
+          caller.lastStep = "ask_address";
+          sendText(ws, buildAddressRequestPrompt(caller));
+          return;
+        }
         caller.callbackConfirmed = false;
         caller.lastStep = "get_new_phone";
         sendText(ws, buildBrowserCallbackPrompt());
