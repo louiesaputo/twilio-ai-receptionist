@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V13
- DATE: 2026-04-07 (v13 emergency-intro + close-loop + email-yes pass)
+ CONVERSATIONRELAY BASELINE V15
+ DATE: 2026-04-07 (v15 deep parser + closing + optional-email reliability pass)
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -31,7 +31,7 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V13 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 LOADED 🔥");
 
 const express = require("express");
 const twilio = require("twilio");
@@ -54,7 +54,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V13";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15";
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
@@ -390,49 +390,63 @@ function extractOpeningNameAndIssue(text) {
   if (!original) return { name: null, issueText: "" };
 
   const normalized = stripGreetingPrefix(original);
+  const sentenceParts = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => cleanSpeechText(part.replace(/[.!?]+$/g, "")))
+    .filter(Boolean);
 
-  const directIntroPatterns = [
-    /^(?:this is|my name is|i am|i\'m)\s+([a-zA-Z\' -]+?)\s*,\s*and\s+(.+)$/i,
-    /^(?:this is|my name is|i am|i\'m)\s+([a-zA-Z\' -]+?)\s+and\s+(.+)$/i,
-    /^([a-zA-Z\' -]+?)\s+here\s*,?\s*(.+)$/i
+  const nameOnlyPatterns = [
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+)$/i,
+    /^([a-zA-Z' -]+?)\s+here$/i
   ];
 
-  for (const pattern of directIntroPatterns) {
-    const match = normalized.match(pattern);
-    if (!match) continue;
-    const possibleName = normalizeNameCandidate(match[1]);
-    const issueText = stripIssueLeadIn(match[2]);
-    if (possibleName && issueText) return { name: possibleName, issueText };
-  }
-  const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
+  const nameAndIssuePatterns = [
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*(?:,\s*|\s+and\s+)(.+)$/i,
+    /^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(.+)$/i
+  ];
 
-  if (introMarker) {
-    const remainder = normalized.slice(introMarker[0].length).trim();
+  const tryIssueCleanup = (value) => stripIssueLeadIn(cleanForSpeech(value || ""));
 
-    const commaSplit = remainder.match(/^([^,]+),\s*(.+)$/);
-    if (commaSplit) {
-      const possibleName = normalizeNameCandidate(commaSplit[1]);
-      const issueText = stripIssueLeadIn(commaSplit[2]);
+  if (sentenceParts.length) {
+    const first = sentenceParts[0];
+
+    for (const pattern of nameAndIssuePatterns) {
+      const match = first.match(pattern);
+      if (!match) continue;
+      const possibleName = normalizeNameCandidate(match[1]);
+      const issueText = tryIssueCleanup(match[2]);
       if (possibleName && issueText) return { name: possibleName, issueText };
     }
 
+    for (const pattern of nameOnlyPatterns) {
+      const match = first.match(pattern);
+      if (!match) continue;
+      const possibleName = normalizeNameCandidate(match[1]);
+      if (!possibleName) continue;
+
+      const remainder = sentenceParts.slice(1).join(" ");
+      if (remainder) return { name: possibleName, issueText: tryIssueCleanup(remainder) };
+      return { name: possibleName, issueText: "" };
+    }
+  }
+
+  const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
+  if (introMarker) {
+    const remainder = normalized.slice(introMarker[0].length).trim();
     const issueMarkers = [
-      /\s+and\s+i\s+have\b/i,
-      /\s+i\s+have\b/i,
-      /\s+my\b/i,
-      /\s+the\b/i,
-      /\s+our\b/i,
-      /\s+i\s+need\b/i,
-      /\s+i\'?m\s+having\b/i,
-      /\s+i\s+am\s+having\b/i,
-      /\s+can\s+someone\b/i,
-      /\s+can\s+somebody\b/i,
-      /\s+can\s+you\b/i,
-      /\s+there\s+is\b/i,
-      /\s+because\b/i,
-      /\s+about\b/i,
-      /\s+with\b/i,
-      /\s+regarding\b/i
+      /[,.]?\s+and\s+i\s+have\b/i,
+      /[,.]?\s+i\s+have\b/i,
+      /[,.]?\s+i\s+need\b/i,
+      /[,.]?\s+i\'?m\s+having\b/i,
+      /[,.]?\s+i\s+am\s+having\b/i,
+      /[,.]?\s+can\s+someone\b/i,
+      /[,.]?\s+can\s+somebody\b/i,
+      /[,.]?\s+can\s+you\b/i,
+      /[,.]?\s+calling\s+about\b/i,
+      /[,.]?\s+calling\s+regarding\b/i,
+      /[,.]?\s+about\b/i,
+      /[,.]?\s+with\b/i,
+      /[,.]?\s+regarding\b/i
     ];
 
     let earliestIndex = -1;
@@ -444,7 +458,7 @@ function extractOpeningNameAndIssue(text) {
 
     if (earliestIndex > 0) {
       const possibleName = normalizeNameCandidate(remainder.slice(0, earliestIndex));
-      const issueText = stripIssueLeadIn(remainder.slice(earliestIndex));
+      const issueText = tryIssueCleanup(remainder.slice(earliestIndex));
       if (possibleName && issueText) return { name: possibleName, issueText };
     }
 
@@ -452,49 +466,55 @@ function extractOpeningNameAndIssue(text) {
     if (possibleNameOnly) return { name: possibleNameOnly, issueText: "" };
   }
 
-  const patterns = [
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)(?:\s+here)?(?:\s*,\s*|\s+and\s+)(.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(my\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(the\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\s+need\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(i\'?m\s+having\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+someone\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+somebody\s+.+)$/i,
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s+(can\s+you\s+.+)$/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (!match) continue;
-    const possibleName = normalizeNameCandidate(match[1]);
-    const issueText = stripIssueLeadIn(match[2]);
-    if (possibleName && issueText) {
-      return { name: possibleName, issueText };
-    }
-  }
-
-  const markerOnly = normalized.match(/^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+)$/i);
-  if (markerOnly) {
-    const possibleName = normalizeNameCandidate(markerOnly[1]);
-    if (possibleName) return { name: possibleName, issueText: "" };
+  const directFallback = normalized.match(/^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+)(.+)$/i);
+  if (directFallback) {
+    const possibleName = normalizeNameCandidate(directFallback[1]);
+    const issueText = tryIssueCleanup(directFallback[2]);
+    if (possibleName && issueText) return { name: possibleName, issueText };
   }
 
   if (looksLikeIssueText(normalized)) {
-    return { name: null, issueText: stripIssueLeadIn(normalized) || original };
+    return { name: null, issueText: tryIssueCleanup(normalized) || original };
   }
 
   return { name: null, issueText: original };
 }
 
 
+function normalizeProjectScopeNotes(text) {
+  return cleanForSpeech(text || "")
+    .replace(/\bflorida ceiling\b/gi, "floor-to-ceiling")
+    .replace(/\bfloor to ceiling\b/gi, "floor-to-ceiling")
+    .replace(/\bfloor two ceiling\b/gi, "floor-to-ceiling")
+    .trim();
+}
+
+function wantsOptionalEmail(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (t.includes("@")) return true;
+  return isAffirmative(t) || containsAny(t, [
+    "we better add one", "we d better add one", "wed better add one",
+    "we better add that", "we d better add that", "wed better add that",
+    "let s add one", "lets add one", "let s add that", "lets add that",
+    "add one", "add that", "include one", "include that",
+    "i ll give it to you", "ill give it to you", "let me give it to you",
+    "okay let me know when you re ready and i ll give it to you",
+    "okay let me know when youre ready and ill give it to you",
+    "yeah that ll do", "yeah thatll do", "yeah we better add one", "yeah we better add that",
+    "yeah let s add one", "yeah lets add one", "yeah let s add that", "yeah lets add that",
+    "yes please", "sure add one", "sure add that", "go ahead"
+  ]);
+}
+
 function buildPostNotesTransition(caller, hadNotes) {
   if (hadNotes) {
-    return caller.leadType === "quote"
-      ? "Alright, I've added that for the quote request."
-      : "Alright, I've added that for the technician.";
+    if (caller.leadType === "quote") return "Alright, I've added that to the quote request.";
+    return "Alright, I've added that for the technician.";
   }
   return "Alright, let me get this wrapped up for us.";
 }
+
 
 function buildAddressRequestPrompt(caller) {
   return caller.leadType === "quote"
@@ -512,29 +532,22 @@ function appendAdditionalIssue(caller, issueText) {
 
 function buildFinalSubmissionPrompt(caller) {
   if (caller.emergencyAlert) {
-    return "Okay, if there's nothing else, I'll go ahead and get this submitted as an emergency and have somebody from our service team reach out to you.";
+    return "If there's nothing else, can I go ahead and get this submitted as an emergency and have somebody from our service team reach out to you?";
   }
   if (caller.leadType === "quote") {
-    return "Okay, if there's nothing else, I'll go ahead and get this submitted and have somebody from the office reach out to you about your quote request.";
+    return "If there's nothing else, can I go ahead and get this submitted and have somebody from the office reach out to you about your quote request?";
   }
   if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
-    return `Okay, if there's nothing else, I'll go ahead and get this submitted and have somebody call you on ${caller.appointmentDate} at ${caller.appointmentTime}.`;
+    return `If there's nothing else, can I go ahead and get this submitted and have somebody call you on ${caller.appointmentDate} at ${caller.appointmentTime}?`;
   }
-  return "Okay, if there's nothing else, I'll go ahead and get this submitted and have somebody from the office reach out to you.";
+  return "If there's nothing else, can I go ahead and get this submitted and have somebody from the office reach out to you?";
 }
 
+
 function buildFinalSubmissionClose(caller) {
-  if (caller.emergencyAlert) {
-    return "Alright, I'll go ahead and get this submitted as an emergency, and somebody from our service team will reach out to you shortly. Thank you for calling.";
-  }
-  if (caller.leadType === "quote") {
-    return "Alright, I'll go ahead and get this submitted, and somebody from the office will reach out to you about your quote request. Thank you for calling.";
-  }
-  if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
-    return `Alright, I'll go ahead and get this submitted, and somebody will reach out to you for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Thank you for calling.`;
-  }
-  return "Alright, I'll go ahead and get this submitted, and somebody from the office will reach out to you shortly. Thank you for calling.";
+  return "Okay, great. Thank you for calling, and you'll hear from us very soon.";
 }
+
 
 function collapseSpacedDigits(value) {
   let output = value;
@@ -596,6 +609,15 @@ function formatAddressForSpeech(address) {
 
   const streetSpeech = streetLine.replace(/^(\d{1,5})(\s+.+)$/, (m, num, rest) => `${streetNumberToSpeech(num)}${rest}`);
   return city ? `${streetSpeech} in ${city}` : streetSpeech;
+}
+
+function isBrowserCaller(caller) {
+  const phone = cleanForSpeech(caller && caller.phone ? caller.phone : "");
+  return !phone || /^client:/i.test(phone) || phone === "browser-user";
+}
+
+function buildBrowserCallbackPrompt() {
+  return "I see you're calling from a browser. Is there a good number to reach you should we get disconnected?";
 }
 
 function formatPhoneNumberForSpeech(phone) {
@@ -676,14 +698,17 @@ function isNegative(text) {
 function isUseSameContactInfo(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
-  return containsAny(t, [
+  if (containsAny(t, [
     "use the same", "use same", "same info", "same information", "same contact info",
-    "same contact information", "same as the demo", "same as demo", "same as i already gave you",
-    "same as what i already gave you", "use what i already gave you", "use what i gave you",
+    "same contact information", "same as the demo", "same as demo",
+    "same as i already gave you", "same as what i already gave you",
+    "use what i already gave you", "use what i gave you",
     "use the contact information you already have", "use the information you already have",
     "use the previous contact information", "use the info from the demo", "the same as the demo"
-  ]) || /^(yes|yeah|yep|sure) .* same /.test(t) || /^(no|nope|nah) .* same /.test(t);
+  ])) return true;
+  return /^(yes|yeah|yep|sure)\b.*\bsame\b/.test(t) || /^(no|nope|nah)\b.*\bsame\b/.test(t);
 }
+
 
 function isRepeatRequest(text) {
   const t = normalizeIntentText(text);
@@ -729,9 +754,8 @@ function buildRepeatPrompt(caller) {
   if (!prompt) return "";
 
   const lowered = lowercaseFirst(prompt);
-  const questionLike = /^(is|are|was|were|can|could|would|will|do|does|did|have|has|had) /i.test(prompt);
-  const whLike = /^(what|when|where|which|who|how) /i.test(prompt);
-  const repeated = questionLike ? `if ${lowered}` : whLike ? lowered : lowered;
+  const questionLike = /^(is|are|was|were|can|could|would|will|do|does|did|have|has|had)\b/i.test(prompt);
+  const repeated = questionLike ? `if ${lowered}` : lowered;
 
   const variants = [
     `Oh, yeah, I'm sorry — I was asking ${repeated}`,
@@ -741,6 +765,7 @@ function buildRepeatPrompt(caller) {
   const index = nextPromptIndex(caller, "repeatPromptIndex");
   return variants[index % variants.length];
 }
+
 
 function isPhoneCorrection(text) {
   const t = normalizeIntentText(text);
@@ -1256,8 +1281,25 @@ function closeSession(ws, text) {
 }
 
 function buildMakePayload(caller) {
+  const leadType = caller.leadType || (caller.emergencyAlert ? "emergency" : "service");
+  let notes = caller.notes || "";
+
+  if (leadType === "quote") {
+    const quoteNotes = [];
+    if (caller.timeline) quoteNotes.push(`Project timeline or start date: ${caller.timeline}`);
+    if (caller.proposalDeadline) quoteNotes.push(`Quote or proposal deadline: ${caller.proposalDeadline}`);
+    if (caller.demoEmail) quoteNotes.push(`Email address: ${caller.demoEmail}`);
+    if (notes) quoteNotes.push(`Project scope notes: ${notes}`);
+    notes = quoteNotes.join(" | ");
+  }
+
+  if (Array.isArray(caller.additionalIssues) && caller.additionalIssues.length) {
+    const joined = caller.additionalIssues.join(" | ");
+    notes = notes ? `${notes} | Additional issues: ${joined}` : `Additional issues: ${joined}`;
+  }
+
   return {
-    leadType: caller.leadType || (caller.emergencyAlert ? "emergency" : "service"),
+    leadType,
     fullName: caller.fullName || "",
     firstName: caller.firstName || "",
     phone: caller.phone || "",
@@ -1274,7 +1316,7 @@ function buildMakePayload(caller) {
     timeline: caller.timeline || "",
     proposalDeadline: caller.proposalDeadline || "",
     demoEmail: caller.demoEmail || "",
-    notes: caller.notes || "",
+    notes,
     status: caller.status || "new_lead",
     appointmentDate: caller.appointmentDate || "",
     appointmentTime: caller.appointmentTime || "",
@@ -1282,6 +1324,7 @@ function buildMakePayload(caller) {
     timestamp: new Date().toISOString()
   };
 }
+
 
 function shouldSendToMake(caller) {
   if (caller.leadType === "quote") return Boolean(caller.fullName && (caller.callbackNumber || caller.phone) && caller.projectType);
@@ -1650,7 +1693,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get the best callback number in case we get disconnected?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
             : `Thank you, ${caller.firstName}. Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -1669,7 +1712,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get the best callback number in case we get disconnected?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
           : `Thank you, ${caller.firstName}. Can I get your last name as well?`
         : "Can I start by getting your full name, please?");
       return;
@@ -1760,7 +1803,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.lastStep = "confirm_phone";
-      sendText(ws, `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
 
@@ -1802,11 +1845,17 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.lastStep = "confirm_phone";
-      sendText(ws, `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
 
     case "confirm_phone": {
+      if (isBrowserCaller(caller)) {
+        caller.callbackConfirmed = false;
+        caller.lastStep = "get_new_phone";
+        sendText(ws, buildBrowserCallbackPrompt());
+        return;
+      }
       if (isPhoneCorrection(text)) {
         caller.callbackConfirmed = false;
         caller.lastStep = "get_new_phone";
@@ -1873,7 +1922,7 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_project_scope": {
-      caller.notes = cleanForSpeech(text);
+      caller.notes = normalizeProjectScopeNotes(text);
       caller.lastStep = "ask_proposal_deadline";
       sendText(ws, "Is there a deadline you're working with for the estimate or proposal?");
       return;
@@ -1887,7 +1936,7 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_quote_email_optional": {
-      if (isAffirmative(text)) {
+      if (wantsOptionalEmail(text)) {
         caller.lastStep = "capture_quote_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
@@ -1908,7 +1957,7 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_demo_email_optional": {
-      if (isAffirmative(text)) {
+      if (wantsOptionalEmail(text)) {
         caller.lastStep = "capture_demo_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
@@ -2144,7 +2193,7 @@ async function handlePrompt(ws, caller, speech) {
     }
 
     case "ask_demo_followup_email_optional": {
-      if (isAffirmative(text)) {
+      if (wantsOptionalEmail(text)) {
         caller.lastStep = "capture_demo_followup_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
@@ -2172,14 +2221,13 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      if (isNegative(text) || isEndCallPhrase(text)) {
-        await sendLeadToMake(caller);
-        await sendBookingToMake(caller);
-        closeSession(ws, buildFinalSubmissionClose(caller));
-        return;
-      }
-
-      if (/^(no|nope|nah) /.test(normalizeIntentText(text)) || containsAny(normalizedText(text), ["i think that's it", "i think that is it", "that s all", "thats all", "that is all", "bye", "goodbye"])) {
+      const finalText = normalizeIntentText(text);
+      if (
+        isAffirmative(text) ||
+        isNegative(text) ||
+        isEndCallPhrase(text) ||
+        containsAny(finalText, ["i think that s it", "i think thats it", "that s all", "thats all", "that is all", "bye", "goodbye"])
+      ) {
         await sendLeadToMake(caller);
         await sendBookingToMake(caller);
         closeSession(ws, buildFinalSubmissionClose(caller));
@@ -2190,7 +2238,6 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, `Got it — I'll add that as well. ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
-
 
     default: {
       caller.lastStep = "ask_issue";
@@ -2329,7 +2376,7 @@ wss.on("connection", (ws, request) => {
       if (type === "setup") {
         caller.callSid = cleanForSpeech(data.callSid || "");
         caller.phone = cleanForSpeech(data.from || "");
-        caller.callbackNumber = caller.phone;
+        caller.callbackNumber = isBrowserCaller(caller) ? "" : caller.phone;
         return;
       }
 
