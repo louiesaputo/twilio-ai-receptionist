@@ -62,7 +62,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS4-BROWSER-PHONE-FLOW-FIX";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS5-BROWSER-PROMPT-AND-NAME-FIX";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -491,6 +491,14 @@ function extractOpeningNameAndIssue(text) {
   const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
   if (introMarker) {
     const remainder = normalized.slice(introMarker[0].length).trim();
+
+    const implicitNameAndIssue = remainder.match(/^(.*?)\s+(i\s+have|i\s+need|i\'?m\s+having|i\s+am\s+having|can\s+someone|can\s+somebody|calling\s+about|calling\s+regarding|about|with|regarding)\b\s*(.+)$/i);
+    if (implicitNameAndIssue) {
+      const possibleName = normalizeNameCandidate(implicitNameAndIssue[1]);
+      const issueText = tryIssueCleanup(`${implicitNameAndIssue[2]} ${implicitNameAndIssue[3]}`);
+      if (possibleName && issueText) return { name: possibleName, issueText };
+    }
+
     const issueMarkers = [
       /[,.]?\s+and\s+i\s+have\b/i,
       /[,.]?\s+i\s+have\b/i,
@@ -718,7 +726,7 @@ function isBrowserCaller(caller) {
 
 
 function buildBrowserCallbackPrompt() {
-  return "It looks like your number didn't come through on my end. Can you give me a good callback number in case we get disconnected?";
+  return "It looks like your number didn't come through on my end. What is a good callback number in case we get disconnected?";
 }
 
 
@@ -2331,6 +2339,11 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "get_new_phone": {
+      if (isAffirmative(text) && !isLikelyPhoneNumberResponse(text)) {
+        caller.callbackConfirmed = false;
+        sendText(ws, "Alright. What is the best callback number to reach you?");
+        return;
+      }
       if (!isLikelyPhoneNumberResponse(text)) {
         caller.callbackConfirmed = false;
         sendText(ws, isBrowserCaller(caller)
