@@ -1,6 +1,7 @@
-/*************************************************
- CONVERSATIONRELAY BASELINE V15 SMALL FIXES V2
- DATE: 2026-04-08 (V15 browser/email baseline + pending narrow fixes)
+﻿/*************************************************
+ CONVERSATIONRELAY BASELINE V15 PASS 1 STABILITY FIXES
+ DATE: 2026-04-08 (V15 pass 1 stability fixes: closing/emergency/alternate-slot)
+
 
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
@@ -10,10 +11,12 @@
  - Preserves address readback as street + city only
  - Preserves callback wording preferences where practical
 
+
  IMPORTANT:
  - This is a separate test build, not an in-place upgrade of your old Gather server.
  - Requires the `ws` package:
      npm install ws
+
 
  REQUIRED ENV VARS:
  - TWILIO_ACCOUNT_SID
@@ -31,7 +34,9 @@
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
 *************************************************/
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 SMALL FIXES V2 LOADED 🔥");
+
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 1 STABILITY FIXES LOADED 🔥");
+
 
 const express = require("express");
 const twilio = require("twilio");
@@ -44,21 +49,26 @@ const path = require("path");
 const fs = require("fs");
 const { WebSocketServer } = require("ws");
 
+
 const app = express();
 app.set("trust proxy", true);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+
 app.use(express.static(path.join(__dirname, "public")));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
+
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-SMALL-FIXES-V2";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS1-STABILITY-FIXES";
+
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = process.env.BOOKING_WEBHOOK_URL || "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
+
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
@@ -68,8 +78,10 @@ const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
 
+
 const callerStore = {};
 const wsBySession = new Map();
+
 
 const AMBIGUOUS_FIRST_NAMES = new Set([
   "john", "jon", "johnny", "jonny",
@@ -86,11 +98,13 @@ const AMBIGUOUS_FIRST_NAMES = new Set([
   "bobbi", "robyn", "robin"
 ]);
 
+
 const CRITICAL_LEAK_TERMS = [
   "water main", "main line", "broken main", "burst pipe", "flooding", "flooded",
   "ceiling leak", "roof leak", "water heater leak", "water everywhere", "pouring",
   "gushing", "sewer", "sewage", "no water"
 ];
+
 
 const FIRST_AVAILABLE_PHRASES = [
   "first available", "earliest available", "soonest available", "next available",
@@ -102,6 +116,7 @@ const FIRST_AVAILABLE_PHRASES = [
   "give me the first one", "i'll take anything", "ill take anything", "anything is fine"
 ];
 
+
 const ALT_SLOT_PHRASES = [
   "what else do you have", "anything else", "another time", "different time",
   "later that day", "later the same day", "later in the afternoon",
@@ -109,11 +124,13 @@ const ALT_SLOT_PHRASES = [
   "the next day", "next day", "following day", "day after"
 ];
 
+
 const REPEAT_TIME_PHRASES = [
   "repeat that", "say that again", "what was that", "what was the time",
   "i missed that", "i missed the time", "can you repeat the time", "repeat the time",
   "what time was that"
 ];
+
 
 function currentEasternParts() {
   const fmt = new Intl.DateTimeFormat("en-US", {
@@ -127,6 +144,7 @@ function currentEasternParts() {
     hour12: false
   });
 
+
   const out = {};
   for (const p of fmt.formatToParts(new Date())) {
     if (p.type !== "literal") out[p.type] = p.value;
@@ -134,20 +152,24 @@ function currentEasternParts() {
   return out;
 }
 
+
 function currentDateInEastern() {
   const p = currentEasternParts();
   return `${p.year}-${p.month}-${p.day}`;
 }
+
 
 function currentDateTimeInEastern() {
   const p = currentEasternParts();
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
 }
 
+
 function cleanSpeechText(input) {
   if (!input) return "";
   return String(input).trim().replace(/\s+/g, " ");
 }
+
 
 function cleanForSpeech(input) {
   if (!input) return "";
@@ -157,9 +179,11 @@ function cleanForSpeech(input) {
     .trim();
 }
 
+
 function normalizedText(text) {
   return cleanForSpeech(text || "").toLowerCase();
 }
+
 
 function normalizeIntentText(text) {
   return normalizedText(text)
@@ -168,9 +192,11 @@ function normalizeIntentText(text) {
     .trim();
 }
 
+
 function containsAny(text, phrases) {
   return phrases.some((p) => text.includes(p));
 }
+
 
 function toTitleCase(value) {
   if (!value) return "";
@@ -180,6 +206,7 @@ function toTitleCase(value) {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
 }
+
 
 function cleanName(input) {
   if (!input) return "";
@@ -196,18 +223,22 @@ function cleanName(input) {
     .trim();
 }
 
+
 function getFirstName(fullName) {
   if (!fullName) return "";
   return cleanForSpeech(fullName).split(/\s+/)[0] || "";
 }
+
 
 function hasFullName(name) {
   if (!name) return false;
   return cleanForSpeech(name).split(/\s+/).filter(Boolean).length >= 2;
 }
 
+
 function normalizeNameCandidate(rawName) {
   if (!rawName) return "";
+
 
   const cleaned = cleanName(rawName).toLowerCase();
   const stopWords = new Set([
@@ -221,6 +252,7 @@ function normalizeNameCandidate(rawName) {
     "dryer", "microwave", "faucet", "sink", "toilet", "main", "leak"
   ]);
 
+
   const words = cleaned
     .split(/\s+/)
     .filter(Boolean)
@@ -228,21 +260,26 @@ function normalizeNameCandidate(rawName) {
     .map((word) => word.replace(/[^a-zA-Z'-]/g, ""))
     .filter(Boolean);
 
+
   if (words.length === 0 || words.length > 4) return "";
   if (blockedNameWords.has(words[0])) return "";
   if (words.some((word) => blockedNameWords.has(word))) return "";
 
+
   return toTitleCase(words.join(" "));
 }
+
 
 function parseFullNameFromSpeech(rawName) {
   return normalizeNameCandidate(rawName);
 }
 
+
 function firstNameNeedsSpelling(name) {
   const first = normalizedText(name).replace(/[^a-z]/g, "");
   return Boolean(first && AMBIGUOUS_FIRST_NAMES.has(first));
 }
+
 
 function normalizeSpelledFirstName(text, fallback = "") {
   const letters = cleanForSpeech(text || "").replace(/[^a-zA-Z]/g, "");
@@ -252,6 +289,7 @@ function normalizeSpelledFirstName(text, fallback = "") {
   return fallback || "";
 }
 
+
 function maybeQueueFirstNameSpelling(caller, nextStep) {
   if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
     caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name");
@@ -260,6 +298,7 @@ function maybeQueueFirstNameSpelling(caller, nextStep) {
   }
   return "";
 }
+
 
 function stripIssueLeadIn(text) {
   if (!text) return "";
@@ -303,6 +342,8 @@ function stripIssueLeadIn(text) {
 }
 
 
+
+
 function stripGreetingPrefix(text) {
   return cleanSpeechText(text || "")
     .replace(/^(hi|hello|hey)\s*,?\s*alex\s*[,. -]*\s*/i, "")
@@ -310,11 +351,13 @@ function stripGreetingPrefix(text) {
     .trim();
 }
 
+
 function normalizeGenericServiceIssue(text) {
   const stripped = cleanForSpeech(stripIssueLeadIn(text || ""));
   const item = detectServiceItem(stripped);
   if (!item) return stripped;
   if (hasSpecificProblemDetail(stripped)) return stripped;
+
 
   const lowered = normalizedText(stripped);
   if (containsAny(lowered, [
@@ -325,12 +368,16 @@ function normalizeGenericServiceIssue(text) {
     return item.label;
   }
 
+
   if (/^(my|the|our)\s+/.test(lowered)) {
     return stripped;
   }
 
+
   return item.label;
 }
+
+
 
 
 function looksLikeIssueText(text) {
@@ -373,6 +420,7 @@ function looksLikeIssueText(text) {
   );
 }
 
+
 function isGenericEmergencyIssue(text) {
   const t = normalizedText(text || "");
   if (!t) return false;
@@ -385,9 +433,11 @@ function isGenericEmergencyIssue(text) {
   ]);
 }
 
+
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
+
 
   const normalized = stripGreetingPrefix(original);
   const sentenceParts = normalized
@@ -395,20 +445,25 @@ function extractOpeningNameAndIssue(text) {
     .map((part) => cleanSpeechText(part.replace(/[.!?]+$/g, "")))
     .filter(Boolean);
 
+
   const nameOnlyPatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+)$/i,
     /^([a-zA-Z' -]+?)\s+here$/i
   ];
+
 
   const nameAndIssuePatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*(?:,\s*|\s+and\s+)(.+)$/i,
     /^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(.+)$/i
   ];
 
+
   const tryIssueCleanup = (value) => stripIssueLeadIn(cleanForSpeech(value || ""));
+
 
   if (sentenceParts.length) {
     const first = sentenceParts[0];
+
 
     for (const pattern of nameAndIssuePatterns) {
       const match = first.match(pattern);
@@ -418,17 +473,20 @@ function extractOpeningNameAndIssue(text) {
       if (possibleName && issueText) return { name: possibleName, issueText };
     }
 
+
     for (const pattern of nameOnlyPatterns) {
       const match = first.match(pattern);
       if (!match) continue;
       const possibleName = normalizeNameCandidate(match[1]);
       if (!possibleName) continue;
 
+
       const remainder = sentenceParts.slice(1).join(" ");
       if (remainder) return { name: possibleName, issueText: tryIssueCleanup(remainder) };
       return { name: possibleName, issueText: "" };
     }
   }
+
 
   const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
   if (introMarker) {
@@ -449,6 +507,7 @@ function extractOpeningNameAndIssue(text) {
       /[,.]?\s+regarding\b/i
     ];
 
+
     let earliestIndex = -1;
     for (const marker of issueMarkers) {
       const m = remainder.match(marker);
@@ -456,15 +515,18 @@ function extractOpeningNameAndIssue(text) {
       if (earliestIndex === -1 || m.index < earliestIndex) earliestIndex = m.index;
     }
 
+
     if (earliestIndex > 0) {
       const possibleName = normalizeNameCandidate(remainder.slice(0, earliestIndex));
       const issueText = tryIssueCleanup(remainder.slice(earliestIndex));
       if (possibleName && issueText) return { name: possibleName, issueText };
     }
 
+
     const possibleNameOnly = normalizeNameCandidate(remainder);
     if (possibleNameOnly) return { name: possibleNameOnly, issueText: "" };
   }
+
 
   const directFallback = normalized.match(/^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+)(.+)$/i);
   if (directFallback) {
@@ -473,12 +535,16 @@ function extractOpeningNameAndIssue(text) {
     if (possibleName && issueText) return { name: possibleName, issueText };
   }
 
+
   if (looksLikeIssueText(normalized)) {
     return { name: null, issueText: tryIssueCleanup(normalized) || original };
   }
 
+
   return { name: null, issueText: original };
 }
+
+
 
 
 function normalizeProjectScopeNotes(text) {
@@ -489,17 +555,20 @@ function normalizeProjectScopeNotes(text) {
     .trim();
 }
 
+
 function wantsOptionalEmail(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (t.includes("@")) return true;
   if (isAffirmative(t)) return true;
 
+
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(do that|do it|let s do that|lets do that|let s add that|lets add that|let s add one|lets add one)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(i ll|ill|let me)\b.*\b(give|add|include)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email|let s|lets|give)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(that|one|that one|that too|that as well|that also)\b/.test(t) && /\b(add|include|email|give|do)\b/.test(t)) return true;
+
 
   return containsAny(t, [
     "we better add one", "we d better add one", "wed better add one",
@@ -517,6 +586,7 @@ function wantsOptionalEmail(text) {
   ]);
 }
 
+
 function buildPostNotesTransition(caller, hadNotes) {
   if (hadNotes) {
     if (caller.leadType === "quote") return "Alright, I've added that to the quote request.";
@@ -526,11 +596,14 @@ function buildPostNotesTransition(caller, hadNotes) {
 }
 
 
+
+
 function buildAddressRequestPrompt(caller) {
   return caller.leadType === "quote"
     ? "Got it. Can I get the project address?"
     : "Got it. Can I get the service address?";
 }
+
 
 function appendAdditionalIssue(caller, issueText) {
   const safe = cleanForSpeech(issueText || "");
@@ -539,6 +612,7 @@ function appendAdditionalIssue(caller, issueText) {
   caller.additionalIssues.push(safe);
   caller.notes = caller.notes ? `${caller.notes} Additional issue: ${safe}` : `Additional issue: ${safe}`;
 }
+
 
 function buildFinalSubmissionPrompt(caller) {
   if (caller.emergencyAlert) {
@@ -554,9 +628,13 @@ function buildFinalSubmissionPrompt(caller) {
 }
 
 
+
+
 function buildFinalSubmissionClose(caller) {
   return "Thank you for calling Blue Caller Automation, and you'll hear from us very soon.";
 }
+
+
 
 
 function collapseSpacedDigits(value) {
@@ -569,6 +647,7 @@ function collapseSpacedDigits(value) {
   return output;
 }
 
+
 function normalizeAddressInput(input) {
   if (!input) return "";
   let value = cleanForSpeech(input)
@@ -578,14 +657,17 @@ function normalizeAddressInput(input) {
     .replace(/\s{2,}/g, " ")
     .trim();
 
+
   value = collapseSpacedDigits(value);
   value = value.replace(/^([0-9]{1,6})\s+\1(\b.*)$/i, "$1$2");
   value = value.replace(/\s{2,}/g, " ").trim();
   return value;
 }
 
+
 const SMALL_NUMBER_WORDS = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
 const TENS_WORDS = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
+
 
 function numberUnder100ToWords(num) {
   const n = Number(num);
@@ -596,6 +678,7 @@ function numberUnder100ToWords(num) {
   return ones ? `${TENS_WORDS[tens]}-${SMALL_NUMBER_WORDS[ones]}` : TENS_WORDS[tens];
 }
 
+
 function streetNumberToSpeech(numText) {
   const digits = String(numText || "").replace(/\D/g, "");
   if (!digits) return String(numText || "");
@@ -603,6 +686,7 @@ function streetNumberToSpeech(numText) {
   if (digits.length === 4) return `${numberUnder100ToWords(Number(digits.slice(0, 2)))} ${numberUnder100ToWords(Number(digits.slice(2)))}`;
   return digits.split("").map((d) => SMALL_NUMBER_WORDS[Number(d)]).join(" ");
 }
+
 
 function parseAddressParts(address) {
   const safe = cleanForSpeech(address || "");
@@ -613,31 +697,38 @@ function parseAddressParts(address) {
   return { streetLine, city };
 }
 
+
 function formatAddressForSpeech(address) {
   const { streetLine, city } = parseAddressParts(address);
   if (!streetLine) return "";
 
+
   const streetSpeech = streetLine.replace(/^(\d{1,5})(\s+.+)$/, (m, num, rest) => `${streetNumberToSpeech(num)}${rest}`);
   return city ? `${streetSpeech} in ${city}` : streetSpeech;
 }
+
 
 function isBrowserCaller(caller) {
   const phone = cleanForSpeech(caller && caller.phone ? caller.phone : "");
   return !phone || /^client:/i.test(phone) || phone === "browser-user";
 }
 
+
 function buildBrowserCallbackPrompt() {
   return "It looks like your number didn't come through on my end. Can you give me a good callback number in case we get disconnected?";
 }
+
 
 function getPhoneCollectionStep(caller) {
   return isBrowserCaller(caller) ? "get_new_phone" : "confirm_phone";
 }
 
+
 function isLikelyPhoneNumberResponse(text) {
   const digits = String(text || "").replace(/\D/g, "");
   return digits.length >= 7;
 }
+
 
 function formatPhoneNumberForSpeech(phone) {
   if (!phone) return "unknown";
@@ -656,11 +747,13 @@ function formatPhoneNumberForSpeech(phone) {
   return digits.split("").map(toWord).join(" ");
 }
 
+
 function isAffirmative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent"])) return false;
   if (isNegative(t)) return false;
+
 
   const directYes = new Set([
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct",
@@ -669,9 +762,11 @@ function isAffirmative(text) {
   ]);
   if (directYes.has(t)) return true;
 
+
   if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
+
 
   return containsAny(t, [
     "yes please", "yeah please", "sounds good", "sounds great", "sounds fine", "sounds okay",
@@ -695,6 +790,7 @@ function isAffirmative(text) {
   ]);
 }
 
+
 function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -714,6 +810,8 @@ function isNegative(text) {
 }
 
 
+
+
 function isUseSameContactInfo(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -727,6 +825,8 @@ function isUseSameContactInfo(text) {
   ])) return true;
   return /^(yes|yeah|yep|sure)\b.*\bsame\b/.test(t) || /^(no|nope|nah)\b.*\bsame\b/.test(t);
 }
+
+
 
 
 function isRepeatRequest(text) {
@@ -743,11 +843,13 @@ function isRepeatRequest(text) {
   ]);
 }
 
+
 function lowercaseFirst(value) {
   const safe = String(value || "").trim();
   if (!safe) return "";
   return safe.charAt(0).toLowerCase() + safe.slice(1);
 }
+
 
 function parseLastNameResponse(text) {
   const safe = cleanForSpeech(text || "")
@@ -756,25 +858,32 @@ function parseLastNameResponse(text) {
     .trim();
   if (!safe) return "";
 
+
   const direct = safe.match(/^([A-Za-z'-]+)(?:\s*,?\s*(?:[A-Za-z][\s-]*){2,})?$/);
   if (direct) return toTitleCase(direct[1]);
+
 
   const lettersOnly = safe.replace(/[^A-Za-z]/g, "");
   if (lettersOnly.length >= 2 && lettersOnly.length <= 20) return toTitleCase(lettersOnly);
 
+
   const firstWord = safe.match(/^([A-Za-z'-]+)/);
   if (firstWord) return toTitleCase(firstWord[1]);
 
+
   return "";
 }
+
 
 function buildRepeatPrompt(caller) {
   const prompt = cleanForSpeech(caller.pendingPromptText || "");
   if (!prompt) return "";
 
+
   const lowered = lowercaseFirst(prompt);
   const questionLike = /^(is|are|was|were|can|could|would|will|do|does|did|have|has|had)\b/i.test(prompt);
   const repeated = questionLike ? `if ${lowered}` : lowered;
+
 
   const variants = [
     `Oh, yeah, I'm sorry — I was asking ${repeated}`,
@@ -786,6 +895,8 @@ function buildRepeatPrompt(caller) {
 }
 
 
+
+
 function isPhoneCorrection(text) {
   const t = normalizeIntentText(text);
   return (
@@ -794,12 +905,14 @@ function isPhoneCorrection(text) {
   );
 }
 
+
 function isSkipResponse(text) {
   const t = normalizeIntentText(text);
   return (
     t === "skip" || t === "none" || t === "not right now" || t === "id rather skip that" || t === "i would rather skip that" || isNegative(t)
   );
 }
+
 
 function isEndCallPhrase(text) {
   const t = normalizedText(text);
@@ -815,6 +928,7 @@ function isEndCallPhrase(text) {
   ]);
 }
 
+
 function isPricingQuestion(text) {
   const t = normalizedText(text);
   return containsAny(t, [
@@ -824,9 +938,11 @@ function isPricingQuestion(text) {
   ]);
 }
 
+
 function pricingResponse() {
   return "That is a great question. Pricing can vary depending on the job, so someone from the office will go over that with you when they call.";
 }
+
 
 function isDemoIntent(text) {
   const t = normalizedText(text);
@@ -836,6 +952,7 @@ function isDemoIntent(text) {
     "ai receptionist service", "learn more about your service", "how does your service work"
   ]);
 }
+
 
 function isQuoteIntent(text) {
   const t = normalizedText(text);
@@ -848,6 +965,7 @@ function isQuoteIntent(text) {
   return false;
 }
 
+
 function classifyProjectType(text) {
   const raw = cleanForSpeech(text || "");
   const t = normalizedText(raw);
@@ -859,11 +977,13 @@ function classifyProjectType(text) {
   return raw || "this project";
 }
 
+
 function detectServiceItem(issue) {
   const text = normalizedText(issue)
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
 
   const items = [
     { pattern: /\b(refrigerator|refrigerators|fridge|fridges|freezer|freezers)\b/, label: "refrigerator", prompt: "your refrigerator", category: "appliance" },
@@ -882,11 +1002,13 @@ function detectServiceItem(issue) {
     { pattern: /\b(water heater)\b/, label: "water heater", prompt: "your water heater", category: "fixture" }
   ];
 
+
   for (const item of items) {
     if (item.pattern.test(text)) return item;
   }
   return null;
 }
+
 
 function hasSpecificProblemDetail(issue) {
   const text = normalizedText(issue);
@@ -904,6 +1026,7 @@ function hasSpecificProblemDetail(issue) {
   ]);
 }
 
+
 function detectMissingProblemItem(issue) {
   const item = detectServiceItem(issue);
   if (!item) return null;
@@ -912,11 +1035,13 @@ function detectMissingProblemItem(issue) {
   return item;
 }
 
+
 function combineItemAndDetail(item, detail) {
   const safeItem = cleanForSpeech(item || "");
   const safeDetail = cleanForSpeech(detail || "");
   return `${safeItem} ${safeDetail}`.trim();
 }
+
 
 function buildApplianceIssueSummary(issue, item) {
   const t = normalizedText(issue);
@@ -939,12 +1064,78 @@ function buildApplianceIssueSummary(issue, item) {
   return `an issue with ${item.prompt}`;
 }
 
+
 function buildUnknownIssueSummary(issue) {
   const cleaned = cleanForSpeech(issue || "");
   if (!cleaned) return "the issue you described";
   if (cleaned.length <= 80) return cleaned;
   return `${cleaned.slice(0, 77).trim()}...`;
 }
+
+
+function humanizeIssueSummaryForSpeech(summary) {
+  return cleanForSpeech(summary || "")
+    .replace(/^i think i have\s+/i, "")
+    .replace(/^i have\s+/i, "")
+    .replace(/^there(?:'s| is)\s+/i, "")
+    .replace(/\bmy\b/gi, "your")
+    .replace(/\bour\b/gi, "your")
+    .trim();
+}
+
+
+function buildIssueAcknowledgement(caller) {
+  const summary = humanizeIssueSummaryForSpeech(caller.issueSummary || caller.issue || "that issue");
+  if (!summary) return "I'm sorry you're dealing with that.";
+  if (isMainLineEmergencyCandidate(caller.issue || "") || normalizedText(summary).includes("broken main")) {
+    return `I'm sorry you're dealing with what sounds like ${summary}.`;
+  }
+  return `I'm sorry you're dealing with ${summary}.`;
+}
+
+
+function isSameAvailabilitySlot(firstDate, firstTime, secondDate, secondTime) {
+  return normalizedText(firstDate || "") === normalizedText(secondDate || "")
+    && normalizedText(firstTime || "") === normalizedText(secondTime || "");
+}
+
+
+function buildExplicitAlternateAvailabilityQuery(dateText, timeText, rawText = "") {
+  const safeDate = cleanForSpeech(dateText || "");
+  const safeTime = cleanForSpeech(timeText || "");
+  const intentText = normalizedText(rawText || "");
+
+  if (!safeDate) return "";
+  if (containsAny(intentText, ["later that day", "later the same day", "later in the afternoon", "later that afternoon", "anything later", "something later"])) {
+    return `next available callback later than ${safeTime} on ${safeDate}`;
+  }
+  if (containsAny(intentText, ["next day", "the next day", "following day", "day after"])) {
+    const shiftedDate = shiftSpokenDateText(safeDate, 1);
+    return shiftedDate ? `next available callback on ${shiftedDate}` : `next available callback after ${safeDate} at ${safeTime}`;
+  }
+  return `next available callback after ${safeDate} at ${safeTime}`;
+}
+
+
+function buildAlternateAvailabilityOffer(caller, requestedText, availability, previousDate, previousTime, usedNextDayFallback = false) {
+  const phrase = spokenAvailabilityPhrase(availability.date, availability.time);
+  const lowered = normalizedText(requestedText || "");
+
+  if (usedNextDayFallback) {
+    return `I don't have anything later that day open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
+  }
+
+  if (containsAny(lowered, ["later that day", "later the same day", "later in the afternoon", "later that afternoon", "anything later", "something later"])) {
+    return `I don't have anything later than ${previousTime} open that day, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
+  }
+
+  if (containsAny(lowered, ["next day", "the next day", "following day", "day after"])) {
+    return `I don't have the same day option open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
+  }
+
+  return `I don't have that exact option open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
+}
+
 
 function isMainLineEmergencyCandidate(text) {
   const t = normalizedText(text);
@@ -957,6 +1148,7 @@ function isMainLineEmergencyCandidate(text) {
   return mainLike && severeLike;
 }
 
+
 function isHardEmergency(text) {
   const t = normalizedText(text);
   return containsAny(t, [
@@ -965,10 +1157,12 @@ function isHardEmergency(text) {
   ]) || isMainLineEmergencyCandidate(t);
 }
 
+
 function isLeakLikeIssue(text) {
   const t = normalizedText(text);
   return containsAny(t, ["leak", "leaking", "drip", "dripping"]);
 }
+
 
 function classifyIssue(issue) {
   const text = normalizedText(issue);
@@ -996,6 +1190,7 @@ function classifyIssue(issue) {
   return { summary: buildUnknownIssueSummary(issue) };
 }
 
+
 function parseSpokenDateText(dateText) {
   const raw = cleanForSpeech(dateText || "");
   const m = raw.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
@@ -1006,6 +1201,7 @@ function parseSpokenDateText(dateText) {
   };
   return { weekday: m[1], month: months[m[2].toLowerCase()], day: Number(m[3]) };
 }
+
 
 function shiftSpokenDateText(dateText, daysToAdd = 0) {
   const parsed = parseSpokenDateText(dateText);
@@ -1023,6 +1219,7 @@ function shiftSpokenDateText(dateText, daysToAdd = 0) {
   return `${weekday}, ${month} ${day}`;
 }
 
+
 function spokenAvailabilityPhrase(dateText, timeText) {
   const parsed = parseSpokenDateText(dateText);
   if (!parsed) return `${dateText} at ${timeText}`;
@@ -1036,6 +1233,7 @@ function spokenAvailabilityPhrase(dateText, timeText) {
   return `${dateText} at ${timeText}`;
 }
 
+
 function detectTimePreference(text) {
   const t = normalizedText(text);
   if (containsAny(t, ["morning", "mornings", "early morning"])) return "morning";
@@ -1045,25 +1243,30 @@ function detectTimePreference(text) {
   return "";
 }
 
+
 function isSpecificTime(text) {
   const t = normalizedText(text);
   return /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t) || /\b(noon|midnight)\b/i.test(t) || /\b\d{1,2}:\d{2}\b/i.test(t);
 }
+
 
 function isFirstAvailableRequest(text) {
   const t = normalizedText(text);
   return containsAny(t, FIRST_AVAILABLE_PHRASES);
 }
 
+
 function isAlternateAvailabilityRequest(text) {
   const t = normalizedText(text);
   return containsAny(t, ALT_SLOT_PHRASES);
 }
 
+
 function isRepeatTimeRequest(text) {
   const t = normalizedText(text);
   return containsAny(t, REPEAT_TIME_PHRASES);
 }
+
 
 function extractDatePart(text) {
   const value = cleanForSpeech(text || "");
@@ -1075,6 +1278,7 @@ function extractDatePart(text) {
   ])) return value;
   return "";
 }
+
 
 function buildAvailabilityRawQuery(rawText, existingDate = "", existingTime = "") {
   const raw = cleanForSpeech(rawText || "");
@@ -1090,6 +1294,7 @@ function buildAvailabilityRawQuery(rawText, existingDate = "", existingTime = ""
   return raw;
 }
 
+
 function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   const raw = cleanForSpeech(text || "");
   let requestedDate = extractDatePart(raw);
@@ -1101,6 +1306,7 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
     requestedTimePreference
   };
 }
+
 
 function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
   const [datePart, timePart] = String(localDateTime || "").split("T");
@@ -1117,6 +1323,7 @@ function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
   const ss = String(dt.getUTCSeconds()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
 }
+
 
 function parseCallbackDateAndTimeToLocal(dateText, timeText) {
   const safeDate = cleanForSpeech(dateText || "");
@@ -1145,11 +1352,13 @@ function parseCallbackDateAndTimeToLocal(dateText, timeText) {
   return { startLocal, endLocal };
 }
 
+
 function nextPromptIndex(caller, key) {
   const current = Number.isInteger(caller[key]) ? caller[key] : 0;
   caller[key] = current + 1;
   return current;
 }
+
 
 function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
   const firstAvailablePrompts = [
@@ -1158,11 +1367,13 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
     "Let me see what I have available first."
   ];
 
+
   const specificDatePrompts = [
     "Alright, let me see if that date is available.",
     "Let me see if that date is open.",
     "I already have the calendar up. Let me see if that date is available."
   ];
+
 
   const alternatePrompts = [
     "Let's see what else I have available.",
@@ -1170,20 +1381,24 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
     "Alright, let me see what else is open."
   ];
 
+
   const generalPrompts = [
     "Let me see what's available.",
     "I already have the calendar up. Let me see what's available.",
     "Let me take a look and see what I have open."
   ];
 
+
   let options = generalPrompts;
   if (mode === "first_available" || isFirstAvailableRequest(rawText)) options = firstAvailablePrompts;
   else if (mode === "alternate" || isAlternateAvailabilityRequest(rawText)) options = alternatePrompts;
   else if (mode === "specific_date" || extractDatePart(rawText)) options = specificDatePrompts;
 
+
   const index = nextPromptIndex(caller, "calendarPromptIndex");
   return options[index % options.length];
 }
+
 
 function buildSchedulingChoicePrompt(caller) {
   const variants = [
@@ -1192,9 +1407,11 @@ function buildSchedulingChoicePrompt(caller) {
     "Let's get you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a date in mind, or would you rather have someone from the office call you?"
   ];
 
+
   const index = nextPromptIndex(caller, "scheduleChoicePromptIndex");
   return variants[index % variants.length];
 }
+
 
 function buildCallbackOfferPrompt(caller, dateText, timeText) {
   const phrase = spokenAvailabilityPhrase(dateText, timeText);
@@ -1204,9 +1421,11 @@ function buildCallbackOfferPrompt(caller, dateText, timeText) {
     `I've got ${phrase} available. Can I go ahead and book that callback for you?`
   ];
 
+
   const index = nextPromptIndex(caller, "callbackOfferIndex");
   return variants[index % variants.length];
 }
+
 
 function getOrCreateCaller(key) {
   if (!callerStore[key]) {
@@ -1264,6 +1483,7 @@ function getOrCreateCaller(key) {
   return callerStore[key];
 }
 
+
 function lightlyPaceText(text) {
   const safe = cleanForSpeech(text || "");
   if (!safe) return "";
@@ -1272,6 +1492,7 @@ function lightlyPaceText(text) {
     .replace(/\b(Thank you)\. /g, "$1, ")
     .trim();
 }
+
 
 function sendText(ws, text, options = {}) {
   if (!ws || ws.readyState !== 1) return;
@@ -1289,16 +1510,20 @@ function sendText(ws, text, options = {}) {
   }));
 }
 
+
 function estimateSpeechDurationMs(text) {
   const safe = cleanForSpeech(text || "");
   if (!safe) return 0;
+
 
   const commaCount = (safe.match(/[,;:]/g) || []).length;
   const stopCount = (safe.match(/[.!?]/g) || []).length;
   const estimated = 3800 + (safe.length * 88) + (commaCount * 260) + (stopCount * 420);
 
+
   return Math.max(14000, Math.min(32000, estimated));
 }
+
 
 function closeSession(ws, text) {
   if (text) sendText(ws, text, { interruptible: false, preemptible: false, remember: false });
@@ -1307,9 +1532,11 @@ function closeSession(ws, text) {
   }, text ? estimateSpeechDurationMs(text) : 0);
 }
 
+
 function buildMakePayload(caller) {
   const leadType = caller.leadType || (caller.emergencyAlert ? "emergency" : "service");
   let notes = caller.notes || "";
+
 
   if (leadType === "quote") {
     const quoteNotes = [];
@@ -1320,10 +1547,12 @@ function buildMakePayload(caller) {
     notes = quoteNotes.join(" | ");
   }
 
+
   if (Array.isArray(caller.additionalIssues) && caller.additionalIssues.length) {
     const joined = caller.additionalIssues.join(" | ");
     notes = notes ? `${notes} | Additional issues: ${joined}` : `Additional issues: ${joined}`;
   }
+
 
   return {
     leadType,
@@ -1353,11 +1582,14 @@ function buildMakePayload(caller) {
 }
 
 
+
+
 function shouldSendToMake(caller) {
   if (caller.leadType === "quote") return Boolean(caller.fullName && (caller.callbackNumber || caller.phone) && caller.projectType);
   if (caller.leadType === "demo") return Boolean(caller.fullName && (caller.callbackNumber || caller.phone || caller.demoEmail));
   return Boolean(caller.fullName && (caller.callbackNumber || caller.phone) && caller.issueSummary);
 }
+
 
 function postJsonToWebhook(webhookUrl, payload, label) {
   return new Promise((resolve) => {
@@ -1374,6 +1606,7 @@ function postJsonToWebhook(webhookUrl, payload, label) {
         }
       };
 
+
       const req = https.request(options, (webhookRes) => {
         let body = "";
         webhookRes.on("data", (chunk) => { body += chunk; });
@@ -1383,10 +1616,12 @@ function postJsonToWebhook(webhookUrl, payload, label) {
         });
       });
 
+
       req.on("error", (err) => {
         console.error(`[${label} ERROR]`, err.message);
         resolve(null);
       });
+
 
       req.write(data);
       req.end();
@@ -1397,12 +1632,14 @@ function postJsonToWebhook(webhookUrl, payload, label) {
   });
 }
 
+
 async function sendLeadToMake(caller) {
   if (caller.makeSent || !shouldSendToMake(caller)) return;
   const payload = buildMakePayload(caller);
   await postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "MAKE");
   caller.makeSent = true;
 }
+
 
 function buildBookingPayload(caller) {
   if (!caller.calendarSlotConfirmed || !caller.appointmentDate || !caller.appointmentTime) return null;
@@ -1428,6 +1665,7 @@ function buildBookingPayload(caller) {
   };
 }
 
+
 async function sendBookingToMake(caller) {
   if (caller.bookingSent) return;
   const payload = buildBookingPayload(caller);
@@ -1436,10 +1674,12 @@ async function sendBookingToMake(caller) {
   caller.bookingSent = true;
 }
 
+
 async function submitPrimaryLeadAndBooking(caller) {
   await sendLeadToMake(caller);
   await sendBookingToMake(caller);
 }
+
 
 function buildDemoFollowupPayload(caller) {
   const fullName = caller.demoFollowupContactName || caller.fullName || "";
@@ -1447,9 +1687,11 @@ function buildDemoFollowupPayload(caller) {
   const callbackNumber = caller.demoFollowupCallbackNumber || caller.callbackNumber || caller.phone || "";
   const demoEmail = caller.demoFollowupEmail || caller.demoEmail || "";
 
+
   let notes = "Interested in a Blue Caller Automation follow-up after testing the demo line.";
   if (caller.issueSummary) notes += ` Original demo scenario: ${caller.issueSummary}.`;
   if (caller.notes) notes += ` Original notes: ${caller.notes}`;
+
 
   return {
     leadType: "demo",
@@ -1478,6 +1720,7 @@ function buildDemoFollowupPayload(caller) {
   };
 }
 
+
 async function sendDemoFollowupToMake(caller) {
   if (caller.demoFollowupSent) return;
   const payload = buildDemoFollowupPayload(caller);
@@ -1485,6 +1728,7 @@ async function sendDemoFollowupToMake(caller) {
   await postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "DEMO FOLLOWUP");
   caller.demoFollowupSent = true;
 }
+
 
 async function checkCalendarAvailability(caller, requestDetails = {}) {
   const payloadObject = {
@@ -1496,10 +1740,17 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
     address: caller.address || "",
     requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
     requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
+    requestedAfterTime: requestDetails.requestedAfterTime || "",
+    availabilityMode: requestDetails.mode || "",
+    avoidDate: requestDetails.avoidDate || "",
+    avoidTime: requestDetails.avoidTime || "",
+    currentOfferedDate: caller.pendingOfferedDate || "",
+    currentOfferedTime: caller.pendingOfferedTime || "",
     availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || "",
     currentDateLocal: currentDateInEastern(),
     currentDateTimeLocal: currentDateTimeInEastern()
   };
+
 
   const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK");
   if (!result || !result.body) return null;
@@ -1515,12 +1766,63 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
   }
 }
 
+
+async function findAlternateAvailability(caller, rawText, currentDate, currentTime) {
+  const baseRequest = parseAvailabilityRequest(rawText, currentDate, currentTime);
+  const firstAttempt = {
+    ...baseRequest,
+    requestedDate: baseRequest.requestedDate || currentDate || "",
+    requestedAfterTime: currentTime || "",
+    mode: "alternate_same_day",
+    avoidDate: currentDate || "",
+    avoidTime: currentTime || "",
+    rawQuery: baseRequest.rawQuery || buildExplicitAlternateAvailabilityQuery(currentDate, currentTime, rawText)
+  };
+
+  let availability = await checkCalendarAvailability(caller, firstAttempt);
+  if (availability && !isSameAvailabilitySlot(availability.date, availability.time, currentDate, currentTime)) {
+    return { availability, usedNextDayFallback: false };
+  }
+
+  const retryAttempt = {
+    ...firstAttempt,
+    rawQuery: buildExplicitAlternateAvailabilityQuery(currentDate, currentTime, rawText)
+  };
+
+  availability = await checkCalendarAvailability(caller, retryAttempt);
+  if (availability && !isSameAvailabilitySlot(availability.date, availability.time, currentDate, currentTime)) {
+    return { availability, usedNextDayFallback: false };
+  }
+
+  const nextDay = shiftSpokenDateText(currentDate, 1);
+  if (!nextDay) return null;
+
+  const nextDayAttempt = {
+    requestedDate: nextDay,
+    requestedTimePreference: baseRequest.requestedTimePreference || "",
+    requestedAfterTime: "",
+    mode: "alternate_next_day_fallback",
+    avoidDate: currentDate || "",
+    avoidTime: currentTime || "",
+    rawQuery: `next available callback on ${nextDay}`
+  };
+
+  availability = await checkCalendarAvailability(caller, nextDayAttempt);
+  if (availability && !isSameAvailabilitySlot(availability.date, availability.time, currentDate, currentTime)) {
+    return { availability, usedNextDayFallback: true };
+  }
+
+  return null;
+}
+
+
 function markStandardService(caller) {
   caller.emergencyAlert = false;
   caller.urgency = "normal";
   caller.leadType = "service";
   caller.status = "new_lead";
 }
+
 
 function markEmergency(caller) {
   caller.emergencyAlert = true;
@@ -1529,8 +1831,10 @@ function markEmergency(caller) {
   caller.status = "new_emergency";
 }
 
+
 function afterIssueCaptured(caller) {
   caller.issueSummary = classifyIssue(caller.issue).summary;
+
 
   if (isDemoIntent(caller.issue)) {
     caller.leadType = "demo";
@@ -1538,6 +1842,7 @@ function afterIssueCaptured(caller) {
     caller.issueSummary = "demo request";
     return;
   }
+
 
   if (isQuoteIntent(caller.issue)) {
     caller.leadType = "quote";
@@ -1547,41 +1852,51 @@ function afterIssueCaptured(caller) {
     return;
   }
 
+
   if (isHardEmergency(caller.issue)) {
     markEmergency(caller);
     return;
   }
 
+
   markStandardService(caller);
 }
+
 
 function buildNextPrompt(caller) {
   if (caller.lastStep === "ask_name") {
     return "Can I start by getting your full name, please?";
   }
 
+
   if (caller.lastStep === "ask_last_name") {
     return `Thank you, ${caller.firstName}. Can I get your last name as well?`;
   }
+
 
   if (caller.lastStep === "confirm_phone") {
     return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
   }
 
+
   if (caller.lastStep === "ask_address") {
     return buildAddressRequestPrompt(caller);
   }
+
 
   if (caller.lastStep === "confirm_address") {
     return `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`;
   }
 
+
   if (caller.lastStep === "schedule_or_callback") {
     return buildSchedulingChoicePrompt(caller);
   }
 
+
   return "How can I help you?";
 }
+
 
 async function handlePrompt(ws, caller, speech) {
   const text = cleanSpeechText(speech || "");
@@ -1590,10 +1905,12 @@ async function handlePrompt(ws, caller, speech) {
     return;
   }
 
+
   if (isPricingQuestion(text)) {
     sendText(ws, pricingResponse());
     return;
   }
+
 
   if (isRepeatRequest(text)) {
     const repeatPrompt = buildRepeatPrompt(caller);
@@ -1602,6 +1919,7 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
   }
+
 
   switch (caller.lastStep) {
     case "ask_issue": {
@@ -1636,6 +1954,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (caller.leadType === "demo") {
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "";
         if (spellingPrompt) {
@@ -1650,6 +1969,7 @@ async function handlePrompt(ws, caller, speech) {
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
+
 
       if (caller.leadType === "quote") {
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? "confirm_phone" : "ask_last_name") : "";
@@ -1666,11 +1986,13 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
         caller.lastStep = "leak_emergency_choice";
-        sendText(ws, `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`);
+        sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
       }
+
 
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -1682,18 +2004,19 @@ async function handlePrompt(ws, caller, speech) {
       if (caller.emergencyAlert) {
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. Before I go any further, can I get your last name as well?`
-          : `I'm sorry you're dealing with ${caller.issueSummary}. I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`);
+            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
+          : `${buildIssueAcknowledgement(caller)} I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`);
       } else {
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. Before I go any further, can I get your last name as well?`
-          : `I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Can I start by getting your full name, please?`);
+            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
+          : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
       }
       return;
     }
+
 
     case "ask_issue_again": {
       if (isGenericEmergencyIssue(text)) {
@@ -1727,7 +2050,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
         caller.lastStep = "leak_emergency_choice";
-        sendText(ws, `I'm sorry you're dealing with ${caller.issueSummary}. Do you want me to mark this as an emergency?`);
+        sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
       }
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
@@ -1744,6 +2067,7 @@ async function handlePrompt(ws, caller, speech) {
         : "Can I start by getting your full name, please?");
       return;
     }
+
 
     case "ask_item_issue_detail": {
       caller.issue = combineItemAndDetail(caller.pendingIssueItem, text);
@@ -1764,11 +2088,12 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-          : `Thank you, ${caller.firstName}. I'm sorry you're dealing with ${caller.issueSummary}. Before I go any further, can I get your last name as well?`
-        : `I'm sorry you're dealing with ${caller.issueSummary}. I'd be happy to help with that. Can I start by getting your full name, please?`);
+          ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
+        : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
       return;
     }
+
 
     case "leak_emergency_choice": {
       if (isNegative(text)) {
@@ -1788,6 +2113,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isAffirmative(text)) {
         markEmergency(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
@@ -1805,9 +2131,11 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       sendText(ws, "Do you want me to mark this as an emergency?");
       return;
     }
+
 
     case "ask_name": {
       const parsedName = parseFullNameFromSpeech(text);
@@ -1834,6 +2162,7 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "ask_first_name_spelling": {
       const spelledFirstName = normalizeSpelledFirstName(text, caller.firstName || "");
       const remainingParts = cleanForSpeech(caller.fullName || "").split(/\s+/).filter(Boolean).slice(1).join(" ");
@@ -1851,6 +2180,7 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
+
 
     case "ask_last_name": {
       let possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${text}`);
@@ -1876,6 +2206,7 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "confirm_phone": {
       if (isBrowserCaller(caller)) {
         caller.callbackConfirmed = false;
@@ -1895,6 +2226,7 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "get_new_phone": {
       if (!isLikelyPhoneNumberResponse(text)) {
         caller.callbackConfirmed = false;
@@ -1910,12 +2242,14 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "ask_address": {
       caller.address = normalizeAddressInput(text);
       caller.lastStep = "confirm_address";
       sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`);
       return;
     }
+
 
     case "confirm_address": {
       if (isAffirmative(text)) {
@@ -1948,12 +2282,14 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "ask_project_timeline": {
       caller.timeline = cleanForSpeech(text);
       caller.lastStep = "ask_project_scope";
       sendText(ws, "Can you give me a quick idea of what all you'd like done?");
       return;
     }
+
 
     case "ask_project_scope": {
       caller.notes = normalizeProjectScopeNotes(text);
@@ -1962,12 +2298,14 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "ask_proposal_deadline": {
       if (!isNegative(text)) caller.proposalDeadline = cleanForSpeech(text);
       caller.lastStep = "ask_quote_email_optional";
       sendText(ws, "Would you like to include an email address with this quote request as well?");
       return;
     }
+
 
     case "ask_quote_email_optional": {
       if (wantsOptionalEmail(text)) {
@@ -1983,12 +2321,14 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "capture_quote_email": {
       caller.demoEmail = cleanForSpeech(text);
       caller.lastStep = "ask_notes";
       sendText(ws, "Is there anything else you'd like me to include with this quote request?");
       return;
     }
+
 
     case "ask_demo_email_optional": {
       if (wantsOptionalEmail(text)) {
@@ -2004,12 +2344,14 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "capture_demo_email": {
       caller.demoEmail = cleanForSpeech(text);
       caller.lastStep = "ask_notes";
       sendText(ws, "Before I submit this demo request, are there any notes or details you'd like me to add?");
       return;
     }
+
 
     case "schedule_or_callback": {
       if (isFirstAvailableRequest(text)) {
@@ -2031,6 +2373,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (normalizedText(text).includes("call") || normalizedText(text).includes("callback")) {
         caller.status = "callback_requested";
         caller.lastStep = "ask_notes";
@@ -2038,10 +2381,12 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       caller.lastStep = "ask_appointment_day";
       sendText(ws, "What day works best for you?");
       return;
     }
+
 
     case "ask_appointment_day": {
       const requestDetails = parseAvailabilityRequest(text, caller.requestedDate, caller.pendingOfferedTime);
@@ -2067,6 +2412,7 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, "What callback time works best for you?");
       return;
     }
+
 
     case "ask_appointment_time": {
       if (isFirstAvailableRequest(text) || isAlternateAvailabilityRequest(text) || isSpecificTime(text) || detectTimePreference(text)) {
@@ -2095,31 +2441,33 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "confirm_first_available": {
       if (isRepeatTimeRequest(text)) {
         sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
 
+
       if (isAlternateAvailabilityRequest(text)) {
-        const requestDetails = parseAvailabilityRequest(text, caller.pendingOfferedDate, caller.pendingOfferedTime);
-        caller.requestedDate = requestDetails.requestedDate || caller.pendingOfferedDate;
-        caller.requestedTimePreference = requestDetails.requestedTimePreference;
-        caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
+        const previousDate = caller.pendingOfferedDate;
+        const previousTime = caller.pendingOfferedTime;
+        caller.pendingAvailabilityQuery = cleanForSpeech(text);
         sendText(ws, buildCalendarLookupPrompt(caller, text, "alternate"));
-        const availability = await checkCalendarAvailability(caller, requestDetails);
-        if (!availability) {
-          sendText(ws, "I'm sorry, I wasn't able to pull another option right now. Someone from the office will reach out to confirm the exact callback time.");
+        const alternateResult = await findAlternateAvailability(caller, text, previousDate, previousTime);
+        if (!alternateResult || !alternateResult.availability) {
+          sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
           sendText(ws, "Is there anything else you'd like me to note for the technician?");
           return;
         }
-        caller.pendingOfferedDate = availability.date;
-        caller.pendingOfferedTime = availability.time;
-        sendText(ws, `I don't have the earlier time open, but I do have ${spokenAvailabilityPhrase(caller.pendingOfferedDate, caller.pendingOfferedTime)} available. Would you like me to schedule that callback instead?`);
+        caller.pendingOfferedDate = alternateResult.availability.date;
+        caller.pendingOfferedTime = alternateResult.availability.time;
+        sendText(ws, buildAlternateAvailabilityOffer(caller, text, alternateResult.availability, previousDate, previousTime, alternateResult.usedNextDayFallback));
         return;
       }
+
 
       if (isAffirmative(text)) {
         caller.appointmentDate = caller.pendingOfferedDate;
@@ -2131,33 +2479,41 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isNegative(text)) {
         caller.lastStep = "ask_appointment_day";
         sendText(ws, "No problem. What day works better for a callback?");
         return;
       }
 
+
       sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
       return;
     }
 
+
     case "ask_notes": {
-      const hadNotes = !isEndCallPhrase(text);
+      const wantsToFinishNow = isEndCallPhrase(text);
+      const hadNotes = !wantsToFinishNow;
       if (hadNotes) caller.notes = cleanForSpeech(text);
+
 
       await submitPrimaryLeadAndBooking(caller);
 
-      if (caller.leadType === "demo") {
+
+      if (caller.leadType === "demo" || wantsToFinishNow) {
         caller.lastStep = "final_question";
         sendText(ws, `${buildPostNotesTransition(caller, hadNotes)} ${buildFinalSubmissionPrompt(caller)}`);
         return;
       }
+
 
       caller.lastStep = "offer_demo_followup";
       const transition = buildPostNotesTransition(caller, hadNotes);
       sendText(ws, `${transition} How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
       return;
     }
+
 
     case "offer_demo_followup": {
       if (isNegative(text) || isEndCallPhrase(text)) {
@@ -2167,6 +2523,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isAffirmative(text)) {
         caller.demoFollowupRequested = true;
         caller.lastStep = "confirm_demo_followup_info";
@@ -2174,9 +2531,12 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       sendText(ws, "Would you like for me to have one of our team members call you to discuss how this could help your company?");
       return;
     }
+
+
 
 
     case "confirm_demo_followup_info": {
@@ -2185,6 +2545,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
         caller.demoFollowupEmail = caller.demoEmail || caller.demoFollowupEmail || "";
 
+
         if (caller.demoFollowupEmail) {
           await sendDemoFollowupToMake(caller);
           caller.lastStep = "final_question";
@@ -2192,10 +2553,12 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
 
+
         caller.lastStep = "ask_demo_followup_email_optional";
         sendText(ws, "Would you like to include an email address as well?");
         return;
       }
+
 
       if (isNegative(text)) {
         caller.lastStep = "ask_demo_followup_contact_name";
@@ -2203,9 +2566,11 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       sendText(ws, "Okay, should I use the contact information you already gave me?");
       return;
     }
+
 
     case "ask_demo_followup_contact_name": {
       const parsedName = parseFullNameFromSpeech(text);
@@ -2219,12 +2584,14 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "ask_demo_followup_phone": {
       caller.demoFollowupCallbackNumber = cleanForSpeech(text);
       caller.lastStep = "ask_demo_followup_email_optional";
       sendText(ws, "Would you like to include an email address as well?");
       return;
     }
+
 
     case "ask_demo_followup_email_optional": {
       if (wantsOptionalEmail(text)) {
@@ -2241,6 +2608,7 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "capture_demo_followup_email": {
       caller.demoFollowupEmail = cleanForSpeech(text);
       await sendDemoFollowupToMake(caller);
@@ -2249,11 +2617,13 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
 
+
     case "final_question": {
       if (isPricingQuestion(text)) {
         sendText(ws, `${pricingResponse()} ${buildFinalSubmissionPrompt(caller)}`);
         return;
       }
+
 
       const finalText = normalizeIntentText(text);
       if (
@@ -2268,10 +2638,12 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       appendAdditionalIssue(caller, text);
       sendText(ws, `Got it — I'll add that as well. ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
+
 
     default: {
       caller.lastStep = "ask_issue";
@@ -2282,6 +2654,8 @@ async function handlePrompt(ws, caller, speech) {
 }
 
 
+
+
 function serveBrowserCallingIndex(res) {
   const indexPath = path.join(__dirname, "public", "index.html");
   if (fs.existsSync(indexPath)) {
@@ -2290,11 +2664,13 @@ function serveBrowserCallingIndex(res) {
   return res.send(`Server is running - ${APP_VERSION}`);
 }
 
+
 function buildBrowserCallingIdentity(req) {
   const requested = cleanForSpeech(req.query.identity || "");
   if (requested) return requested.replace(/[^\w.-]/g, "").slice(0, 64) || "browser-user";
   return "browser-user";
 }
+
 
 function createBrowserCallingToken(identity) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_API_KEY_SID || !TWILIO_API_KEY_SECRET || !TWILIO_TWIML_APP_SID) {
@@ -2311,6 +2687,7 @@ function createBrowserCallingToken(identity) {
   return token.toJwt();
 }
 
+
 function verifyTwilioRequest(req) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) return true;
   try {
@@ -2322,6 +2699,7 @@ function verifyTwilioRequest(req) {
     return false;
   }
 }
+
 
 app.get("/twilio-token", (req, res) => {
   try {
@@ -2337,30 +2715,37 @@ app.get("/twilio-token", (req, res) => {
   }
 });
 
+
 app.get("/health", (req, res) => {
   res.send(`Server is running - ${APP_VERSION}`);
 });
+
 
 app.get("/browser-call", (req, res) => {
   return serveBrowserCallingIndex(res);
 });
 
+
 app.get("/pc-call", (req, res) => {
   return serveBrowserCallingIndex(res);
 });
 
+
 app.get("/", (req, res) => {
   return serveBrowserCallingIndex(res);
 });
+
 
 app.post("/incoming-call", (req, res) => {
   if (!verifyTwilioRequest(req)) {
     return res.status(403).send("Forbidden");
   }
 
+
   if (!PUBLIC_BASE_URL) {
     return res.status(500).send("Missing PUBLIC_BASE_URL");
   }
+
 
   const twiml = new twilio.twiml.VoiceResponse();
   const connect = twiml.connect();
@@ -2377,12 +2762,15 @@ app.post("/incoming-call", (req, res) => {
     debug: "debugging"
   });
 
+
   res.type("text/xml").send(twiml.toString());
 });
+
 
 app.post("/connect-action", (req, res) => {
   res.status(204).send();
 });
+
 
 server.on("upgrade", (request, socket, head) => {
   if (request.url !== "/conversation-relay") {
@@ -2390,10 +2778,12 @@ server.on("upgrade", (request, socket, head) => {
     return;
   }
 
+
   wss.handleUpgrade(request, socket, head, (ws) => {
     wss.emit("connection", ws, request);
   });
 });
+
 
 wss.on("connection", (ws, request) => {
   const tempKey = crypto.randomUUID();
@@ -2401,11 +2791,13 @@ wss.on("connection", (ws, request) => {
   wsBySession.set(tempKey, ws);
   getOrCreateCaller(tempKey);
 
+
   ws.on("message", async (message) => {
     try {
       const data = JSON.parse(message.toString("utf8"));
       const type = data.type;
       const caller = getOrCreateCaller(ws.sessionKey);
+
 
       if (type === "setup") {
         caller.callSid = cleanForSpeech(data.callSid || "");
@@ -2414,9 +2806,11 @@ wss.on("connection", (ws, request) => {
         return;
       }
 
+
       if (type === "interrupt") {
         return;
       }
+
 
       if (type === "prompt") {
         if (data.voicePrompt) {
@@ -2429,14 +2823,17 @@ wss.on("connection", (ws, request) => {
         return;
       }
 
+
       if (type === "error") {
         console.error("[CONVERSATIONRELAY ERROR]", data.description || "Unknown error");
         return;
       }
 
+
       if (type === "dtmf") {
         return;
       }
+
 
       console.log("[WS MESSAGE IGNORED]", data);
     } catch (err) {
@@ -2445,14 +2842,17 @@ wss.on("connection", (ws, request) => {
     }
   });
 
+
   ws.on("close", () => {
     wsBySession.delete(ws.sessionKey);
   });
+
 
   ws.on("error", (err) => {
     console.error("[WS ERROR]", err.message);
   });
 });
+
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
