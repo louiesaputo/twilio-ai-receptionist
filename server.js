@@ -721,7 +721,8 @@ function formatAddressForSpeech(address) {
 
 function isBrowserCaller(caller) {
   const phone = cleanForSpeech(caller && caller.phone ? caller.phone : "");
-  return !phone || /^client:/i.test(phone) || phone === "browser-user";
+  const digits = String(phone || "").replace(/\D/g, "");
+  return !phone || /^client:/i.test(phone) || phone === "browser-user" || digits.length < 7;
 }
 
 
@@ -797,6 +798,7 @@ function formatPhoneNumberForSpeech(phone) {
   if (!phone) return "unknown";
   let digits = String(phone).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) digits = digits.substring(1);
+  if (!digits) return "unknown";
   const toWord = (d) => {
     const n = Number(d);
     return Number.isFinite(n) ? SMALL_NUMBER_WORDS[n] : d;
@@ -820,8 +822,10 @@ function isAffirmative(text) {
 
   const directYes = new Set([
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct",
-    "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay",
-    "that is fine", "thats fine", "all right", "alright", "that is correct", "thats correct"
+    "fine", "works", "that works", "that will work", "thatll work", "that ll work", "that is okay", "thats okay", "that s okay",
+    "that is fine", "thats fine", "that s fine", "all right", "alright", "that is correct", "thats correct", "that s correct",
+    "yes that is correct", "yes thats correct", "yes that s correct", "yeah that is correct", "yeah thats correct", "yeah that s correct",
+    "yes that will work", "yes that ll work", "yes thatll work", "yeah that will work", "yeah that ll work", "yeah thatll work"
   ]);
   if (directYes.has(t)) return true;
 
@@ -1498,9 +1502,9 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 function buildSchedulingChoicePrompt(caller) {
   const variants = [
-    "Alright, now let's talk about getting you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a date in mind, or would you rather have someone from the office call you?",
-    "Now let's talk about getting you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a specific date in mind, or would you rather have someone from the office call you?",
-    "Let's get you scheduled. I'm looking at the calendar now. Would you like the first available, do you have a date in mind, or would you rather have someone from the office call you?"
+    "Alright, now let's talk about getting you scheduled. Do you have a date in mind, or can I schedule the first available?",
+    "Let's get you scheduled. Do you have a date in mind, or can I schedule the first available?",
+    "Do you have a date in mind, or can I schedule the first available?"
   ];
 
 
