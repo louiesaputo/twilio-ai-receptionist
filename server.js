@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 8 AI SEMANTIC INTERPRETER PHASE 2
- DATE: 2026-04-08 (V15 pass 8 adds narrow AI social greeting acknowledgment at opening)
+ CONVERSATIONRELAY BASELINE V15 PASS 2 STABILIZED + NARROW AI INTERPRETER
+ DATE: 2026-04-08 (stabilized pass-2 base + narrow AI interpreter for confirmations and browser number capture)
 
 
  PURPOSE:
@@ -32,10 +32,14 @@
  - AVAILABILITY_WEBHOOK_URL
  - BOOKING_WEBHOOK_URL
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
+ - OPENAI_API_KEY                (required to enable AI interpreter)
+ - AI_INTERPRETER_ENABLED        (default true when OPENAI_API_KEY is set)
+ - AI_INTERPRETER_MODEL          (default gpt-4o-mini)
+ - AI_INTERPRETER_TIMEOUT_MS     (default 2500)
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 8 AI SEMANTIC INTERPRETER PHASE 2 LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 2 STABILIZED + NARROW AI INTERPRETER LOADED 🔥");
 
 
 const express = require("express");
@@ -62,7 +66,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS8-AI-SEMANTIC-INTERPRETER-PHASE2";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS2-STABILIZED-AI-NARROW";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -356,24 +360,6 @@ function stripGreetingPrefix(text) {
 }
 
 
-function isLikelyOpeningSocialGreeting(text) {
-  const t = normalizeIntentText(text || "");
-  if (!t) return false;
-  return containsAny(t, [
-    "how are you", "how are you today", "how you doing", "how are you doing",
-    "how s it going", "hows it going", "hope you re doing well", "hope youre doing well",
-    "hope you are doing well", "good morning", "good afternoon", "good evening"
-  ]);
-}
-
-
-function buildOpeningSocialGreetingResponse(caller) {
-  return caller.firstName
-    ? `I'm doing well, thank you, ${caller.firstName}. What can I help you with today?`
-    : "I'm doing well, thank you. What can I help you with today?";
-}
-
-
 function normalizeGenericServiceIssue(text) {
   const stripped = cleanForSpeech(stripIssueLeadIn(text || ""));
   const item = detectServiceItem(stripped);
@@ -513,14 +499,6 @@ function extractOpeningNameAndIssue(text) {
   const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
   if (introMarker) {
     const remainder = normalized.slice(introMarker[0].length).trim();
-
-    const implicitNameAndIssue = remainder.match(/^(.*?)\s+(i\s+have|i\s+need|i\'?m\s+having|i\s+am\s+having|can\s+someone|can\s+somebody|calling\s+about|calling\s+regarding|about|with|regarding)\b\s*(.+)$/i);
-    if (implicitNameAndIssue) {
-      const possibleName = normalizeNameCandidate(implicitNameAndIssue[1]);
-      const issueText = tryIssueCleanup(`${implicitNameAndIssue[2]} ${implicitNameAndIssue[3]}`);
-      if (possibleName && issueText) return { name: possibleName, issueText };
-    }
-
     const issueMarkers = [
       /[,.]?\s+and\s+i\s+have\b/i,
       /[,.]?\s+i\s+have\b/i,
@@ -743,8 +721,7 @@ function formatAddressForSpeech(address) {
 
 function isBrowserCaller(caller) {
   const phone = cleanForSpeech(caller && caller.phone ? caller.phone : "");
-  const digits = String(phone || "").replace(/\D/g, "");
-  return !phone || /^client:/i.test(phone) || phone === "browser-user" || digits.length < 7;
+  return !phone || /^client:/i.test(phone) || phone === "browser-user";
 }
 
 
@@ -820,7 +797,6 @@ function formatPhoneNumberForSpeech(phone) {
   if (!phone) return "unknown";
   let digits = String(phone).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) digits = digits.substring(1);
-  if (!digits) return "unknown";
   const toWord = (d) => {
     const n = Number(d);
     return Number.isFinite(n) ? SMALL_NUMBER_WORDS[n] : d;
@@ -844,16 +820,16 @@ function isAffirmative(text) {
 
   const directYes = new Set([
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct",
-    "fine", "works", "that works", "that will work", "thatll work", "that ll work", "that is okay", "thats okay", "that s okay",
-    "that is fine", "thats fine", "that s fine", "all right", "alright", "that is correct", "thats correct", "that s correct",
-    "yes that is correct", "yes thats correct", "yes that s correct", "yeah that is correct", "yeah thats correct", "yeah that s correct",
-    "yes that will work", "yes that ll work", "yes thatll work", "yeah that will work", "yeah that ll work", "yeah thatll work"
+    "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay",
+    "that is fine", "thats fine", "all right", "alright", "it is", "it is correct", "its correct",
+    "that is correct", "thats correct", "that is right", "thats right"
   ]);
   if (directYes.has(t)) return true;
 
 
-  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is correct)\b/.test(t)) return true;
-  if (/^(yes|yeah|yep|yup|correct|absolutely|ok|okay)\b.*\b(correct|right)\b/.test(t)) return true;
+  if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is correct|is right)\b/.test(t)) return true;
+  if (/\bit\s+(is|s)\s+(correct|right)\b/.test(t)) return true;
+  if (/^(yes|yeah|yep|yup|correct|absolutely|ok|okay)\b.*\b(correct|right|works|work)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
 
@@ -869,6 +845,8 @@ function isAffirmative(text) {
     "that is good", "that s good", "thatll do", "that ll do", "fine with me", "works for me",
     "go ahead and do that", "go ahead and book it", "go ahead and schedule it", "ill take that", "i ll take that",
     "ill take it", "i ll take it", "that should be okay", "that should be fine",
+    "yeah that ll work", "yeah thatll work", "yes that ll work", "yes thatll work",
+    "yeah that is correct", "yeah thats correct", "yes that is correct", "yes thats correct",
     "we d better add one", "wed better add one", "better add one", "let s add one", "lets add one",
     "i ll give it to you", "ill give it to you", "add one", "yes add one", "yeah add one",
     "let me know when you re ready and i ll give it to you", "let me know when youre ready and ill give it to you",
@@ -1524,11 +1502,10 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 function buildSchedulingChoicePrompt(caller) {
   const variants = [
-    "Alright, now let's talk about getting you scheduled. Do you have a date in mind, or can I schedule the first available?",
-    "Let's get you scheduled. Do you have a date in mind, or can I schedule the first available?",
-    "Do you have a date in mind, or can I schedule the first available?"
+    "Do you have a date in mind, or can I schedule the first available?",
+    "Would you like the first available, or do you have a date in mind?",
+    "Do you have a specific date in mind, or can I schedule the first available?"
   ];
-
 
   const index = nextPromptIndex(caller, "scheduleChoicePromptIndex");
   return variants[index % variants.length];
@@ -1588,7 +1565,6 @@ function getOrCreateCaller(key) {
       pendingIssuePrompt: "",
       pendingPromptText: "",
       repeatPromptIndex: 0,
-      openingSmallTalkHandled: false,
       promptBuffer: "",
       demoFollowupRequested: false,
       demoFollowupSent: false,
@@ -1763,8 +1739,8 @@ function extractOpenAIResponseText(body) {
   for (const item of output) {
     const content = Array.isArray(item && item.content) ? item.content : [];
     for (const part of content) {
-      if (typeof part?.text === "string" && part.text.trim()) return part.text.trim();
-      if (typeof part?.text?.value === "string" && part.text.value.trim()) return part.text.value.trim();
+      if (typeof (part?.text) === "string" && part.text.trim()) return part.text.trim();
+      if (typeof (part?.text?.value) === "string" && part.text.value.trim()) return part.text.value.trim();
     }
   }
   return "";
@@ -1840,12 +1816,12 @@ async function interpretStepIntent(caller, text, currentStep, allowedIntents = [
         content: `You classify caller utterances for an AI receptionist state machine. Return JSON only. Choose exactly one intent from allowed_intents.
 
 Rules:
-- If the user is clearly confirming something, classify as affirmative. Treat phrases like "it is", "that's correct", "that's right", "yeah that'll work", "that should work", and "yes that works" as affirmative when they fit the step.
+- If the user is clearly confirming something, classify as affirmative. Treat phrases like "it is", "it's correct", "that is correct", "that's right", "yeah that'll work", "that should work", and "yes that works" as affirmative when they fit the step.
 - If the user is clearly rejecting something, classify as negative.
 - If the step is get_new_phone and the user provides digits or spoken number words, classify as provide_phone_number and return phoneNumber as digits only.
+- If the step is get_new_phone and the user simply says yes without giving digits, classify as affirmative, not provide_phone_number.
 - If the step is confirm_address, only use correct_address when the caller is truly changing the address. Plain confirmations like "it is" or "yes that's correct" are affirmative, not address corrections.
 - If the step is confirm_first_available, phrases that accept the offered time should be affirmative. Requests for another time or later option should be request_alternate_time.
-- If the caller is mainly making brief small talk or a social greeting like "how are you today" or "hope you are doing well" and is not describing a service problem, classify as social_greeting.
 - Prefer other when uncertain.
 - Never invent missing values.`
       },
@@ -1895,16 +1871,15 @@ Rules:
 
   try {
     const parsed = JSON.parse(outputText);
-    const normalizedIntent = allowedIntents.includes(parsed.intent) ? parsed.intent : "other";
+    if (!parsed || typeof parsed !== "object") return null;
     const normalized = {
-      intent: normalizedIntent,
+      intent: typeof parsed.intent === "string" ? parsed.intent : "other",
       confidence: Number(parsed.confidence || 0),
-      phoneNumber: extractPhoneDigits(parsed.phoneNumber || ""),
-      addressText: cleanForSpeech(parsed.addressText || ""),
-      normalizedText: cleanForSpeech(parsed.normalizedText || "")
+      phoneNumber: typeof parsed.phoneNumber === "string" ? parsed.phoneNumber.replace(/\D/g, "") : "",
+      addressText: typeof parsed.addressText === "string" ? parsed.addressText : "",
+      normalizedText: typeof parsed.normalizedText === "string" ? parsed.normalizedText : ""
     };
-    console.log(`[AI INTERPRETER] step=${currentStep} intent=${normalized.intent} confidence=${normalized.confidence}`);
-    if (normalized.confidence < 0.55) return null;
+    if (!allowedIntents.includes(normalized.intent)) return null;
     return normalized;
   } catch (err) {
     console.error("[AI INTERPRETER JSON ERROR]", err.message);
@@ -2186,7 +2161,6 @@ function buildNextPrompt(caller) {
 
 
   if (caller.lastStep === "confirm_phone") {
-    if (isBrowserCaller(caller) && !caller.callbackNumber) return buildBrowserCallbackPrompt();
     return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
   }
 
@@ -2207,45 +2181,6 @@ function buildNextPrompt(caller) {
 
 
   return "How can I help you?";
-}
-
-
-
-async function maybeHandleOpeningSocialGreeting(ws, caller, text) {
-  const safeText = cleanSpeechText(text || "");
-  if (!safeText || caller.openingSmallTalkHandled) return false;
-
-  const socialSignal = isLikelyOpeningSocialGreeting(safeText);
-  if (!socialSignal) return false;
-
-  if (
-    looksLikeIssueText(safeText) ||
-    isGenericEmergencyIssue(safeText) ||
-    isHardEmergency(safeText) ||
-    isQuoteIntent(safeText) ||
-    isDemoIntent(safeText)
-  ) {
-    return false;
-  }
-
-  const parsed = extractOpeningNameAndIssue(safeText);
-  if (parsed.name) {
-    caller.fullName = parsed.name;
-    caller.firstName = getFirstName(parsed.name);
-    caller.nameSpellingConfirmed = false;
-  }
-
-  const parsedIssueText = cleanForSpeech(parsed.issueText || "");
-  const aiInterpretation = await interpretStepIntent(caller, safeText, caller.lastStep, ["social_greeting", "other"]);
-  const aiSaysSocial = aiInterpretation && aiInterpretation.intent === "social_greeting" && aiInterpretation.confidence >= 0.55;
-  const fallbackSocial = socialSignal && (!parsedIssueText || isLikelyOpeningSocialGreeting(parsedIssueText));
-
-  if (!aiSaysSocial && !fallbackSocial) return false;
-
-  caller.openingSmallTalkHandled = true;
-  caller.lastStep = "ask_issue_again";
-  sendText(ws, buildOpeningSocialGreetingResponse(caller));
-  return true;
 }
 
 
@@ -2270,11 +2205,6 @@ async function handlePrompt(ws, caller, speech) {
       return;
     }
     sendText(ws, "I'm sorry, could you say that again?");
-    return;
-  }
-
-
-  if ((caller.lastStep === "ask_issue" || caller.lastStep === "ask_issue_again") && await maybeHandleOpeningSocialGreeting(ws, caller, text)) {
     return;
   }
 
@@ -2314,18 +2244,15 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (caller.leadType === "demo") {
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
         }
-        caller.lastStep = nextStep;
+        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? "Absolutely. Can I get the best callback number in case we get disconnected?"
-              : `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -2333,18 +2260,15 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (caller.leadType === "quote") {
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
         }
-        caller.lastStep = nextStep;
+        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? "Absolutely. Can I get the best callback number in case we get disconnected?"
-              : `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -2573,12 +2497,6 @@ async function handlePrompt(ws, caller, speech) {
 
     case "confirm_phone": {
       if (isBrowserCaller(caller)) {
-        if (caller.callbackNumber) {
-          caller.callbackConfirmed = true;
-          caller.lastStep = "ask_address";
-          sendText(ws, buildAddressRequestPrompt(caller));
-          return;
-        }
         caller.callbackConfirmed = false;
         caller.lastStep = "get_new_phone";
         sendText(ws, buildBrowserCallbackPrompt());
@@ -2850,7 +2768,6 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-
       if (aiInterpretation?.intent === "request_alternate_time" || isAlternateAvailabilityRequest(text)) {
         const previousDate = caller.pendingOfferedDate;
         const previousTime = caller.pendingOfferedTime;
@@ -2870,19 +2787,16 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-
       if (aiInterpretation?.intent === "affirmative" || isAffirmative(text)) {
         acceptPendingAvailability(ws, caller);
         return;
       }
-
 
       if (aiInterpretation?.intent === "negative" || isNegative(text)) {
         caller.lastStep = "ask_appointment_day";
         sendText(ws, "No problem. What day works better for a callback?");
         return;
       }
-
 
       sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
       return;
