@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 4 PERFORMANCE + ROUTING PATCH
- DATE: 2026-04-09 (performance + routing pass: non-blocking submissions, stronger name capture, final checkpoint cleanup, same-day alternate-slot guardrails)
+ CONVERSATIONRELAY BASELINE V15 PASS 5 REVIEW PATCH
+ DATE: 2026-04-09 (review patch: browser callback fixes, stronger outside-water emergency handling, richer issue summaries)
 
 
  PURPOSE:
@@ -14,6 +14,8 @@
  - Adds stronger opening first-name capture
  - Tightens final checkpoint close handling
  - Adds local guardrails for same-day alternate-slot requests
+ - Fixes browser callback prompts in item-detail emergency branches
+ - Expands outside-water emergency detection and issue summaries
 
 
  IMPORTANT:
@@ -44,7 +46,7 @@
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 4 PERFORMANCE + ROUTING PATCH LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 5 REVIEW PATCH LOADED 🔥");
 
 
 const express = require("express");
@@ -77,7 +79,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-PERFORMANCE-ROUTING-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-REVIEW-PASS";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -416,6 +418,21 @@ function normalizeGenericServiceIssue(text) {
 
 
   return item.label;
+}
+
+
+function combineIssueContextAndDetail(issueContext, detail) {
+  const safeContext = cleanForSpeech(stripIssueLeadIn(issueContext || ""));
+  const safeDetail = cleanForSpeech(stripIssueLeadIn(detail || ""));
+  if (!safeContext) return safeDetail;
+  if (!safeDetail) return safeContext;
+
+  const contextNorm = normalizedText(safeContext);
+  const detailNorm = normalizedText(safeDetail);
+  if (detailNorm.startsWith(contextNorm)) return safeDetail;
+  if (contextNorm.includes(detailNorm) && detailNorm.length >= 4) return safeContext;
+
+  return `${safeContext} ${safeDetail}`.trim();
 }
 
 
@@ -943,6 +960,20 @@ function isRepeatRequest(text) {
 }
 
 
+function isAddressConfirmation(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "that s it", "thats it", "that is it",
+    "that s correct", "thats correct", "that is correct",
+    "that s right", "thats right", "that is right",
+    "yep that s it", "yep thats it", "yeah that s it", "yeah thats it",
+    "yes that s it", "yes thats it", "yup that s it", "yup thats it",
+    "that looks right", "that sounds right", "that is the one", "that s the one", "thats the one"
+  ]);
+}
+
+
 function lowercaseFirst(value) {
   const safe = String(value || "").trim();
   if (!safe) return "";
@@ -1098,7 +1129,8 @@ function detectServiceItem(issue) {
     { pattern: /\b(faucet|tap)\b/, label: "faucet", prompt: "your faucet", category: "fixture" },
     { pattern: /\b(sink)\b/, label: "sink", prompt: "your sink", category: "fixture" },
     { pattern: /\b(toilet)\b/, label: "toilet", prompt: "your toilet", category: "fixture" },
-    { pattern: /\b(water heater)\b/, label: "water heater", prompt: "your water heater", category: "fixture" }
+    { pattern: /\b(water heater)\b/, label: "water heater", prompt: "your water heater", category: "fixture" },
+    { pattern: /\b(home filter|house filter|water filter|whole house filter|whole-house filter|filtration system|filter housing)\b/, label: "home water filter", prompt: "your home water filter", category: "fixture" }
   ];
 
 
@@ -1283,12 +1315,33 @@ function isMainLineEmergencyCandidate(text) {
 }
 
 
+function isOutsideWaterLossEmergency(text) {
+  const t = normalizedText(text);
+  if (!t) return false;
+
+  const frontYardLike = containsAny(t, ["front yard", "front lawn"]);
+  const yardLike = containsAny(t, ["yard", "front yard", "back yard", "front lawn", "back lawn", "outside"]);
+  const poolLike = containsAny(t, [
+    "pooling", "water pooling", "standing water", "water standing", "water in the yard",
+    "water coming up", "water bubbling", "bubbling", "water bubbling up"
+  ]);
+  const meterLike = containsAny(t, [
+    "water meter leak", "meter leak", "leak at the meter", "leaking at the meter",
+    "leak by the meter", "water meter"
+  ]) && containsAny(t, ["leak", "leaking", "gushing", "pouring", "broken", "busted", "pooling", "water coming up"]);
+  const outsideLeakLike = yardLike && containsAny(t, ["leak", "leaking", "gushing", "pouring", "water coming up", "pooling", "standing water"])
+    && !containsAny(t, ["faucet", "spigot", "hose bib", "hose bibb", "sprinkler"]);
+
+  return meterLike || (frontYardLike && poolLike) || outsideLeakLike;
+}
+
+
 function isHardEmergency(text) {
   const t = normalizedText(text);
   return containsAny(t, [
     "burst", "burst pipe", "flooding", "flooded", "sewer", "sewage", "gas leak", "no water",
     "gushing", "pouring", "water everywhere", "water coming through the ceiling", "ceiling pouring", "water is pouring"
-  ]) || isMainLineEmergencyCandidate(t);
+  ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t);
 }
 
 
@@ -1305,13 +1358,22 @@ function classifyIssue(issue) {
   if (serviceItem && serviceItem.category === "appliance" && applianceSummary) return { summary: applianceSummary };
   if (serviceItem && serviceItem.category === "fixture" && !hasSpecificProblemDetail(issue)) return { summary: `an issue with ${serviceItem.prompt}` };
   if (isMainLineEmergencyCandidate(text)) {
-    if (containsAny(text, ["front yard", "front lawn"])) return { summary: "a broken main in your front yard" };
-    if (containsAny(text, ["back yard", "back lawn"])) return { summary: "a broken main in your back yard" };
-    if (text.includes("yard")) return { summary: "a broken main in your yard" };
+    if (containsAny(text, ["front yard", "front lawn"])) return { summary: "a main leak in your front yard" };
+    if (containsAny(text, ["back yard", "back lawn"])) return { summary: "a main leak in your back yard" };
+    if (text.includes("yard")) return { summary: "a main leak in your yard" };
     return { summary: "a possible broken water main" };
   }
-  if ((text.includes("faucet") || text.includes("sink")) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking faucet" };
+  if (isOutsideWaterLossEmergency(text)) {
+    if (containsAny(text, ["water meter", "meter"])) return { summary: "a water meter leak" };
+    if (containsAny(text, ["front yard", "front lawn"])) return { summary: "water pooling in your front yard" };
+    if (containsAny(text, ["back yard", "back lawn"])) return { summary: "water pooling in your back yard" };
+    return { summary: "water pooling in your yard" };
+  }
+  if (text.includes("kitchen faucet") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaky kitchen faucet" };
+  if (text.includes("bathroom faucet") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaky bathroom faucet" };
+  if ((text.includes("faucet") || text.includes("sink")) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: text.includes("sink") ? "a leaking sink" : "a leaking faucet" };
   if (text.includes("water heater") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking water heater" };
+  if (containsAny(text, ["home filter", "house filter", "water filter", "whole house filter", "whole-house filter", "filtration system", "filter housing"]) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking home water filter" };
   if (text.includes("roof") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a roof leak" };
   if (text.includes("ceiling") && containsAny(text, ["leak", "drip", "dripping", "pouring", "gushing"])) return { summary: "a ceiling leak" };
   if (containsAny(text, ["clog", "clogged", "drain"])) return { summary: "a clogged drain" };
@@ -2423,7 +2485,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_item_issue_detail": {
-      caller.issue = combineItemAndDetail(caller.pendingIssueItem, text);
+      caller.issue = combineIssueContextAndDetail(caller.issue || caller.pendingIssueItem, text);
       caller.issueSummary = classifyIssue(caller.issue).summary;
       caller.pendingIssueItem = "";
       caller.pendingIssuePrompt = "";
@@ -2432,6 +2494,13 @@ async function handlePrompt(ws, caller, speech) {
       } else {
         markStandardService(caller);
       }
+
+      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "leak_emergency_choice";
+        sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
+        return;
+      }
+
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
@@ -2441,7 +2510,9 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          ? isBrowserCaller(caller)
+            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. ${buildBrowserCallbackPrompt()}`
+            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
           : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
         : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
       return;
@@ -2460,7 +2531,9 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? isBrowserCaller(caller)
+              ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. ${buildBrowserCallbackPrompt()}`
+              : `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
           : "Alright. I've got this as a standard service request. I just need to gather a few details from you. Can I start with your full name?");
         return;
@@ -2478,7 +2551,9 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? isBrowserCaller(caller)
+              ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. ${buildBrowserCallbackPrompt()}`
+              : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`
           : "Alright. I'm going to mark this as an emergency so our service team can review it right away. Can I start with your full name?");
         return;
@@ -2669,6 +2744,22 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "confirm_address": {
+      if (isAffirmative(text) || isAddressConfirmation(text)) {
+        sendAfterAddressConfirmed(ws, caller);
+        return;
+      }
+      if (isNegative(text)) {
+        caller.address = "";
+        caller.lastStep = "ask_address";
+        sendText(ws, caller.leadType === "quote" ? "I'm sorry about that. Let's try it again. What is the project address?" : "I'm sorry about that. Let's try it again. What is the service address?");
+        return;
+      }
+      if (looksLikeAddressCorrection(text)) {
+        caller.address = normalizeAddressInput(text);
+        sendText(ws, `Got it. Let me read that back — ${formatAddressForSpeech(caller.address)}. Is that correct?`);
+        return;
+      }
+
       if (AI_INTERPRETER_ENABLED) {
         const addressDecision = await interpretAddressStep(text, buildAIContext(caller));
         if (addressDecision && addressDecision.intent && addressDecision.intent !== "unclear") {
@@ -2690,21 +2781,6 @@ async function handlePrompt(ws, caller, speech) {
         }
       }
 
-      if (isAffirmative(text)) {
-        sendAfterAddressConfirmed(ws, caller);
-        return;
-      }
-      if (isNegative(text)) {
-        caller.address = "";
-        caller.lastStep = "ask_address";
-        sendText(ws, caller.leadType === "quote" ? "I'm sorry about that. Let's try it again. What is the project address?" : "I'm sorry about that. Let's try it again. What is the service address?");
-        return;
-      }
-      if (looksLikeAddressCorrection(text)) {
-        caller.address = normalizeAddressInput(text);
-        sendText(ws, `Got it. Let me read that back — ${formatAddressForSpeech(caller.address)}. Is that correct?`);
-        return;
-      }
       sendText(ws, `I just need a yes or no — is ${formatAddressForSpeech(caller.address)} correct?`);
       return;
     }
