@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 3 PERFORMANCE PATCH
- DATE: 2026-04-09 (performance-only pass: non-blocking submissions, webhook timeouts, lookup filler coverage, faster close timing)
+ CONVERSATIONRELAY BASELINE V15 PASS 4 PERFORMANCE + ROUTING PATCH
+ DATE: 2026-04-09 (performance + routing pass: non-blocking submissions, stronger name capture, final checkpoint cleanup, same-day alternate-slot guardrails)
 
 
  PURPOSE:
@@ -11,6 +11,9 @@
  - Preserves address readback as street + city only
  - Preserves callback wording preferences where practical
  - Removes blocking webhook waits from the live conversation path where possible
+ - Adds stronger opening first-name capture
+ - Tightens final checkpoint close handling
+ - Adds local guardrails for same-day alternate-slot requests
 
 
  IMPORTANT:
@@ -41,7 +44,7 @@
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 3 PERFORMANCE PATCH LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 4 PERFORMANCE + ROUTING PATCH LOADED 🔥");
 
 
 const express = require("express");
@@ -74,7 +77,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-PERFORMANCE-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-PERFORMANCE-ROUTING-PASS";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -290,6 +293,26 @@ function normalizeNameCandidate(rawName) {
 
 function parseFullNameFromSpeech(rawName) {
   return normalizeNameCandidate(rawName);
+}
+
+
+function extractIntroFirstName(text) {
+  const safe = stripGreetingPrefix(text || "");
+  if (!safe) return "";
+
+  const patterns = [
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z'-]+)(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i,
+    /^([a-zA-Z'-]+)\s+here(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = safe.match(pattern);
+    if (!match) continue;
+    const possibleName = normalizeNameCandidate(match[1]);
+    if (possibleName) return getFirstName(possibleName);
+  }
+
+  return "";
 }
 
 
@@ -1176,6 +1199,41 @@ function isSameAvailabilitySlot(firstDate, firstTime, secondDate, secondTime) {
 }
 
 
+function parseTimeToMinutes(timeText) {
+  const safe = cleanForSpeech(timeText || "");
+  const match = safe.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const meridiem = match[3].toUpperCase();
+  if (meridiem === "PM" && hour !== 12) hour += 12;
+  if (meridiem === "AM" && hour === 12) hour = 0;
+  return (hour * 60) + minute;
+}
+
+
+function matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, offeredDate, offeredTime) {
+  if (isSameAvailabilitySlot(offeredDate, offeredTime, currentDate, currentTime)) return false;
+
+  const lowered = normalizedText(rawText || "");
+  if (containsAny(lowered, ["later that day", "later the same day", "later in the afternoon", "later that afternoon", "later that morning", "anything later", "something later"])) {
+    if (normalizedText(offeredDate || "") !== normalizedText(currentDate || "")) return false;
+    const currentMinutes = parseTimeToMinutes(currentTime);
+    const offeredMinutes = parseTimeToMinutes(offeredTime);
+    if (currentMinutes === null || offeredMinutes === null) return false;
+    return offeredMinutes > currentMinutes;
+  }
+
+  if (containsAny(lowered, ["next day", "the next day", "following day", "day after"])) {
+    const nextDay = shiftSpokenDateText(currentDate, 1);
+    if (nextDay) return normalizedText(offeredDate || "") === normalizedText(nextDay);
+    return normalizedText(offeredDate || "") !== normalizedText(currentDate || "");
+  }
+
+  return true;
+}
+
+
 function buildExplicitAlternateAvailabilityQuery(dateText, timeText, rawText = "") {
   const safeDate = cleanForSpeech(dateText || "");
   const safeTime = cleanForSpeech(timeText || "");
@@ -1957,7 +2015,7 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
   };
 
   let availability = await checkCalendarAvailability(caller, firstAttempt);
-  if (availability && !isSameAvailabilitySlot(availability.date, availability.time, currentDate, currentTime)) {
+  if (availability && matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, availability.date, availability.time)) {
     return { availability, usedNextDayFallback: false };
   }
 
@@ -1967,7 +2025,7 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
   };
 
   availability = await checkCalendarAvailability(caller, retryAttempt);
-  if (availability && !isSameAvailabilitySlot(availability.date, availability.time, currentDate, currentTime)) {
+  if (availability && matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, availability.date, availability.time)) {
     return { availability, usedNextDayFallback: false };
   }
 
@@ -2204,6 +2262,11 @@ async function handlePrompt(ws, caller, speech) {
 
       if (!parsed) {
         parsed = extractOpeningNameAndIssue(text);
+      }
+
+      if (!parsed.name) {
+        const introFirstName = extractIntroFirstName(text);
+        if (introFirstName) parsed.name = introFirstName;
       }
 
       if (parsed.name) {
