@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 2 STABILIZED + NARROW AI INTERPRETER
- DATE: 2026-04-08 (stabilized pass-2 base + narrow AI interpreter for confirmations and browser number capture)
+ CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES
+ DATE: 2026-04-08 (V15 pass 2 core routing fixes: yes/no, callback intent, booking, spoken times, repeat fallback, address correction)
 
 
  PURPOSE:
@@ -32,14 +32,10 @@
  - AVAILABILITY_WEBHOOK_URL
  - BOOKING_WEBHOOK_URL
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
- - OPENAI_API_KEY                (required to enable AI interpreter)
- - AI_INTERPRETER_ENABLED        (default true when OPENAI_API_KEY is set)
- - AI_INTERPRETER_MODEL          (default gpt-4o-mini)
- - AI_INTERPRETER_TIMEOUT_MS     (default 2500)
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 2 STABILIZED + NARROW AI INTERPRETER LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES LOADED 🔥");
 
 
 const express = require("express");
@@ -66,7 +62,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS2-STABILIZED-AI-NARROW";
+const APP_VERSION = "CONVERSATIONRELAY-BASELINE-V15-PASS2-CORE-ROUTING-FIXES";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -81,10 +77,6 @@ const TWILIO_API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET || "";
 const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const AI_INTERPRETER_ENABLED = String(process.env.AI_INTERPRETER_ENABLED || (OPENAI_API_KEY ? "true" : "false")).toLowerCase() === "true";
-const AI_INTERPRETER_MODEL = process.env.AI_INTERPRETER_MODEL || "gpt-4o-mini";
-const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 2500);
 
 
 const callerStore = {};
@@ -1502,10 +1494,11 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 function buildSchedulingChoicePrompt(caller) {
   const variants = [
-    "Do you have a date in mind, or can I schedule the first available?",
-    "Would you like the first available, or do you have a date in mind?",
-    "Do you have a specific date in mind, or can I schedule the first available?"
+    "Alright, now let's talk about getting you scheduled. Do you have a date in mind, or can I schedule the first available?",
+    "Now let's talk about getting you scheduled. Do you have a specific date in mind, or can I schedule the first available?",
+    "Let's get you scheduled. Do you have a date in mind, or can I schedule the first available?"
   ];
+
 
   const index = nextPromptIndex(caller, "scheduleChoicePromptIndex");
   return variants[index % variants.length];
@@ -1729,193 +1722,6 @@ function postJsonToWebhook(webhookUrl, payload, label) {
       resolve(null);
     }
   });
-}
-
-
-function extractOpenAIResponseText(body) {
-  if (!body) return "";
-  if (typeof body.output_text === "string" && body.output_text.trim()) return body.output_text.trim();
-  const output = Array.isArray(body.output) ? body.output : [];
-  for (const item of output) {
-    const content = Array.isArray(item && item.content) ? item.content : [];
-    for (const part of content) {
-      if (typeof (part?.text) === "string" && part.text.trim()) return part.text.trim();
-      if (typeof (part?.text?.value) === "string" && part.text.value.trim()) return part.text.value.trim();
-    }
-  }
-  return "";
-}
-
-
-function postJsonToOpenAIResponses(payload, label = "AI INTERPRETER") {
-  return new Promise((resolve) => {
-    if (!OPENAI_API_KEY) {
-      resolve(null);
-      return;
-    }
-
-    try {
-      const data = JSON.stringify(payload);
-      const options = {
-        hostname: "api.openai.com",
-        path: "/v1/responses",
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(data)
-        }
-      };
-
-      const req = https.request(options, (apiRes) => {
-        let body = "";
-        apiRes.on("data", (chunk) => { body += chunk; });
-        apiRes.on("end", () => {
-          if (apiRes.statusCode && apiRes.statusCode >= 200 && apiRes.statusCode < 300) {
-            try {
-              resolve(JSON.parse(body || "{}"));
-            } catch (err) {
-              console.error(`[${label} PARSE ERROR]`, err.message);
-              resolve(null);
-            }
-            return;
-          }
-          console.error(`[${label} STATUS ${apiRes.statusCode}]`, body.slice(0, 500));
-          resolve(null);
-        });
-      });
-
-      req.setTimeout(AI_INTERPRETER_TIMEOUT_MS, () => {
-        req.destroy(new Error("timeout"));
-      });
-
-      req.on("error", (err) => {
-        console.error(`[${label} ERROR]`, err.message);
-        resolve(null);
-      });
-
-      req.write(data);
-      req.end();
-    } catch (err) {
-      console.error(`[${label} ERROR]`, err.message);
-      resolve(null);
-    }
-  });
-}
-
-
-async function interpretStepIntent(caller, text, currentStep, allowedIntents = []) {
-  const safeText = cleanForSpeech(text || "");
-  if (!AI_INTERPRETER_ENABLED || !OPENAI_API_KEY || !safeText || !allowedIntents.length) return null;
-
-  const payload = {
-    model: AI_INTERPRETER_MODEL,
-    input: [
-      {
-        role: "system",
-        content: `You classify caller utterances for an AI receptionist state machine. Return JSON only. Choose exactly one intent from allowed_intents.
-
-Rules:
-- If the user is clearly confirming something, classify as affirmative. Treat phrases like "it is", "it's correct", "that is correct", "that's right", "yeah that'll work", "that should work", and "yes that works" as affirmative when they fit the step.
-- If the user is clearly rejecting something, classify as negative.
-- If the step is get_new_phone and the user provides digits or spoken number words, classify as provide_phone_number and return phoneNumber as digits only.
-- If the step is get_new_phone and the user simply says yes without giving digits, classify as affirmative, not provide_phone_number.
-- If the step is confirm_address, only use correct_address when the caller is truly changing the address. Plain confirmations like "it is" or "yes that's correct" are affirmative, not address corrections.
-- If the step is confirm_first_available, phrases that accept the offered time should be affirmative. Requests for another time or later option should be request_alternate_time.
-- Prefer other when uncertain.
-- Never invent missing values.`
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          current_step: currentStep,
-          allowed_intents: allowedIntents,
-          lead_type: caller.leadType || "service",
-          emergency_alert: caller.emergencyAlert === true,
-          browser_caller: isBrowserCaller(caller),
-          pending_prompt: caller.pendingPromptText || "",
-          pending_address: caller.address || "",
-          pending_offered_date: caller.pendingOfferedDate || "",
-          pending_offered_time: caller.pendingOfferedTime || "",
-          utterance: safeText
-        })
-      }
-    ],
-    max_output_tokens: 180,
-    text: {
-      format: {
-        type: "json_schema",
-        name: "call_interpretation",
-        strict: true,
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            intent: { type: "string", enum: allowedIntents },
-            confidence: { type: "number" },
-            phoneNumber: { type: "string" },
-            addressText: { type: "string" },
-            normalizedText: { type: "string" }
-          },
-          required: ["intent", "confidence", "phoneNumber", "addressText", "normalizedText"]
-        }
-      }
-    }
-  };
-
-  const result = await postJsonToOpenAIResponses(payload);
-  if (!result) return null;
-
-  const outputText = extractOpenAIResponseText(result);
-  if (!outputText) return null;
-
-  try {
-    const parsed = JSON.parse(outputText);
-    if (!parsed || typeof parsed !== "object") return null;
-    const normalized = {
-      intent: typeof parsed.intent === "string" ? parsed.intent : "other",
-      confidence: Number(parsed.confidence || 0),
-      phoneNumber: typeof parsed.phoneNumber === "string" ? parsed.phoneNumber.replace(/\D/g, "") : "",
-      addressText: typeof parsed.addressText === "string" ? parsed.addressText : "",
-      normalizedText: typeof parsed.normalizedText === "string" ? parsed.normalizedText : ""
-    };
-    if (!allowedIntents.includes(normalized.intent)) return null;
-    return normalized;
-  } catch (err) {
-    console.error("[AI INTERPRETER JSON ERROR]", err.message);
-    return null;
-  }
-}
-
-
-function continueAfterConfirmedAddress(ws, caller) {
-  if (caller.leadType === "quote") {
-    caller.lastStep = "ask_project_timeline";
-    sendText(ws, "What is the projected timeline or anticipated start date for this project?");
-    return;
-  }
-  if (caller.leadType === "demo") {
-    caller.lastStep = "ask_demo_email_optional";
-    sendText(ws, "Would you like to include an email address as well?");
-    return;
-  }
-  if (caller.emergencyAlert) {
-    caller.lastStep = "ask_notes";
-    sendText(ws, "Before I submit this, is there anything else you'd like me to note for the technician?");
-    return;
-  }
-  caller.lastStep = "schedule_or_callback";
-  sendText(ws, buildSchedulingChoicePrompt(caller));
-}
-
-
-function acceptPendingAvailability(ws, caller) {
-  caller.appointmentDate = caller.pendingOfferedDate;
-  caller.appointmentTime = caller.pendingOfferedTime;
-  caller.status = "scheduled";
-  caller.calendarSlotConfirmed = true;
-  caller.lastStep = "ask_notes";
-  sendText(ws, `Okay, I have you scheduled for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Is there anything else you'd like me to note for the technician?`);
 }
 
 
@@ -2516,29 +2322,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "get_new_phone": {
-      const aiInterpretation = await interpretStepIntent(caller, text, "get_new_phone", [
-        "provide_phone_number",
-        "affirmative",
-        "negative",
-        "other"
-      ]);
-
-      if (aiInterpretation?.intent === "provide_phone_number" && aiInterpretation.phoneNumber) {
-        caller.callbackNumber = aiInterpretation.phoneNumber;
-        caller.callbackConfirmed = true;
-        caller.lastStep = "ask_address";
-        sendText(ws, buildAddressRequestPrompt(caller));
-        return;
-      }
-
-      if ((aiInterpretation?.intent === "affirmative" || isAffirmative(text)) && !isLikelyPhoneNumberResponse(text)) {
-        caller.callbackConfirmed = false;
-        sendText(ws, "Alright. What is the best callback number to reach you?");
-        return;
-      }
-
       if (!isLikelyPhoneNumberResponse(text)) {
         caller.callbackConfirmed = false;
+        if (isAffirmative(text)) {
+          sendText(ws, "Alright. What is the best callback number to reach you?");
+          return;
+        }
         sendText(ws, isBrowserCaller(caller)
           ? "I'm sorry, I still need a callback number in case we get disconnected. What is the best number to reach you?"
           : "I'm sorry, I still need a callback number. What is the best number to reach you?");
@@ -2561,34 +2350,37 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "confirm_address": {
-      const aiInterpretation = await interpretStepIntent(caller, text, "confirm_address", [
-        "affirmative",
-        "negative",
-        "correct_address",
-        "other"
-      ]);
-
-      if (aiInterpretation?.intent === "affirmative" || isAffirmative(text)) {
-        continueAfterConfirmedAddress(ws, caller);
+      if (isAffirmative(text)) {
+        if (caller.leadType === "quote") {
+          caller.lastStep = "ask_project_timeline";
+          sendText(ws, "What is the projected timeline or anticipated start date for this project?");
+          return;
+        }
+        if (caller.leadType === "demo") {
+          caller.lastStep = "ask_demo_email_optional";
+          sendText(ws, "Would you like to include an email address as well?");
+          return;
+        }
+        if (caller.emergencyAlert) {
+          caller.lastStep = "ask_notes";
+          sendText(ws, "Before I submit this, is there anything else you'd like me to note for the technician?");
+          return;
+        }
+        caller.lastStep = "schedule_or_callback";
+        sendText(ws, buildSchedulingChoicePrompt(caller));
         return;
       }
-      if (aiInterpretation?.intent === "negative" || isNegative(text)) {
+      if (isNegative(text)) {
         caller.address = "";
         caller.lastStep = "ask_address";
         sendText(ws, caller.leadType === "quote" ? "I'm sorry about that. Let's try it again. What is the project address?" : "I'm sorry about that. Let's try it again. What is the service address?");
         return;
       }
-
-      const correctedAddress = aiInterpretation?.intent === "correct_address"
-        ? normalizeAddressInput(aiInterpretation.addressText || text)
-        : (looksLikeAddressCorrection(text) ? normalizeAddressInput(text) : "");
-
-      if (correctedAddress) {
-        caller.address = correctedAddress;
+      if (looksLikeAddressCorrection(text)) {
+        caller.address = normalizeAddressInput(text);
         sendText(ws, `Got it. Let me read that back — ${formatAddressForSpeech(caller.address)}. Is that correct?`);
         return;
       }
-
       sendText(ws, `I just need a yes or no — is ${formatAddressForSpeech(caller.address)} correct?`);
       return;
     }
@@ -2755,20 +2547,13 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "confirm_first_available": {
-      const aiInterpretation = await interpretStepIntent(caller, text, "confirm_first_available", [
-        "affirmative",
-        "negative",
-        "request_alternate_time",
-        "repeat_request",
-        "other"
-      ]);
-
-      if (aiInterpretation?.intent === "repeat_request" || isRepeatTimeRequest(text)) {
+      if (isRepeatTimeRequest(text)) {
         sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
 
-      if (aiInterpretation?.intent === "request_alternate_time" || isAlternateAvailabilityRequest(text)) {
+
+      if (isAlternateAvailabilityRequest(text)) {
         const previousDate = caller.pendingOfferedDate;
         const previousTime = caller.pendingOfferedTime;
         caller.pendingAvailabilityQuery = cleanForSpeech(text);
@@ -2787,16 +2572,24 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      if (aiInterpretation?.intent === "affirmative" || isAffirmative(text)) {
-        acceptPendingAvailability(ws, caller);
+
+      if (isAffirmative(text)) {
+        caller.appointmentDate = caller.pendingOfferedDate;
+        caller.appointmentTime = caller.pendingOfferedTime;
+        caller.status = "scheduled";
+        caller.calendarSlotConfirmed = true;
+        caller.lastStep = "ask_notes";
+        sendText(ws, `Okay, I have you scheduled for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Is there anything else you'd like me to note for the technician?`);
         return;
       }
 
-      if (aiInterpretation?.intent === "negative" || isNegative(text)) {
+
+      if (isNegative(text)) {
         caller.lastStep = "ask_appointment_day";
         sendText(ws, "No problem. What day works better for a callback?");
         return;
       }
+
 
       sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
       return;
