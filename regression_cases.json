@@ -1,0 +1,197 @@
+[
+  {
+    "name": "opening_name_plus_issue",
+    "extractor": "opening",
+    "text": "Hi Alex, this is Steve Miller. I need someone to come look at my leaky faucet.",
+    "context": {
+      "current_step": "ask_issue"
+    },
+    "expected": {
+      "intent": "name_plus_issue",
+      "full_name_contains": "Steve",
+      "issue_contains": "faucet"
+    }
+  },
+  {
+    "name": "opening_name_only",
+    "extractor": "opening",
+    "text": "This is Steve Miller.",
+    "context": {
+      "current_step": "ask_issue"
+    },
+    "expected": {
+      "intent": "name_only"
+    }
+  },
+  {
+    "name": "opening_issue_only",
+    "extractor": "opening",
+    "text": "My kitchen faucet is leaking.",
+    "context": {
+      "current_step": "ask_issue"
+    },
+    "expected": {
+      "intent": "issue_only",
+      "issue_contains": "faucet"
+    }
+  },
+  {
+    "name": "opening_social_only",
+    "extractor": "opening",
+    "text": "Hey Alex, how are you today?",
+    "context": {
+      "current_step": "ask_issue"
+    },
+    "expected": {
+      "intent": "social_greeting_only"
+    }
+  },
+  {
+    "name": "phone_confirm_yes",
+    "extractor": "phone",
+    "text": "Yes, that's the right number.",
+    "context": {
+      "current_step": "confirm_phone",
+      "existing_phone": "7146975005"
+    },
+    "expected": {
+      "intent": "confirm_existing_phone"
+    }
+  },
+  {
+    "name": "phone_change_request",
+    "extractor": "phone",
+    "text": "Can I give you a different number?",
+    "context": {
+      "current_step": "confirm_phone",
+      "existing_phone": "7146975005"
+    },
+    "expected": {
+      "intent": "request_phone_change"
+    }
+  },
+  {
+    "name": "phone_change_with_number",
+    "extractor": "phone",
+    "text": "Use 904-555-1212 instead.",
+    "context": {
+      "current_step": "confirm_phone",
+      "existing_phone": "7146975005"
+    },
+    "expected": {
+      "intent": "provide_new_phone_number",
+      "phone_contains": "904"
+    }
+  },
+  {
+    "name": "phone_yes_waiting_for_number",
+    "extractor": "phone",
+    "text": "Yes.",
+    "context": {
+      "current_step": "get_new_phone",
+      "is_browser": true
+    },
+    "expected": {
+      "intent": "yes_waiting_for_number"
+    }
+  },
+  {
+    "name": "address_confirm_it_is",
+    "extractor": "address",
+    "text": "It is.",
+    "context": {
+      "current_step": "confirm_address",
+      "address": "248 Lake Street, Orlando"
+    },
+    "expected": {
+      "intent": "confirm_address"
+    }
+  },
+  {
+    "name": "address_confirm_yes_correct",
+    "extractor": "address",
+    "text": "Yes, that's correct.",
+    "context": {
+      "current_step": "confirm_address",
+      "address": "248 Lake Street, Orlando"
+    },
+    "expected": {
+      "intent": "confirm_address"
+    }
+  },
+  {
+    "name": "address_correction",
+    "extractor": "address",
+    "text": "No, it's 248 Lake Street instead.",
+    "context": {
+      "current_step": "confirm_address",
+      "address": "250 Lake Street, Orlando"
+    },
+    "expected": {
+      "intent": "correct_address",
+      "corrected_contains": "248"
+    }
+  },
+  {
+    "name": "address_apartment_correction",
+    "extractor": "address",
+    "text": "Actually it's apartment 4.",
+    "context": {
+      "current_step": "confirm_address",
+      "address": "248 Lake Street, Orlando"
+    },
+    "expected": {
+      "intent": "correct_address",
+      "corrected_contains": "apartment 4"
+    }
+  },
+  {
+    "name": "schedule_accept",
+    "extractor": "scheduling",
+    "text": "Yeah, that'll work.",
+    "context": {
+      "current_step": "confirm_first_available",
+      "offered_date": "Thursday, April 9",
+      "offered_time": "2:30 PM"
+    },
+    "expected": {
+      "intent": "accept_offered_time"
+    }
+  },
+  {
+    "name": "schedule_alt_same_day",
+    "extractor": "scheduling",
+    "text": "Can you do something later that day?",
+    "context": {
+      "current_step": "confirm_first_available",
+      "offered_date": "Thursday, April 9",
+      "offered_time": "2:30 PM"
+    },
+    "expected": {
+      "intent": "request_alternate_time",
+      "alternate_scope": "same_day_later"
+    }
+  },
+  {
+    "name": "schedule_first_available",
+    "extractor": "scheduling",
+    "text": "What's the first available?",
+    "context": {
+      "current_step": "schedule_or_callback"
+    },
+    "expected": {
+      "intent": "request_first_available"
+    }
+  },
+  {
+    "name": "schedule_office_callback",
+    "extractor": "scheduling",
+    "text": "Have the office call me.",
+    "context": {
+      "current_step": "confirm_first_available"
+    },
+    "expected": {
+      "intent": "request_office_callback"
+    }
+  }
+]
