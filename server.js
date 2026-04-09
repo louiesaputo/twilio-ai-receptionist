@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES
- DATE: 2026-04-08 (V15 pass 2 core routing fixes: yes/no, callback intent, booking, spoken times, repeat fallback, address correction)
+ CONVERSATIONRELAY BASELINE V15 PASS 3 PERFORMANCE PATCH
+ DATE: 2026-04-09 (performance-only pass: non-blocking submissions, webhook timeouts, lookup filler coverage, faster close timing)
 
 
  PURPOSE:
@@ -10,6 +10,7 @@
  - Preserves core service / emergency / quote / demo flows
  - Preserves address readback as street + city only
  - Preserves callback wording preferences where practical
+ - Removes blocking webhook waits from the live conversation path where possible
 
 
  IMPORTANT:
@@ -32,10 +33,15 @@
  - AVAILABILITY_WEBHOOK_URL
  - BOOKING_WEBHOOK_URL
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
+ - WEBHOOK_TIMEOUT_MS             (default 5000)
+ - AVAILABILITY_TIMEOUT_MS        (default 3500)
+ - SUBMISSION_TIMEOUT_MS          (default 4000)
+ - CLOSE_SESSION_MIN_MS           (default 4500)
+ - CLOSE_SESSION_MAX_MS           (default 12000)
 *************************************************/
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 2 CORE ROUTING FIXES LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 3 PERFORMANCE PATCH LOADED 🔥");
 
 
 const express = require("express");
@@ -68,7 +74,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-PERFORMANCE-PASS";
 
 
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
@@ -84,6 +90,11 @@ const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
 const AI_INTERPRETER_ENABLED = String(process.env.AI_INTERPRETER_ENABLED || "false").toLowerCase() === "true";
+const WEBHOOK_TIMEOUT_MS = Number(process.env.WEBHOOK_TIMEOUT_MS || 5000);
+const AVAILABILITY_TIMEOUT_MS = Number(process.env.AVAILABILITY_TIMEOUT_MS || 3500);
+const SUBMISSION_TIMEOUT_MS = Number(process.env.SUBMISSION_TIMEOUT_MS || 4000);
+const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
+const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 
 
 const callerStore = {};
@@ -669,7 +680,7 @@ function normalizeAddressInput(input) {
 
 
   value = collapseSpacedDigits(value);
-  value = value.replace(/^([0-9]{1,6})\s+\1(\b.*)$/i, "$1$2");
+  value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
   value = value.replace(/\s{2,}/g, " ").trim();
   return value;
 }
@@ -1499,6 +1510,20 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 }
 
 
+function detectCalendarLookupMode(rawText = "") {
+  if (isFirstAvailableRequest(rawText)) return "first_available";
+  if (isAlternateAvailabilityRequest(rawText)) return "alternate";
+  if (extractDatePart(rawText) || isSpecificTime(rawText) || detectTimePreference(rawText)) return "specific_date";
+  return "general";
+}
+
+
+function announceCalendarLookup(ws, caller, rawText = "", explicitMode = "") {
+  const mode = explicitMode || detectCalendarLookupMode(rawText);
+  sendText(ws, buildCalendarLookupPrompt(caller, rawText, mode), { remember: false });
+}
+
+
 function buildSchedulingChoicePrompt(caller) {
   const variants = [
     "Do you have a date in mind, or can I schedule the first available?",
@@ -1556,7 +1581,12 @@ function getOrCreateCaller(key) {
       pendingAvailabilityQuery: "",
       calendarSlotConfirmed: false,
       bookingSent: false,
+      bookingSending: false,
       makeSent: false,
+      makeSending: false,
+      demoFollowupRequested: false,
+      demoFollowupSent: false,
+      demoFollowupSending: false,
       lastStep: "ask_issue",
       pendingNameNextStep: "",
       nameSpellingConfirmed: false,
@@ -1565,8 +1595,6 @@ function getOrCreateCaller(key) {
       pendingPromptText: "",
       repeatPromptIndex: 0,
       promptBuffer: "",
-      demoFollowupRequested: false,
-      demoFollowupSent: false,
       demoFollowupContactName: "",
       demoFollowupCallbackNumber: "",
       demoFollowupEmail: "",
@@ -1616,10 +1644,10 @@ function estimateSpeechDurationMs(text) {
 
   const commaCount = (safe.match(/[,;:]/g) || []).length;
   const stopCount = (safe.match(/[.!?]/g) || []).length;
-  const estimated = 3800 + (safe.length * 88) + (commaCount * 260) + (stopCount * 420);
+  const estimated = 1800 + (safe.length * 58) + (commaCount * 200) + (stopCount * 320);
 
 
-  return Math.max(14000, Math.min(32000, estimated));
+  return Math.max(CLOSE_SESSION_MIN_MS, Math.min(CLOSE_SESSION_MAX_MS, estimated));
 }
 
 
@@ -1628,6 +1656,17 @@ function closeSession(ws, text) {
   setTimeout(() => {
     try { ws.close(); } catch (err) {}
   }, text ? estimateSpeechDurationMs(text) : 0);
+}
+
+
+function queueBackgroundTask(label, taskFn) {
+  setTimeout(async () => {
+    try {
+      await taskFn();
+    } catch (err) {
+      console.error(`[${label} BACKGROUND ERROR]`, err.message);
+    }
+  }, 0);
 }
 
 
@@ -1689,7 +1728,7 @@ function shouldSendToMake(caller) {
 }
 
 
-function postJsonToWebhook(webhookUrl, payload, label) {
+function postJsonToWebhook(webhookUrl, payload, label, timeoutMs = WEBHOOK_TIMEOUT_MS) {
   return new Promise((resolve) => {
     try {
       const data = JSON.stringify(payload);
@@ -1705,19 +1744,34 @@ function postJsonToWebhook(webhookUrl, payload, label) {
       };
 
 
+      let settled = false;
+      const finalize = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+
       const req = https.request(options, (webhookRes) => {
         let body = "";
         webhookRes.on("data", (chunk) => { body += chunk; });
         webhookRes.on("end", () => {
           console.log(`[${label}] Status: ${webhookRes.statusCode}`);
-          resolve({ statusCode: webhookRes.statusCode, body });
+          finalize({ statusCode: webhookRes.statusCode, body });
         });
+      });
+
+
+      req.setTimeout(timeoutMs, () => {
+        console.error(`[${label} TIMEOUT] ${timeoutMs}ms`);
+        req.destroy(new Error("Request timed out"));
+        finalize(null);
       });
 
 
       req.on("error", (err) => {
         console.error(`[${label} ERROR]`, err.message);
-        resolve(null);
+        finalize(null);
       });
 
 
@@ -1732,10 +1786,13 @@ function postJsonToWebhook(webhookUrl, payload, label) {
 
 
 async function sendLeadToMake(caller) {
-  if (caller.makeSent || !shouldSendToMake(caller)) return;
-  const payload = buildMakePayload(caller);
-  await postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "MAKE");
-  caller.makeSent = true;
+  if (caller.makeSent || caller.makeSending || !shouldSendToMake(caller)) return;
+  caller.makeSending = true;
+  const result = await postJsonToWebhook(MAKE_WEBHOOK_URL, buildMakePayload(caller), "MAKE", SUBMISSION_TIMEOUT_MS);
+  caller.makeSending = false;
+  if (result && result.statusCode >= 200 && result.statusCode < 300) {
+    caller.makeSent = true;
+  }
 }
 
 
@@ -1765,17 +1822,28 @@ function buildBookingPayload(caller) {
 
 
 async function sendBookingToMake(caller) {
-  if (caller.bookingSent) return;
+  if (caller.bookingSent || caller.bookingSending) return;
   const payload = buildBookingPayload(caller);
   if (!payload) return;
-  await postJsonToWebhook(BOOKING_WEBHOOK_URL, payload, "BOOKING");
-  caller.bookingSent = true;
+  caller.bookingSending = true;
+  const result = await postJsonToWebhook(BOOKING_WEBHOOK_URL, payload, "BOOKING", SUBMISSION_TIMEOUT_MS);
+  caller.bookingSending = false;
+  if (result && result.statusCode >= 200 && result.statusCode < 300) {
+    caller.bookingSent = true;
+  }
 }
 
 
 async function submitPrimaryLeadAndBooking(caller) {
   await sendLeadToMake(caller);
   await sendBookingToMake(caller);
+}
+
+
+function queuePrimaryLeadAndBooking(caller) {
+  queueBackgroundTask("PRIMARY SUBMIT", async () => {
+    await submitPrimaryLeadAndBooking(caller);
+  });
 }
 
 
@@ -1820,11 +1888,22 @@ function buildDemoFollowupPayload(caller) {
 
 
 async function sendDemoFollowupToMake(caller) {
-  if (caller.demoFollowupSent) return;
+  if (caller.demoFollowupSent || caller.demoFollowupSending) return;
   const payload = buildDemoFollowupPayload(caller);
   if (!payload.fullName || (!payload.phone && !payload.demoEmail)) return;
-  await postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "DEMO FOLLOWUP");
-  caller.demoFollowupSent = true;
+  caller.demoFollowupSending = true;
+  const result = await postJsonToWebhook(MAKE_WEBHOOK_URL, payload, "DEMO FOLLOWUP", SUBMISSION_TIMEOUT_MS);
+  caller.demoFollowupSending = false;
+  if (result && result.statusCode >= 200 && result.statusCode < 300) {
+    caller.demoFollowupSent = true;
+  }
+}
+
+
+function queueDemoFollowupSubmission(caller) {
+  queueBackgroundTask("DEMO FOLLOWUP SUBMIT", async () => {
+    await sendDemoFollowupToMake(caller);
+  });
 }
 
 
@@ -1850,7 +1929,7 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
   };
 
 
-  const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK");
+  const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK", AVAILABILITY_TIMEOUT_MS);
   if (!result || !result.body) return null;
   try {
     const parsed = JSON.parse(result.body || "{}");
@@ -2644,6 +2723,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery;
+        announceCalendarLookup(ws, caller, text, "first_available");
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -2679,6 +2759,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || cleanForSpeech(text);
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
+        announceCalendarLookup(ws, caller, text);
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -2705,6 +2786,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.requestedDate = requestDetails.requestedDate || caller.appointmentDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
+        announceCalendarLookup(ws, caller, text);
         const availability = await checkCalendarAvailability(caller, requestDetails);
         if (!availability) {
           caller.status = "callback_requested";
@@ -2764,7 +2846,7 @@ async function handlePrompt(ws, caller, speech) {
             const previousDate = caller.pendingOfferedDate;
             const previousTime = caller.pendingOfferedTime;
             caller.pendingAvailabilityQuery = cleanForSpeech(text);
-            sendText(ws, buildCalendarLookupPrompt(caller, text, "alternate"));
+            announceCalendarLookup(ws, caller, text, "alternate");
             const alternateResult = await findAlternateAvailability(caller, text, previousDate, previousTime);
             if (!alternateResult || !alternateResult.availability) {
               sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
@@ -2790,7 +2872,7 @@ async function handlePrompt(ws, caller, speech) {
         const previousDate = caller.pendingOfferedDate;
         const previousTime = caller.pendingOfferedTime;
         caller.pendingAvailabilityQuery = cleanForSpeech(text);
-        sendText(ws, buildCalendarLookupPrompt(caller, text, "alternate"));
+        announceCalendarLookup(ws, caller, text, "alternate");
         const alternateResult = await findAlternateAvailability(caller, text, previousDate, previousTime);
         if (!alternateResult || !alternateResult.availability) {
           sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
@@ -2832,7 +2914,7 @@ async function handlePrompt(ws, caller, speech) {
       if (hadNotes) caller.notes = cleanForSpeech(text);
 
 
-      await submitPrimaryLeadAndBooking(caller);
+      queuePrimaryLeadAndBooking(caller);
 
 
       if (caller.leadType === "demo" || wantsToFinishNow) {
@@ -2881,7 +2963,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
         if (caller.demoFollowupEmail) {
-          await sendDemoFollowupToMake(caller);
+          queueDemoFollowupSubmission(caller);
           caller.lastStep = "final_question";
           sendText(ws, buildFinalSubmissionPrompt(caller));
           return;
@@ -2936,7 +3018,7 @@ async function handlePrompt(ws, caller, speech) {
       if (!isNegative(text) && text.includes("@")) {
         caller.demoFollowupEmail = cleanForSpeech(text);
       }
-      await sendDemoFollowupToMake(caller);
+      queueDemoFollowupSubmission(caller);
       caller.lastStep = "final_question";
       sendText(ws, buildFinalSubmissionPrompt(caller));
       return;
@@ -2945,7 +3027,7 @@ async function handlePrompt(ws, caller, speech) {
 
     case "capture_demo_followup_email": {
       caller.demoFollowupEmail = cleanForSpeech(text);
-      await sendDemoFollowupToMake(caller);
+      queueDemoFollowupSubmission(caller);
       caller.lastStep = "final_question";
       sendText(ws, buildFinalSubmissionPrompt(caller));
       return;
@@ -2966,8 +3048,7 @@ async function handlePrompt(ws, caller, speech) {
         isEndCallPhrase(text) ||
         containsAny(finalText, ["i think that s it", "i think thats it", "that s all", "thats all", "that is all", "bye", "goodbye"])
       ) {
-        await sendLeadToMake(caller);
-        await sendBookingToMake(caller);
+        queuePrimaryLeadAndBooking(caller);
         closeSession(ws, buildFinalSubmissionClose(caller));
         return;
       }
