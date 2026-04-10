@@ -862,6 +862,11 @@ function buildFinalSubmissionClose(caller) {
 }
 
 
+function buildDemoCloseMessage() {
+  return "Thank you for trying out our demo. Feel free to visit our website at bluecallerautomation.com. And if you have any questions, just give us a call back at this number. We'll be happy to help.";
+}
+
+
 
 
 
@@ -1229,6 +1234,40 @@ function isChangeContactPersonIntent(text) {
     "use my wife", "use my husband", "use her", "use him",
     "make her the contact", "make him the contact",
     "change the name", "update the contact person", "update the contact"
+  ]);
+}
+
+
+function extractLastNameFromFullName(name) {
+  const parts = cleanForSpeech(name || "").split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return "";
+  return parts.slice(1).join(" ");
+}
+
+
+function isSameLastNameResponse(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "same", "same last name", "same last", "same as mine", "same as the current contact",
+    "same as before", "same as me", "same as my last name"
+  ]);
+}
+
+
+function isEmailAddAcceptance(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (wantsOptionalEmail(text)) return true;
+  return containsAny(t, [
+    "yes let s do that", "yes lets do that", "yeah let s do that", "yeah lets do that",
+    "yes we better do that", "yeah we better do that", "we better do that",
+    "yes let s add that", "yes lets add that", "yeah let s add that", "yeah lets add that",
+    "yes let s add an email", "yes lets add an email", "yeah let s add an email", "yeah lets add an email",
+    "yes add an email", "yeah add an email", "let s add an email", "lets add an email",
+    "yes let s add one", "yes lets add one", "yeah let s add one", "yeah lets add one",
+    "yes let s add a number", "yes lets add a number", "yeah let s add a number", "yeah lets add a number",
+    "add that", "add one", "do that", "let s do it", "lets do it"
   ]);
 }
 
@@ -2581,6 +2620,12 @@ function queueDemoFollowupSubmission(caller) {
 }
 
 
+function closeAfterDemoFollowup(ws, caller) {
+  queuePrimaryLeadAndBooking(caller);
+  closeSession(ws, buildDemoCloseMessage());
+}
+
+
 
 
 async function checkCalendarAvailability(caller, requestDetails = {}) {
@@ -3488,6 +3533,12 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
+        const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+        if (existingLastName) {
+          caller.lastStep = "confirm_same_last_name_after_contact_change";
+          sendText(ws, `Got it. Is ${caller.pendingUpdatedContactFirstName}'s last name the same as the current contact's last name?`);
+          return;
+        }
         caller.lastStep = "capture_updated_contact_last_name";
         sendText(ws, `Got it. Can I get ${caller.pendingUpdatedContactFirstName}'s last name as well?`);
         return;
@@ -3512,13 +3563,49 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
+      const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+      if (existingLastName) {
+        caller.lastStep = "confirm_same_last_name_after_contact_change";
+        sendText(ws, `Got it. Is ${caller.pendingUpdatedContactFirstName}'s last name the same as the current contact's last name?`);
+        return;
+      }
       caller.lastStep = "capture_updated_contact_last_name";
       sendText(ws, `Got it. Can I get ${caller.pendingUpdatedContactFirstName}'s last name as well?`);
       return;
     }
 
 
+    case "confirm_same_last_name_after_contact_change": {
+      const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+      if (existingLastName && (isAffirmative(text) || isSameLastNameResponse(text))) {
+        caller.fullName = `${caller.pendingUpdatedContactFirstName} ${existingLastName}`.trim();
+        caller.firstName = getFirstName(caller.fullName);
+        caller.pendingUpdatedContactFirstName = "";
+        caller.lastStep = "ask_notes";
+        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        return;
+      }
+      if (isNegative(text)) {
+        caller.lastStep = "capture_updated_contact_last_name";
+        sendText(ws, `No problem. What is ${caller.pendingUpdatedContactFirstName}'s last name?`);
+        return;
+      }
+      caller.lastStep = "capture_updated_contact_last_name";
+      sendText(ws, `I just need the last name for ${caller.pendingUpdatedContactFirstName}. What is it?`);
+      return;
+    }
+
+
     case "capture_updated_contact_last_name": {
+      const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+      if (existingLastName && isSameLastNameResponse(text)) {
+        caller.fullName = `${caller.pendingUpdatedContactFirstName} ${existingLastName}`.trim();
+        caller.firstName = getFirstName(caller.fullName);
+        caller.pendingUpdatedContactFirstName = "";
+        caller.lastStep = "ask_notes";
+        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        return;
+      }
       const parsedLastName = parseLastNameResponse(text);
       if (!parsedLastName) {
         sendText(ws, "I'm sorry, I didn't quite catch the last name. Could you repeat it for me?");
@@ -3648,7 +3735,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_demo_email_optional": {
-      if (wantsOptionalEmail(text)) {
+      if (isEmailAddAcceptance(text)) {
         caller.lastStep = "capture_demo_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
@@ -3915,7 +4002,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      if (caller.leadType === "demo" || wantsToFinishNow) {
+      if (caller.leadType === "demo") {
+        closeAfterDemoFollowup(ws, caller);
+        return;
+      }
+
+      if (wantsToFinishNow) {
         caller.lastStep = "final_question";
         sendText(ws, `${buildPostNotesTransition(caller, hadNotes)} ${buildFinalSubmissionPrompt(caller)}`);
         return;
@@ -3943,8 +4035,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isNegative(text) || isEndCallPhrase(text)) {
         caller.demoFollowupRequested = false;
-        caller.lastStep = "final_question";
-        sendText(ws, buildFinalSubmissionPrompt(caller));
+        closeAfterDemoFollowup(ws, caller);
         return;
       }
 
@@ -3964,8 +4055,7 @@ async function handlePrompt(ws, caller, speech) {
 
         if (caller.demoFollowupEmail) {
           queueDemoFollowupSubmission(caller);
-          caller.lastStep = "final_question";
-          sendText(ws, buildFinalSubmissionPrompt(caller));
+          closeAfterDemoFollowup(ws, caller);
           return;
         }
 
@@ -4022,7 +4112,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_demo_followup_email_optional": {
-      if (wantsOptionalEmail(text)) {
+      if (isEmailAddAcceptance(text)) {
         caller.lastStep = "capture_demo_followup_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
@@ -4031,8 +4121,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.demoFollowupEmail = cleanForSpeech(text);
       }
       queueDemoFollowupSubmission(caller);
-      caller.lastStep = "final_question";
-      sendText(ws, buildFinalSubmissionPrompt(caller));
+      closeAfterDemoFollowup(ws, caller);
       return;
     }
 
@@ -4042,8 +4131,7 @@ async function handlePrompt(ws, caller, speech) {
     case "capture_demo_followup_email": {
       caller.demoFollowupEmail = cleanForSpeech(text);
       queueDemoFollowupSubmission(caller);
-      caller.lastStep = "final_question";
-      sendText(ws, buildFinalSubmissionPrompt(caller));
+      closeAfterDemoFollowup(ws, caller);
       return;
     }
 
