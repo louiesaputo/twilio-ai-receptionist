@@ -1162,10 +1162,66 @@ function isUseSameContactInfo(text) {
 }
 
 
+function isDemoFollowupAcceptance(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (isAffirmative(text)) return true;
+  return containsAny(t, [
+    "that sounds like a good idea", "sounds like a good idea",
+    "yeah that sounds like a good idea", "yes that sounds like a good idea",
+    "why don t we do that", "why dont we do that",
+    "yeah why don t we do that", "yeah why dont we do that",
+    "let s do that", "lets do that",
+    "yeah let s do that", "yeah lets do that",
+    "i d like to talk to someone", "id like to talk to someone",
+    "i would like to talk to someone",
+    "yeah i d like to talk to someone", "yeah id like to talk to someone",
+    "have someone call me about the demo", "have somebody call me about the demo",
+    "i d like someone to call me", "id like someone to call me"
+  ]);
+}
 
 
+function isCallbackNumberChangeIntent(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (isLikelyPhoneNumberResponse(text)) return false;
+  return containsAny(t, [
+    "change my contact number", "change the contact number",
+    "change my callback number", "change the callback number",
+    "change my phone number", "change the phone number",
+    "update my contact number", "update the contact number",
+    "update my callback number", "update the callback number",
+    "use a different number", "use another number",
+    "use my wife s number", "use my wifes number",
+    "use my husband s number", "use my husbands number",
+    "i need to change my number", "i need to change the number",
+    "different callback number", "new callback number"
+  ]);
+}
 
 
+function isKeepSameContactPerson(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "same person", "same contact", "keep me", "keep it the same",
+    "keep the same contact", "keep the contact the same",
+    "same name", "just keep me as the contact", "it can stay the same"
+  ]);
+}
+
+
+function isChangeContactPersonIntent(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "change that too", "change the contact person", "change the contact",
+    "use my wife", "use my husband", "use her", "use him",
+    "make her the contact", "make him the contact",
+    "change the name", "update the contact person", "update the contact"
+  ]);
+}
 
 
 function isRepeatRequest(text) {
@@ -2083,6 +2139,7 @@ function getOrCreateCaller(key) {
       pendingIssueItem: "",
       pendingIssuePrompt: "",
       pendingPromptText: "",
+      pendingUpdatedContactFirstName: "",
       repeatPromptIndex: 0,
       promptBuffer: "",
       demoFollowupContactName: "",
@@ -3323,6 +3380,87 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+    case "capture_updated_callback_number": {
+      if (!isLikelyPhoneNumberResponse(text)) {
+        sendText(ws, "I'm sorry, I still need the updated callback number. What is the best number to use instead?");
+        return;
+      }
+      caller.callbackNumber = normalizePhoneForStorage(text);
+      caller.callbackConfirmed = true;
+      caller.lastStep = "confirm_contact_person_after_phone_change";
+      sendText(ws, "Got it. Should the contact person stay the same, or would you like me to change that as well?");
+      return;
+    }
+
+
+    case "confirm_contact_person_after_phone_change": {
+      if (isKeepSameContactPerson(text)) {
+        caller.lastStep = "ask_notes";
+        sendText(ws, "Got it. I've updated the callback number. Is there anything else you'd like me to note for the technician?");
+        return;
+      }
+
+      if (isChangeContactPersonIntent(text)) {
+        caller.lastStep = "capture_updated_contact_name";
+        sendText(ws, "No problem. What name should I use instead?");
+        return;
+      }
+
+      const parsedName = parseFullNameFromSpeech(text);
+      if (parsedName) {
+        if (hasFullName(parsedName)) {
+          caller.fullName = parsedName;
+          caller.firstName = getFirstName(parsedName);
+          caller.lastStep = "ask_notes";
+          sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+          return;
+        }
+        caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
+        caller.lastStep = "capture_updated_contact_last_name";
+        sendText(ws, `Got it. Can I get ${caller.pendingUpdatedContactFirstName}'s last name as well?`);
+        return;
+      }
+
+      sendText(ws, "I just want to make sure I have that right. Should the contact person stay the same, or would you like me to change that as well?");
+      return;
+    }
+
+
+    case "capture_updated_contact_name": {
+      const parsedName = parseFullNameFromSpeech(text);
+      if (!parsedName) {
+        sendText(ws, "I'm sorry, I didn't quite catch the name. What name should I use instead?");
+        return;
+      }
+      if (hasFullName(parsedName)) {
+        caller.fullName = parsedName;
+        caller.firstName = getFirstName(parsedName);
+        caller.lastStep = "ask_notes";
+        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        return;
+      }
+      caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
+      caller.lastStep = "capture_updated_contact_last_name";
+      sendText(ws, `Got it. Can I get ${caller.pendingUpdatedContactFirstName}'s last name as well?`);
+      return;
+    }
+
+
+    case "capture_updated_contact_last_name": {
+      const parsedLastName = parseLastNameResponse(text);
+      if (!parsedLastName) {
+        sendText(ws, "I'm sorry, I didn't quite catch the last name. Could you repeat it for me?");
+        return;
+      }
+      caller.fullName = `${caller.pendingUpdatedContactFirstName} ${parsedLastName}`.trim();
+      caller.firstName = getFirstName(caller.fullName);
+      caller.pendingUpdatedContactFirstName = "";
+      caller.lastStep = "ask_notes";
+      sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+      return;
+    }
+
+
     case "ask_address": {
       caller.address = normalizeAddressInput(text);
       caller.lastStep = "confirm_address";
@@ -3687,6 +3825,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_notes": {
+      if (isCallbackNumberChangeIntent(text)) {
+        caller.lastStep = "capture_updated_callback_number";
+        sendText(ws, "No problem. What is the best callback number to use instead?");
+        return;
+      }
+
       const wantsToFinishNow = isEndCallPhrase(text);
       const hadNotes = !wantsToFinishNow;
       if (hadNotes) caller.notes = cleanForSpeech(text);
@@ -3718,6 +3862,13 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "offer_demo_followup": {
+      if (isDemoFollowupAcceptance(text)) {
+        caller.demoFollowupRequested = true;
+        caller.lastStep = "confirm_demo_followup_info";
+        sendText(ws, "Okay, should I use the contact information you already gave me?");
+        return;
+      }
+
       if (isNegative(text) || isEndCallPhrase(text)) {
         caller.demoFollowupRequested = false;
         caller.lastStep = "final_question";
@@ -3725,28 +3876,9 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-
-
-
-      if (isAffirmative(text)) {
-        caller.demoFollowupRequested = true;
-        caller.lastStep = "confirm_demo_followup_info";
-        sendText(ws, "Okay, should I use the contact information you already gave me?");
-        return;
-      }
-
-
-
-
       sendText(ws, "Would you like for me to have one of our team members call you to discuss how this could help your company?");
       return;
     }
-
-
-
-
-
-
 
 
     case "confirm_demo_followup_info": {
