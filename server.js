@@ -1193,11 +1193,19 @@ function isCallbackNumberChangeIntent(text) {
     "change my phone number", "change the phone number",
     "update my contact number", "update the contact number",
     "update my callback number", "update the callback number",
+    "update my phone number", "update the phone number",
     "use a different number", "use another number",
     "use my wife s number", "use my wifes number",
     "use my husband s number", "use my husbands number",
+    "use my wife because", "use my husband because",
+    "my wife s number instead", "my wifes number instead",
+    "my husband s number instead", "my husbands number instead",
+    "change it to my wife s", "change it to my wifes",
+    "change it to my husband s", "change it to my husbands",
     "i need to change my number", "i need to change the number",
-    "different callback number", "new callback number"
+    "i need to change my contact number", "i need to change my callback number",
+    "different callback number", "new callback number",
+    "different contact number", "new contact number"
   ]);
 }
 
@@ -2939,6 +2947,20 @@ async function handlePrompt(ws, caller, speech) {
   }
 
 
+  const postIntakeSteps = new Set([
+    "ask_notes",
+    "offer_demo_followup",
+    "confirm_demo_followup_info",
+    "ask_demo_followup_email_optional",
+    "capture_demo_followup_email",
+    "final_question"
+  ]);
+
+  if (postIntakeSteps.has(caller.lastStep) && isCallbackNumberChangeIntent(text)) {
+    caller.lastStep = "capture_updated_callback_number";
+    sendText(ws, "No problem. What is the best callback number to use instead?");
+    return;
+  }
 
 
   switch (caller.lastStep) {
