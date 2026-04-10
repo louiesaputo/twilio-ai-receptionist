@@ -5,6 +5,10 @@
 
 
 
+
+
+
+
  PURPOSE:
  - Separate Twilio ConversationRelay baseline for latency testing
  - Keeps Make.com lead, availability, and booking webhooks
@@ -24,10 +28,18 @@
 
 
 
+
+
+
+
  IMPORTANT:
  - This is a separate test build, not an in-place upgrade of your old Gather server.
  - Requires the `ws` package:
      npm install ws
+
+
+
+
 
 
 
@@ -57,7 +69,15 @@
 
 
 
+
+
+
+
 console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 6 SEQUENCE + PACING PATCH LOADED 🔥");
+
+
+
+
 
 
 
@@ -82,10 +102,18 @@ const {
 
 
 
+
+
+
+
 const app = express();
 app.set("trust proxy", true);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+
+
+
 
 
 
@@ -97,8 +125,16 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 
+
+
+
+
 const PORT = Number(process.env.PORT || 3000);
 const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SEQUENCE-PACING-PASS";
+
+
+
+
 
 
 
@@ -106,6 +142,10 @@ const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SEQUENCE-PACING-PASS
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "https://hook.us2.make.com/a4sztq97ypc71jc2jsk1kkgqvope891i";
 const AVAILABILITY_WEBHOOK_URL = process.env.AVAILABILITY_WEBHOOK_URL || "https://hook.us2.make.com/c2gnxl52lvw69122ylvb66gksudiw8jb";
 const BOOKING_WEBHOOK_URL = process.env.BOOKING_WEBHOOK_URL || "https://hook.us2.make.com/fm94sa7ws2s7kynhskinnu825lr87pn4";
+
+
+
+
 
 
 
@@ -130,8 +170,16 @@ const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 22
 
 
 
+
+
+
+
 const callerStore = {};
 const wsBySession = new Map();
+
+
+
+
 
 
 
@@ -154,11 +202,19 @@ const AMBIGUOUS_FIRST_NAMES = new Set([
 
 
 
+
+
+
+
 const CRITICAL_LEAK_TERMS = [
   "water main", "main line", "broken main", "burst pipe", "flooding", "flooded",
   "ceiling leak", "roof leak", "water heater leak", "water everywhere", "pouring",
   "gushing", "sewer", "sewage", "no water"
 ];
+
+
+
+
 
 
 
@@ -176,6 +232,10 @@ const FIRST_AVAILABLE_PHRASES = [
 
 
 
+
+
+
+
 const ALT_SLOT_PHRASES = [
   "what else do you have", "anything else", "another time", "different time",
   "later that day", "later the same day", "later in the afternoon",
@@ -186,11 +246,19 @@ const ALT_SLOT_PHRASES = [
 
 
 
+
+
+
+
 const REPEAT_TIME_PHRASES = [
   "repeat that", "say that again", "what was that", "what was the time",
   "i missed that", "i missed the time", "can you repeat the time", "repeat the time",
   "what time was that"
 ];
+
+
+
+
 
 
 
@@ -210,12 +278,20 @@ function currentEasternParts() {
 
 
 
+
+
+
+
   const out = {};
   for (const p of fmt.formatToParts(new Date())) {
     if (p.type !== "literal") out[p.type] = p.value;
   }
   return out;
 }
+
+
+
+
 
 
 
@@ -228,6 +304,10 @@ function currentDateInEastern() {
 
 
 
+
+
+
+
 function currentDateTimeInEastern() {
   const p = currentEasternParts();
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
@@ -236,10 +316,18 @@ function currentDateTimeInEastern() {
 
 
 
+
+
+
+
 function cleanSpeechText(input) {
   if (!input) return "";
   return String(input).trim().replace(/\s+/g, " ");
 }
+
+
+
+
 
 
 
@@ -255,9 +343,17 @@ function cleanForSpeech(input) {
 
 
 
+
+
+
+
 function normalizedText(text) {
   return cleanForSpeech(text || "").toLowerCase();
 }
+
+
+
+
 
 
 
@@ -272,9 +368,17 @@ function normalizeIntentText(text) {
 
 
 
+
+
+
+
 function containsAny(text, phrases) {
   return phrases.some((p) => text.includes(p));
 }
+
+
+
+
 
 
 
@@ -287,6 +391,10 @@ function toTitleCase(value) {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
 }
+
+
+
+
 
 
 
@@ -309,10 +417,18 @@ function cleanName(input) {
 
 
 
+
+
+
+
 function getFirstName(fullName) {
   if (!fullName) return "";
   return cleanForSpeech(fullName).split(/\s+/)[0] || "";
 }
+
+
+
+
 
 
 
@@ -325,8 +441,16 @@ function hasFullName(name) {
 
 
 
+
+
+
+
 function normalizeNameCandidate(rawName) {
   if (!rawName) return "";
+
+
+
+
 
 
 
@@ -346,12 +470,20 @@ function normalizeNameCandidate(rawName) {
 
 
 
+
+
+
+
   const words = cleaned
     .split(/\s+/)
     .filter(Boolean)
     .filter((word) => !stopWords.has(word))
     .map((word) => word.replace(/[^a-zA-Z'-]/g, ""))
     .filter(Boolean);
+
+
+
+
 
 
 
@@ -363,8 +495,16 @@ function normalizeNameCandidate(rawName) {
 
 
 
+
+
+
+
   return toTitleCase(words.join(" "));
 }
+
+
+
+
 
 
 
@@ -376,15 +516,23 @@ function parseFullNameFromSpeech(rawName) {
 
 
 
+
+
+
+
 function extractIntroFirstName(text) {
   const safe = stripGreetingPrefix(text || "");
   if (!safe) return "";
+
+
 
 
   const patterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z'-]+)(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i,
     /^([a-zA-Z'-]+)\s+here(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i
   ];
+
+
 
 
   for (const pattern of patterns) {
@@ -395,8 +543,14 @@ function extractIntroFirstName(text) {
   }
 
 
+
+
   return "";
 }
+
+
+
+
 
 
 
@@ -405,6 +559,10 @@ function firstNameNeedsSpelling(name) {
   const first = normalizedText(name).replace(/[^a-z]/g, "");
   return Boolean(first && AMBIGUOUS_FIRST_NAMES.has(first));
 }
+
+
+
+
 
 
 
@@ -420,6 +578,10 @@ function normalizeSpelledFirstName(text, fallback = "") {
 
 
 
+
+
+
+
 function maybeQueueFirstNameSpelling(caller, nextStep) {
   if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
     caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name");
@@ -428,6 +590,10 @@ function maybeQueueFirstNameSpelling(caller, nextStep) {
   }
   return "";
 }
+
+
+
+
 
 
 
@@ -480,6 +646,14 @@ function stripIssueLeadIn(text) {
 
 
 
+
+
+
+
+
+
+
+
 function stripGreetingPrefix(text) {
   return cleanSpeechText(text || "")
     .replace(/^(hi|hello|hey)\s*,?\s*alex\s*[,. -]*\s*/i, "")
@@ -490,11 +664,19 @@ function stripGreetingPrefix(text) {
 
 
 
+
+
+
+
 function normalizeGenericServiceIssue(text) {
   const stripped = cleanForSpeech(stripIssueLeadIn(text || ""));
   const item = detectServiceItem(stripped);
   if (!item) return stripped;
   if (hasSpecificProblemDetail(stripped)) return stripped;
+
+
+
+
 
 
 
@@ -511,6 +693,10 @@ function normalizeGenericServiceIssue(text) {
 
 
 
+
+
+
+
   if (/^(my|the|our)\s+/.test(lowered)) {
     return stripped;
   }
@@ -518,8 +704,16 @@ function normalizeGenericServiceIssue(text) {
 
 
 
+
+
+
+
   return item.label;
 }
+
+
+
+
 
 
 
@@ -531,14 +725,26 @@ function combineIssueContextAndDetail(issueContext, detail) {
   if (!safeDetail) return safeContext;
 
 
+
+
   const contextNorm = normalizedText(safeContext);
   const detailNorm = normalizedText(safeDetail);
   if (detailNorm.startsWith(contextNorm)) return safeDetail;
   if (contextNorm.includes(detailNorm) && detailNorm.length >= 4) return safeContext;
 
 
+
+
   return `${safeContext} ${safeDetail}`.trim();
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -590,6 +796,10 @@ function looksLikeIssueText(text) {
 
 
 
+
+
+
+
 function isGenericEmergencyIssue(text) {
   const t = normalizedText(text || "");
   if (!t) return false;
@@ -605,9 +815,17 @@ function isGenericEmergencyIssue(text) {
 
 
 
+
+
+
+
 function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
+
+
+
+
 
 
 
@@ -621,10 +839,18 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
   const nameOnlyPatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+)$/i,
     /^([a-zA-Z' -]+?)\s+here$/i
   ];
+
+
+
+
 
 
 
@@ -637,13 +863,25 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
   const tryIssueCleanup = (value) => stripIssueLeadIn(cleanForSpeech(value || ""));
+
+
+
+
 
 
 
 
   if (sentenceParts.length) {
     const first = sentenceParts[0];
+
+
+
+
 
 
 
@@ -659,6 +897,10 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
     for (const pattern of nameOnlyPatterns) {
       const match = first.match(pattern);
       if (!match) continue;
@@ -668,11 +910,19 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
       const remainder = sentenceParts.slice(1).join(" ");
       if (remainder) return { name: possibleName, issueText: tryIssueCleanup(remainder) };
       return { name: possibleName, issueText: "" };
     }
   }
+
+
+
+
 
 
 
@@ -699,12 +949,20 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
     let earliestIndex = -1;
     for (const marker of issueMarkers) {
       const m = remainder.match(marker);
       if (!m || typeof m.index !== "number") continue;
       if (earliestIndex === -1 || m.index < earliestIndex) earliestIndex = m.index;
     }
+
+
+
+
 
 
 
@@ -718,9 +976,17 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
     const possibleNameOnly = normalizeNameCandidate(remainder);
     if (possibleNameOnly) return { name: possibleNameOnly, issueText: "" };
   }
+
+
+
+
 
 
 
@@ -735,6 +1001,10 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
   if (looksLikeIssueText(normalized)) {
     return { name: null, issueText: tryIssueCleanup(normalized) || original };
   }
@@ -742,8 +1012,20 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+
+
+
+
   return { name: null, issueText: original };
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -763,6 +1045,10 @@ function normalizeProjectScopeNotes(text) {
 
 
 
+
+
+
+
 function wantsOptionalEmail(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -772,11 +1058,19 @@ function wantsOptionalEmail(text) {
 
 
 
+
+
+
+
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(do that|do it|let s do that|lets do that|let s add that|lets add that|let s add one|lets add one)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(i ll|ill|let me)\b.*\b(give|add|include)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(add|include|email|let s|lets|give)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|sure|okay|ok|alright|all right)\b.*\b(that|one|that one|that too|that as well|that also)\b/.test(t) && /\b(add|include|email|give|do)\b/.test(t)) return true;
+
+
+
+
 
 
 
@@ -800,6 +1094,10 @@ function wantsOptionalEmail(text) {
 
 
 
+
+
+
+
 function buildPostNotesTransition(caller, hadNotes) {
   if (hadNotes) {
     if (caller.leadType === "quote") return "Alright, I've added that to the quote request.";
@@ -807,6 +1105,14 @@ function buildPostNotesTransition(caller, hadNotes) {
   }
   return "Alright, let me get this wrapped up for us.";
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -824,6 +1130,10 @@ function buildAddressRequestPrompt(caller) {
 
 
 
+
+
+
+
 function appendAdditionalIssue(caller, issueText) {
   const safe = cleanForSpeech(issueText || "");
   if (!safe) return;
@@ -833,9 +1143,15 @@ function appendAdditionalIssue(caller, issueText) {
 }
 
 
+
+
 function buildTechnicianNotesPrompt() {
   return "Before I wrap this up, are there any special instructions or notes you want me to include for the technician?";
 }
+
+
+
+
 
 
 
@@ -861,14 +1177,30 @@ function buildFinalSubmissionPrompt(caller) {
 
 
 
+
+
+
+
+
+
 function buildFinalSubmissionClose(caller) {
   return "Great. Thank you for calling Blue Caller Automation. You will hear from one of our team members very soon. Enjoy the rest of your day. Goodbye.";
 }
 
 
+
+
 function buildDemoCloseMessage() {
   return "Thank you for trying out our demo. Feel free to visit our website at bluecallerautomation.com. And if you have any questions, just give us a call back at this number. We'll be happy to help.";
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -890,6 +1222,10 @@ function collapseSpacedDigits(value) {
 
 
 
+
+
+
+
 function normalizeAddressInput(input) {
   if (!input) return "";
   let value = cleanForSpeech(input)
@@ -898,6 +1234,10 @@ function normalizeAddressInput(input) {
     .replace(/[.,]+$/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+
+
+
+
 
 
 
@@ -911,8 +1251,16 @@ function normalizeAddressInput(input) {
 
 
 
+
+
+
+
 const SMALL_NUMBER_WORDS = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
 const TENS_WORDS = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
+
+
+
+
 
 
 
@@ -929,6 +1277,10 @@ function numberUnder100ToWords(num) {
 
 
 
+
+
+
+
 function streetNumberToSpeech(numText) {
   const digits = String(numText || "").replace(/\D/g, "");
   if (!digits) return String(numText || "");
@@ -936,6 +1288,10 @@ function streetNumberToSpeech(numText) {
   if (digits.length === 4) return `${numberUnder100ToWords(Number(digits.slice(0, 2)))} ${numberUnder100ToWords(Number(digits.slice(2)))}`;
   return digits.split("").map((d) => SMALL_NUMBER_WORDS[Number(d)]).join(" ");
 }
+
+
+
+
 
 
 
@@ -952,9 +1308,17 @@ function parseAddressParts(address) {
 
 
 
+
+
+
+
 function formatAddressForSpeech(address) {
   const { streetLine, city } = parseAddressParts(address);
   if (!streetLine) return "";
+
+
+
+
 
 
 
@@ -963,25 +1327,38 @@ function formatAddressForSpeech(address) {
   return city ? `${streetSpeech} in ${city}` : streetSpeech;
 }
 
+
 function formatAddressForConfirmation(address) {
   const safe = cleanForSpeech(address || "");
   if (!safe) return "";
 
+  const stripTrailingStateZip = (value) => cleanForSpeech(value || "")
+    .replace(/,?\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)\s+\d{5}(?:-\d{4})?$/i, "")
+    .replace(/,?\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)$/i, "")
+    .replace(/,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i, "")
+    .replace(/,?\s+[A-Z]{2}$/i, "")
+    .replace(/\s+\d{5}(?:-\d{4})?$/i, "")
+    .trim();
+
   let trimmed = safe;
   if (trimmed.includes(",")) {
-    const parts = trimmed.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
+    const parts = trimmed.split(",").map((p) => stripTrailingStateZip(p)).filter(Boolean);
     if (parts.length >= 2) {
       trimmed = `${parts[0]}, ${parts[1]}`;
+    } else if (parts.length === 1) {
+      trimmed = parts[0];
     }
   } else {
-    trimmed = trimmed
-      .replace(/,?\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)\s+\d{5}(?:-\d{4})?$/i, "")
-      .replace(/,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i, "")
-      .trim();
+    trimmed = stripTrailingStateZip(trimmed);
   }
 
   return formatAddressForSpeech(trimmed);
 }
+
+
+
+
+
 
 
 
@@ -995,6 +1372,10 @@ function isBrowserCaller(caller) {
 
 
 
+
+
+
+
 function buildBrowserCallbackPrompt() {
   return "Can I get a good callback number for this service request?";
 }
@@ -1002,9 +1383,17 @@ function buildBrowserCallbackPrompt() {
 
 
 
+
+
+
+
 function getPhoneCollectionStep(caller) {
   return isBrowserCaller(caller) ? "get_new_phone" : "confirm_phone";
 }
+
+
+
+
 
 
 
@@ -1025,13 +1414,21 @@ const SPOKEN_PHONE_DIGIT_MAP = {
 
 
 
+
+
+
+
 function extractPhoneDigits(text) {
   const raw = cleanForSpeech(text || "");
   if (!raw) return "";
 
 
+
+
   const numericDigits = raw.replace(/\D/g, "");
   if (numericDigits.length >= 7) return numericDigits;
+
+
 
 
   const fillerWords = new Set([
@@ -1040,13 +1437,19 @@ function extractPhoneDigits(text) {
   ]);
 
 
+
+
   const tokens = normalizeIntentText(raw)
     .split(/\s+/)
     .filter(Boolean)
     .filter((token) => !fillerWords.has(token));
 
 
+
+
   if (!tokens.length) return "";
+
+
 
 
   let digits = "";
@@ -1066,8 +1469,14 @@ function extractPhoneDigits(text) {
   }
 
 
+
+
   return recognizedCount >= 7 ? digits : "";
 }
+
+
+
+
 
 
 
@@ -1075,6 +1484,10 @@ function extractPhoneDigits(text) {
 function isLikelyPhoneNumberResponse(text) {
   return extractPhoneDigits(text).length >= 7;
 }
+
+
+
+
 
 
 
@@ -1099,11 +1512,19 @@ function formatPhoneNumberForSpeech(phone) {
 
 
 
+
+
+
+
 function isAffirmative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent"])) return false;
   if (isNegative(t)) return false;
+
+
+
+
 
 
 
@@ -1119,11 +1540,19 @@ function isAffirmative(text) {
 
 
 
+
+
+
+
   if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is correct|is right)\b/.test(t)) return true;
   if (/\bit\s+(is|s)\s+(correct|right)\b/.test(t)) return true;
   if (/^(yes|yeah|yep|yup|correct|absolutely|ok|okay)\b.*\b(correct|right|works|work)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
+
+
+
+
 
 
 
@@ -1155,6 +1584,10 @@ function isAffirmative(text) {
 
 
 
+
+
+
+
 function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -1178,6 +1611,14 @@ function isNegative(text) {
 
 
 
+
+
+
+
+
+
+
+
 function isUseSameContactInfo(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -1191,6 +1632,8 @@ function isUseSameContactInfo(text) {
   ])) return true;
   return /^(yes|yeah|yep|sure)\b.*\bsame\b/.test(t) || /^(no|nope|nah)\b.*\bsame\b/.test(t);
 }
+
+
 
 
 function isDemoFollowupAcceptance(text) {
@@ -1211,6 +1654,8 @@ function isDemoFollowupAcceptance(text) {
     "i d like someone to call me", "id like someone to call me"
   ]);
 }
+
+
 
 
 function isCallbackNumberChangeIntent(text) {
@@ -1240,6 +1685,8 @@ function isCallbackNumberChangeIntent(text) {
 }
 
 
+
+
 function isKeepSameContactPerson(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -1249,6 +1696,8 @@ function isKeepSameContactPerson(text) {
     "same name", "just keep me as the contact", "it can stay the same"
   ]);
 }
+
+
 
 
 function isChangeContactPersonIntent(text) {
@@ -1263,9 +1712,12 @@ function isChangeContactPersonIntent(text) {
 }
 
 
+
+
 function extractUpdatedContactNameFromSpeech(text) {
   const safe = cleanForSpeech(text || "");
   if (!safe) return "";
+
 
   const stripped = safe
     .replace(/^(no|nope|nah)\s*,?\s*/i, "")
@@ -1278,8 +1730,10 @@ function extractUpdatedContactNameFromSpeech(text) {
     .replace(/^(?:it's|it is)\s+/i, "")
     .trim();
 
+
   const parsed = parseFullNameFromSpeech(stripped);
   if (parsed) return parsed;
+
 
   const direct = stripped.match(/^([A-Za-z'-]+(?:\s+[A-Za-z'-]+)?)\b/);
   if (direct) {
@@ -1287,8 +1741,11 @@ function extractUpdatedContactNameFromSpeech(text) {
     if (candidate) return candidate;
   }
 
+
   return "";
 }
+
+
 
 
 function extractLastNameFromFullName(name) {
@@ -1297,10 +1754,13 @@ function extractLastNameFromFullName(name) {
   return parts.slice(1).join(" ");
 }
 
+
 function clearPendingUpdatedContactName(caller) {
   caller.pendingUpdatedContactFirstName = "";
   caller.pendingUpdatedContactFullName = "";
 }
+
+
 
 
 function isSameLastNameResponse(text) {
@@ -1311,6 +1771,8 @@ function isSameLastNameResponse(text) {
     "same as before", "same as me", "same as my last name"
   ]);
 }
+
+
 
 
 function isEmailAddAcceptance(text) {
@@ -1330,6 +1792,8 @@ function isEmailAddAcceptance(text) {
 }
 
 
+
+
 function isRepeatRequest(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -1343,6 +1807,10 @@ function isRepeatRequest(text) {
     "can you repeat the time"
   ]);
 }
+
+
+
+
 
 
 
@@ -1363,11 +1831,19 @@ function isAddressConfirmation(text) {
 
 
 
+
+
+
+
 function lowercaseFirst(value) {
   const safe = String(value || "").trim();
   if (!safe) return "";
   return safe.charAt(0).toLowerCase() + safe.slice(1);
 }
+
+
+
+
 
 
 
@@ -1382,8 +1858,16 @@ function parseLastNameResponse(text) {
 
 
 
+
+
+
+
   const direct = safe.match(/^([A-Za-z'-]+)(?:\s*,?\s*(?:[A-Za-z][\s-]*){2,})?$/);
   if (direct) return toTitleCase(direct[1]);
+
+
+
+
 
 
 
@@ -1394,14 +1878,26 @@ function parseLastNameResponse(text) {
 
 
 
+
+
+
+
   const firstWord = safe.match(/^([A-Za-z'-]+)/);
   if (firstWord) return toTitleCase(firstWord[1]);
 
 
 
 
+
+
+
+
   return "";
 }
+
+
+
+
 
 
 
@@ -1413,9 +1909,17 @@ function buildRepeatPrompt(caller) {
 
 
 
+
+
+
+
   const lowered = lowercaseFirst(prompt);
   const questionLike = /^(is|are|was|were|can|could|would|will|do|does|did|have|has|had)\b/i.test(prompt);
   const repeated = questionLike ? `if ${lowered}` : lowered;
+
+
+
+
 
 
 
@@ -1436,6 +1940,14 @@ function buildRepeatPrompt(caller) {
 
 
 
+
+
+
+
+
+
+
+
 function isPhoneCorrection(text) {
   const t = normalizeIntentText(text);
   return (
@@ -1447,12 +1959,20 @@ function isPhoneCorrection(text) {
 
 
 
+
+
+
+
 function isSkipResponse(text) {
   const t = normalizeIntentText(text);
   return (
     t === "skip" || t === "none" || t === "not right now" || t === "id rather skip that" || t === "i would rather skip that" || isNegative(t)
   );
 }
+
+
+
+
 
 
 
@@ -1474,6 +1994,10 @@ function isEndCallPhrase(text) {
 
 
 
+
+
+
+
 function isPricingQuestion(text) {
   const t = normalizedText(text);
   return containsAny(t, [
@@ -1486,9 +2010,17 @@ function isPricingQuestion(text) {
 
 
 
+
+
+
+
 function pricingResponse() {
   return "That is a great question. Pricing can vary depending on the job, so someone from the office will go over that with you when they call.";
 }
+
+
+
+
 
 
 
@@ -1501,6 +2033,10 @@ function isDemoIntent(text) {
     "ai receptionist service", "learn more about your service", "how does your service work"
   ]);
 }
+
+
+
+
 
 
 
@@ -1519,6 +2055,10 @@ function isQuoteIntent(text) {
 
 
 
+
+
+
+
 function classifyProjectType(text) {
   const raw = cleanForSpeech(text || "");
   const t = normalizedText(raw);
@@ -1533,11 +2073,19 @@ function classifyProjectType(text) {
 
 
 
+
+
+
+
 function detectServiceItem(issue) {
   const text = normalizedText(issue)
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+
+
+
 
 
 
@@ -1563,11 +2111,19 @@ function detectServiceItem(issue) {
 
 
 
+
+
+
+
   for (const item of items) {
     if (item.pattern.test(text)) return item;
   }
   return null;
 }
+
+
+
+
 
 
 
@@ -1591,6 +2147,10 @@ function hasSpecificProblemDetail(issue) {
 
 
 
+
+
+
+
 function detectMissingProblemItem(issue) {
   const item = detectServiceItem(issue);
   if (!item) return null;
@@ -1602,11 +2162,19 @@ function detectMissingProblemItem(issue) {
 
 
 
+
+
+
+
 function combineItemAndDetail(item, detail) {
   const safeItem = cleanForSpeech(item || "");
   const safeDetail = cleanForSpeech(detail || "");
   return `${safeItem} ${safeDetail}`.trim();
 }
+
+
+
+
 
 
 
@@ -1635,12 +2203,20 @@ function buildApplianceIssueSummary(issue, item) {
 
 
 
+
+
+
+
 function buildUnknownIssueSummary(issue) {
   const cleaned = cleanForSpeech(issue || "");
   if (!cleaned) return "the issue you described";
   if (cleaned.length <= 80) return cleaned;
   return `${cleaned.slice(0, 77).trim()}...`;
 }
+
+
+
+
 
 
 
@@ -1658,6 +2234,10 @@ function humanizeIssueSummaryForSpeech(summary) {
 
 
 
+
+
+
+
 function buildIssueAcknowledgement(caller) {
   const summary = humanizeIssueSummaryForSpeech(caller.issueSummary || caller.issue || "that issue");
   if (!summary) return "I'm sorry you're dealing with that.";
@@ -1670,10 +2250,18 @@ function buildIssueAcknowledgement(caller) {
 
 
 
+
+
+
+
 function isSameAvailabilitySlot(firstDate, firstTime, secondDate, secondTime) {
   return normalizedText(firstDate || "") === normalizedText(secondDate || "")
     && normalizedText(firstTime || "") === normalizedText(secondTime || "");
 }
+
+
+
+
 
 
 
@@ -1693,8 +2281,14 @@ function parseTimeToMinutes(timeText) {
 
 
 
+
+
+
+
 function matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, offeredDate, offeredTime) {
   if (isSameAvailabilitySlot(offeredDate, offeredTime, currentDate, currentTime)) return false;
+
+
 
 
   const lowered = normalizedText(rawText || "");
@@ -1707,11 +2301,15 @@ function matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, 
   }
 
 
+
+
   if (containsAny(lowered, ["next day", "the next day", "following day", "day after"])) {
     const nextDay = shiftSpokenDateText(currentDate, 1);
     if (nextDay) return normalizedText(offeredDate || "") === normalizedText(nextDay);
     return normalizedText(offeredDate || "") !== normalizedText(currentDate || "");
   }
+
+
 
 
   return true;
@@ -1720,10 +2318,16 @@ function matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, 
 
 
 
+
+
+
+
 function buildExplicitAlternateAvailabilityQuery(dateText, timeText, rawText = "") {
   const safeDate = cleanForSpeech(dateText || "");
   const safeTime = cleanForSpeech(timeText || "");
   const intentText = normalizedText(rawText || "");
+
+
 
 
   if (!safeDate) return "";
@@ -1740,15 +2344,23 @@ function buildExplicitAlternateAvailabilityQuery(dateText, timeText, rawText = "
 
 
 
+
+
+
+
 function buildAlternateAvailabilityOffer(caller, requestedText, availability, previousDate, previousTime, usedNextDayFallback = false) {
   const phrase = spokenAvailabilityPhrase(availability.date, availability.time);
   const lowered = normalizedText(requestedText || "");
   const sameDayAsPrevious = normalizedText(availability.date || "") === normalizedText(previousDate || "");
 
 
+
+
   if (usedNextDayFallback) {
     return `I don't have anything later that day open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
   }
+
+
 
 
   if (containsAny(lowered, ["later that day", "later the same day", "later in the afternoon", "later that afternoon", "anything later", "something later"])) {
@@ -1759,13 +2371,21 @@ function buildAlternateAvailabilityOffer(caller, requestedText, availability, pr
   }
 
 
+
+
   if (containsAny(lowered, ["next day", "the next day", "following day", "day after"])) {
     return `I don't have the same day option open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
   }
 
 
+
+
   return `I don't have that exact option open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
 }
+
+
+
+
 
 
 
@@ -1784,9 +2404,15 @@ function isMainLineEmergencyCandidate(text) {
 
 
 
+
+
+
+
 function isOutsideWaterLossEmergency(text) {
   const t = normalizedText(text);
   if (!t) return false;
+
+
 
 
   const frontYardLike = containsAny(t, ["front yard", "front lawn"]);
@@ -1803,8 +2429,14 @@ function isOutsideWaterLossEmergency(text) {
     && !containsAny(t, ["faucet", "spigot", "hose bib", "hose bibb", "sprinkler"]);
 
 
+
+
   return meterLike || (frontYardLike && poolLike) || outsideLeakLike;
 }
+
+
+
+
 
 
 
@@ -1820,10 +2452,18 @@ function isHardEmergency(text) {
 
 
 
+
+
+
+
 function isLeakLikeIssue(text) {
   const t = normalizedText(text);
   return containsAny(t, ["leak", "leaking", "drip", "dripping"]);
 }
+
+
+
+
 
 
 
@@ -1866,6 +2506,10 @@ function classifyIssue(issue) {
 
 
 
+
+
+
+
 function parseSpokenDateText(dateText) {
   const raw = cleanForSpeech(dateText || "");
   const m = raw.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
@@ -1876,6 +2520,10 @@ function parseSpokenDateText(dateText) {
   };
   return { weekday: m[1], month: months[m[2].toLowerCase()], day: Number(m[3]) };
 }
+
+
+
+
 
 
 
@@ -1899,6 +2547,10 @@ function shiftSpokenDateText(dateText, daysToAdd = 0) {
 
 
 
+
+
+
+
 function spokenAvailabilityPhrase(dateText, timeText) {
   const parsed = parseSpokenDateText(dateText);
   if (!parsed) return `${dateText} at ${timeText}`;
@@ -1915,6 +2567,10 @@ function spokenAvailabilityPhrase(dateText, timeText) {
 
 
 
+
+
+
+
 function detectTimePreference(text) {
   const t = normalizedText(text);
   if (containsAny(t, ["morning", "mornings", "early morning"])) return "morning";
@@ -1923,6 +2579,10 @@ function detectTimePreference(text) {
   if (containsAny(t, ["any time", "anytime", "whenever"])) return "anytime";
   return "";
 }
+
+
+
+
 
 
 
@@ -1940,10 +2600,18 @@ function isSpecificTime(text) {
 
 
 
+
+
+
+
 function isFirstAvailableRequest(text) {
   const t = normalizedText(text);
   return containsAny(t, FIRST_AVAILABLE_PHRASES);
 }
+
+
+
+
 
 
 
@@ -1956,10 +2624,18 @@ function isAlternateAvailabilityRequest(text) {
 
 
 
+
+
+
+
 function isRepeatTimeRequest(text) {
   const t = normalizedText(text);
   return containsAny(t, REPEAT_TIME_PHRASES);
 }
+
+
+
+
 
 
 
@@ -1976,10 +2652,16 @@ function wantsOfficeCallback(text) {
 
 
 
+
+
+
+
 function looksLikeAddressCorrection(text) {
   const t = normalizedText(text);
   if (!t) return false;
   if (isAffirmative(t) || isNegative(t)) return false;
+
+
 
 
   const startsLikeCorrection = /^((no\s+wait)|(actually)|(it s)|(its)|(it is)|(wait)|(sorry))\b/.test(t);
@@ -1991,10 +2673,16 @@ function looksLikeAddressCorrection(text) {
     ]);
 
 
+
+
   if (hasAddressSignals) return true;
   if (startsLikeCorrection && t.split(/\s+/).filter(Boolean).length >= 2) return true;
   return false;
 }
+
+
+
+
 
 
 
@@ -2009,6 +2697,10 @@ function extractDatePart(text) {
   ])) return value;
   return "";
 }
+
+
+
+
 
 
 
@@ -2030,6 +2722,10 @@ function buildAvailabilityRawQuery(rawText, existingDate = "", existingTime = ""
 
 
 
+
+
+
+
 function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   const raw = cleanForSpeech(text || "");
   let requestedDate = extractDatePart(raw);
@@ -2041,6 +2737,10 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
     requestedTimePreference
   };
 }
+
+
+
+
 
 
 
@@ -2060,6 +2760,10 @@ function addMinutesToLocalDateTime(localDateTime, minutesToAdd) {
   const ss = String(dt.getUTCSeconds()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
 }
+
+
+
+
 
 
 
@@ -2094,11 +2798,19 @@ function parseCallbackDateAndTimeToLocal(dateText, timeText) {
 
 
 
+
+
+
+
 function nextPromptIndex(caller, key) {
   const current = Number.isInteger(caller[key]) ? caller[key] : 0;
   caller[key] = current + 1;
   return current;
 }
+
+
+
+
 
 
 
@@ -2113,11 +2825,19 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 
 
+
+
+
+
   const specificDatePrompts = [
     "Alright, let me see if that date is available.",
     "Let me see if that date is open.",
     "I already have the calendar up. Let me see if that date is available."
   ];
+
+
+
+
 
 
 
@@ -2131,11 +2851,19 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 
 
+
+
+
+
   const generalPrompts = [
     "Let me see what's available.",
     "I already have the calendar up. Let me see what's available.",
     "Let me take a look and see what I have open."
   ];
+
+
+
+
 
 
 
@@ -2148,9 +2876,17 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 
 
+
+
+
+
   const index = nextPromptIndex(caller, "calendarPromptIndex");
   return options[index % options.length];
 }
+
+
+
+
 
 
 
@@ -2165,10 +2901,18 @@ function detectCalendarLookupMode(rawText = "") {
 
 
 
+
+
+
+
 function announceCalendarLookup(ws, caller, rawText = "", explicitMode = "") {
   const mode = explicitMode || detectCalendarLookupMode(rawText);
   sendText(ws, buildCalendarLookupPrompt(caller, rawText, mode), { remember: false });
 }
+
+
+
+
 
 
 
@@ -2181,9 +2925,15 @@ function buildSchedulingChoicePrompt(caller) {
   ];
 
 
+
+
   const index = nextPromptIndex(caller, "scheduleChoicePromptIndex");
   return variants[index % variants.length];
 }
+
+
+
+
 
 
 
@@ -2199,9 +2949,17 @@ function buildCallbackOfferPrompt(caller, dateText, timeText) {
 
 
 
+
+
+
+
   const index = nextPromptIndex(caller, "callbackOfferIndex");
   return variants[index % variants.length];
 }
+
+
+
+
 
 
 
@@ -2270,6 +3028,10 @@ function getOrCreateCaller(key) {
 
 
 
+
+
+
+
 function isPhoneCaptureStep(step = "") {
   return new Set([
     "confirm_phone",
@@ -2280,10 +3042,14 @@ function isPhoneCaptureStep(step = "") {
 }
 
 
+
+
 function promptFinalizeDelayForCaller(caller, fallbackMs = PROMPT_FINALIZE_TIMEOUT_MS) {
   if (!caller) return fallbackMs;
   return isPhoneCaptureStep(caller.lastStep) ? PHONE_PROMPT_FINALIZE_TIMEOUT_MS : fallbackMs;
 }
+
+
 
 
 function lightlyPaceText(text) {
@@ -2298,6 +3064,10 @@ function lightlyPaceText(text) {
 
 
 
+
+
+
+
 function sendText(ws, text, options = {}) {
   if (!ws || ws.readyState !== 1) return;
   const caller = ws.sessionKey ? getOrCreateCaller(ws.sessionKey) : null;
@@ -2306,12 +3076,14 @@ function sendText(ws, text, options = {}) {
   }
   const pacedText = options.raw === true ? String(text || "") : lightlyPaceText(text);
 
+
   const now = Date.now();
   const baseDelay = Number.isFinite(options.delayMs) ? options.delayMs : RESPONSE_THINK_DELAY_MS;
   const afterPreviousMs = Number.isFinite(options.afterPreviousMs) ? options.afterPreviousMs : 120;
   const nextAvailable = typeof ws._nextSendAt === "number" ? ws._nextSendAt : now;
   const sendAt = Math.max(now + baseDelay, nextAvailable + afterPreviousMs);
   ws._nextSendAt = sendAt;
+
 
   setTimeout(() => {
     if (!ws || ws.readyState !== 1) return;
@@ -2327,6 +3099,9 @@ function sendText(ws, text, options = {}) {
 
 
 
+
+
+
 function clearPromptFinalizeTimer(caller) {
   if (!caller || !caller.promptFinalizeTimer) return;
   clearTimeout(caller.promptFinalizeTimer);
@@ -2334,12 +3109,16 @@ function clearPromptFinalizeTimer(caller) {
 }
 
 
+
+
 async function processBufferedPrompt(ws, caller, fallbackText = "") {
   if (!caller || caller.processingPrompt) return false;
+
 
   clearPromptFinalizeTimer(caller);
   const completePrompt = cleanSpeechText(caller.promptBuffer || fallbackText || "");
   if (!completePrompt) return false;
+
 
   caller.promptBuffer = "";
   caller.processingPrompt = true;
@@ -2355,13 +3134,17 @@ async function processBufferedPrompt(ws, caller, fallbackText = "") {
 }
 
 
+
+
 function schedulePromptFinalize(ws, caller, delayMs) {
   delayMs = promptFinalizeDelayForCaller(caller, delayMs ?? PROMPT_FINALIZE_TIMEOUT_MS);
   if (!caller) return;
 
+
   clearPromptFinalizeTimer(caller);
   const generation = (Number(caller.promptProcessGeneration) || 0) + 1;
   caller.promptProcessGeneration = generation;
+
 
   caller.promptFinalizeTimer = setTimeout(async () => {
     if (!ws || ws.readyState !== 1) return;
@@ -2378,9 +3161,16 @@ function schedulePromptFinalize(ws, caller, delayMs) {
 
 
 
+
+
+
 function estimateSpeechDurationMs(text) {
   const safe = cleanForSpeech(text || "");
   if (!safe) return 0;
+
+
+
+
 
 
 
@@ -2392,8 +3182,16 @@ function estimateSpeechDurationMs(text) {
 
 
 
+
+
+
+
   return Math.max(CLOSE_SESSION_MIN_MS, Math.min(CLOSE_SESSION_MAX_MS, estimated));
 }
+
+
+
+
 
 
 
@@ -2404,6 +3202,10 @@ function closeSession(ws, text) {
     try { ws.close(); } catch (err) {}
   }, text ? estimateSpeechDurationMs(text) : 0);
 }
+
+
+
+
 
 
 
@@ -2421,9 +3223,17 @@ function queueBackgroundTask(label, taskFn) {
 
 
 
+
+
+
+
 function buildMakePayload(caller) {
   const leadType = caller.leadType || (caller.emergencyAlert ? "emergency" : "service");
   let notes = caller.notes || "";
+
+
+
+
 
 
 
@@ -2440,10 +3250,18 @@ function buildMakePayload(caller) {
 
 
 
+
+
+
+
   if (Array.isArray(caller.additionalIssues) && caller.additionalIssues.length) {
     const joined = caller.additionalIssues.join(" | ");
     notes = notes ? `${notes} | Additional issues: ${joined}` : `Additional issues: ${joined}`;
   }
+
+
+
+
 
 
 
@@ -2482,11 +3300,23 @@ function buildMakePayload(caller) {
 
 
 
+
+
+
+
+
+
+
+
 function shouldSendToMake(caller) {
   if (caller.leadType === "quote") return Boolean(caller.fullName && (caller.callbackNumber || caller.phone) && caller.projectType);
   if (caller.leadType === "demo") return Boolean(caller.fullName && (caller.callbackNumber || caller.phone || caller.demoEmail));
   return Boolean(caller.fullName && (caller.callbackNumber || caller.phone) && caller.issueSummary);
 }
+
+
+
+
 
 
 
@@ -2509,12 +3339,20 @@ function postJsonToWebhook(webhookUrl, payload, label, timeoutMs = WEBHOOK_TIMEO
 
 
 
+
+
+
+
       let settled = false;
       const finalize = (value) => {
         if (settled) return;
         settled = true;
         resolve(value);
       };
+
+
+
+
 
 
 
@@ -2531,6 +3369,10 @@ function postJsonToWebhook(webhookUrl, payload, label, timeoutMs = WEBHOOK_TIMEO
 
 
 
+
+
+
+
       req.setTimeout(timeoutMs, () => {
         console.error(`[${label} TIMEOUT] ${timeoutMs}ms`);
         req.destroy(new Error("Request timed out"));
@@ -2540,10 +3382,18 @@ function postJsonToWebhook(webhookUrl, payload, label, timeoutMs = WEBHOOK_TIMEO
 
 
 
+
+
+
+
       req.on("error", (err) => {
         console.error(`[${label} ERROR]`, err.message);
         finalize(null);
       });
+
+
+
+
 
 
 
@@ -2560,6 +3410,10 @@ function postJsonToWebhook(webhookUrl, payload, label, timeoutMs = WEBHOOK_TIMEO
 
 
 
+
+
+
+
 async function sendLeadToMake(caller) {
   if (caller.makeSent || caller.makeSending || !shouldSendToMake(caller)) return;
   caller.makeSending = true;
@@ -2569,6 +3423,10 @@ async function sendLeadToMake(caller) {
     caller.makeSent = true;
   }
 }
+
+
+
+
 
 
 
@@ -2600,6 +3458,10 @@ function buildBookingPayload(caller) {
 
 
 
+
+
+
+
 async function sendBookingToMake(caller) {
   if (caller.bookingSent || caller.bookingSending) return;
   const payload = buildBookingPayload(caller);
@@ -2627,10 +3489,18 @@ async function sendBookingToMake(caller) {
 
 
 
+
+
+
+
 async function submitPrimaryLeadAndBooking(caller) {
   await sendLeadToMake(caller);
   await sendBookingToMake(caller);
 }
+
+
+
+
 
 
 
@@ -2644,6 +3514,10 @@ function queuePrimaryLeadAndBooking(caller) {
 
 
 
+
+
+
+
 function buildDemoFollowupPayload(caller) {
   const fullName = caller.demoFollowupContactName || caller.fullName || "";
   const firstName = getFirstName(fullName) || caller.firstName || "";
@@ -2653,9 +3527,17 @@ function buildDemoFollowupPayload(caller) {
 
 
 
+
+
+
+
   let notes = "Interested in a Blue Caller Automation follow-up after testing the demo line.";
   if (caller.issueSummary) notes += ` Original demo scenario: ${caller.issueSummary}.`;
   if (caller.notes) notes += ` Original notes: ${caller.notes}`;
+
+
+
+
 
 
 
@@ -2690,6 +3572,10 @@ function buildDemoFollowupPayload(caller) {
 
 
 
+
+
+
+
 async function sendDemoFollowupToMake(caller) {
   if (caller.demoFollowupSent || caller.demoFollowupSending) return;
   const payload = buildDemoFollowupPayload(caller);
@@ -2705,6 +3591,10 @@ async function sendDemoFollowupToMake(caller) {
 
 
 
+
+
+
+
 function queueDemoFollowupSubmission(caller) {
   queueBackgroundTask("DEMO FOLLOWUP SUBMIT", async () => {
     await sendDemoFollowupToMake(caller);
@@ -2712,10 +3602,16 @@ function queueDemoFollowupSubmission(caller) {
 }
 
 
+
+
 function closeAfterDemoFollowup(ws, caller) {
   queuePrimaryLeadAndBooking(caller);
   closeSession(ws, buildDemoCloseMessage());
 }
+
+
+
+
 
 
 
@@ -2744,6 +3640,10 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
 
 
 
+
+
+
+
   const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK", AVAILABILITY_TIMEOUT_MS);
   if (!result || !result.body) return null;
   try {
@@ -2761,6 +3661,10 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
 
 
 
+
+
+
+
 async function findAlternateAvailability(caller, rawText, currentDate, currentTime) {
   const baseRequest = parseAvailabilityRequest(rawText, currentDate, currentTime);
   const firstAttempt = {
@@ -2774,10 +3678,14 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
   };
 
 
+
+
   let availability = await checkCalendarAvailability(caller, firstAttempt);
   if (availability && matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, availability.date, availability.time)) {
     return { availability, usedNextDayFallback: false };
   }
+
+
 
 
   const retryAttempt = {
@@ -2786,14 +3694,20 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
   };
 
 
+
+
   availability = await checkCalendarAvailability(caller, retryAttempt);
   if (availability && matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, availability.date, availability.time)) {
     return { availability, usedNextDayFallback: false };
   }
 
 
+
+
   const nextDay = shiftSpokenDateText(currentDate, 1);
   if (!nextDay) return null;
+
+
 
 
   const nextDayAttempt = {
@@ -2805,6 +3719,8 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
     avoidTime: currentTime || "",
     rawQuery: `next available callback on ${nextDay}`
   };
+
+
 
 
   availability = await checkCalendarAvailability(caller, nextDayAttempt);
@@ -2819,8 +3735,14 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
   }
 
 
+
+
   return null;
 }
+
+
+
+
 
 
 
@@ -2835,6 +3757,10 @@ function markStandardService(caller) {
 
 
 
+
+
+
+
 function markEmergency(caller) {
   caller.emergencyAlert = true;
   caller.urgency = "emergency";
@@ -2845,10 +3771,15 @@ function markEmergency(caller) {
 
 
 
+
+
+
+
 function buildEmergencyIntakePrompt(caller) {
   const acknowledgement = buildIssueAcknowledgement(caller);
   const withName = caller.firstName ? `${caller.firstName}, ` : "";
   const leadIn = `${withName}${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away. I just need to get some information from you.`;
+
 
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
@@ -2859,8 +3790,13 @@ function buildEmergencyIntakePrompt(caller) {
     return `${leadIn} Before I go any further, can I get your last name as well?`;
   }
 
+
   return `${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away. I just need to get some information from you. Can I start by getting your full name, please?`;
 }
+
+
+
+
 
 
 
@@ -2869,6 +3805,7 @@ function isScheduleOfferAcceptance(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (isNegative(t)) return false;
+
 
   return containsAny(t, [
     "that ll work", "thatll work", "that will work",
@@ -2884,8 +3821,17 @@ function isScheduleOfferAcceptance(text) {
 
 
 
+
+
+
+
+
 function afterIssueCaptured(caller) {
   caller.issueSummary = classifyIssue(caller.issue).summary;
+
+
+
+
 
 
 
@@ -2896,6 +3842,10 @@ function afterIssueCaptured(caller) {
     caller.issueSummary = "demo request";
     return;
   }
+
+
+
+
 
 
 
@@ -2911,6 +3861,10 @@ function afterIssueCaptured(caller) {
 
 
 
+
+
+
+
   if (isHardEmergency(caller.issue)) {
     markEmergency(caller);
     return;
@@ -2919,8 +3873,16 @@ function afterIssueCaptured(caller) {
 
 
 
+
+
+
+
   markStandardService(caller);
 }
+
+
+
+
 
 
 
@@ -2933,9 +3895,17 @@ function buildNextPrompt(caller) {
 
 
 
+
+
+
+
   if (caller.lastStep === "ask_last_name") {
     return `Thank you, ${caller.firstName}. Can I get your last name as well?`;
   }
+
+
+
+
 
 
 
@@ -2947,9 +3917,17 @@ function buildNextPrompt(caller) {
 
 
 
+
+
+
+
   if (caller.lastStep === "ask_address") {
     return buildAddressRequestPrompt(caller);
   }
+
+
+
+
 
 
 
@@ -2961,6 +3939,10 @@ function buildNextPrompt(caller) {
 
 
 
+
+
+
+
   if (caller.lastStep === "schedule_or_callback") {
     return buildSchedulingChoicePrompt(caller);
   }
@@ -2968,8 +3950,16 @@ function buildNextPrompt(caller) {
 
 
 
+
+
+
+
   return "How can I help you?";
 }
+
+
+
+
 
 
 
@@ -2992,9 +3982,15 @@ function buildAIContext(caller) {
 
 
 
+
+
+
+
 function applyExtractedName(caller, fullName, firstName = "") {
   const safeFullName = cleanForSpeech(fullName || "");
   const safeFirstName = cleanForSpeech(firstName || "");
+
+
 
 
   if (safeFullName) {
@@ -3003,6 +3999,8 @@ function applyExtractedName(caller, fullName, firstName = "") {
     caller.nameSpellingConfirmed = false;
     return;
   }
+
+
 
 
   if (safeFirstName) {
@@ -3015,17 +4013,29 @@ function applyExtractedName(caller, fullName, firstName = "") {
 
 
 
+
+
+
+
 function normalizePhoneForStorage(value) {
   const digits = extractPhoneDigits(value || "");
   if (digits) return digits;
+
+
 
 
   const numericDigits = String(value || "").replace(/\D/g, "");
   if (numericDigits.length >= 7) return numericDigits;
 
 
+
+
   return cleanForSpeech(value || "");
 }
+
+
+
+
 
 
 
@@ -3053,11 +4063,19 @@ function sendAfterAddressConfirmed(ws, caller) {
 
 
 
+
+
+
+
 function confirmAndAdvancePhone(ws, caller) {
   caller.callbackConfirmed = true;
   caller.lastStep = "ask_address";
   sendText(ws, buildAddressRequestPrompt(caller));
 }
+
+
+
+
 
 
 
@@ -3072,10 +4090,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
   if (isPricingQuestion(text)) {
     sendText(ws, pricingResponse());
     return;
   }
+
+
+
+
 
 
 
@@ -3091,6 +4117,8 @@ async function handlePrompt(ws, caller, speech) {
   }
 
 
+
+
   const postIntakeSteps = new Set([
     "ask_notes",
     "offer_demo_followup",
@@ -3099,6 +4127,7 @@ async function handlePrompt(ws, caller, speech) {
     "capture_demo_followup_email",
     "final_question"
   ]);
+
 
   if (postIntakeSteps.has(caller.lastStep) && isCallbackNumberChangeIntent(text)) {
     clearPendingUpdatedContactName(caller);
@@ -3116,15 +4145,24 @@ async function handlePrompt(ws, caller, speech) {
   }
 
 
+
+
   switch (caller.lastStep) {
     case "ask_issue": {
       let parsed = null;
-
+      const rawIntroFirstName = extractIntroFirstName(text);
+      if (rawIntroFirstName && !caller.firstName) {
+        caller.firstName = rawIntroFirstName;
+        caller.fullName = caller.fullName || rawIntroFirstName;
+        caller.nameSpellingConfirmed = false;
+      }
 
       if (AI_INTERPRETER_ENABLED) {
         const extractedOpening = await extractOpeningTurn(text, buildAIContext(caller));
         if (extractedOpening && extractedOpening.intent && extractedOpening.intent !== "unclear") {
           applyExtractedName(caller, extractedOpening.full_name, extractedOpening.first_name);
+
+
 
 
           if (extractedOpening.intent === "social_greeting_only" || extractedOpening.intent === "name_only") {
@@ -3138,6 +4176,8 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (extractedOpening.issue_text) {
             parsed = {
               name: extractedOpening.full_name || null,
@@ -3148,15 +4188,21 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+
+
       if (!parsed) {
         parsed = extractOpeningNameAndIssue(text);
       }
+
+
 
 
       if (!parsed.name) {
         const introFirstName = extractIntroFirstName(text);
         if (introFirstName) parsed.name = introFirstName;
       }
+
+
 
 
       if (parsed.name) {
@@ -3192,6 +4238,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       if (caller.leadType === "demo") {
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "";
         if (spellingPrompt) {
@@ -3208,6 +4258,10 @@ async function handlePrompt(ws, caller, speech) {
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
+
+
+
+
 
 
 
@@ -3232,11 +4286,19 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
       }
+
+
+
+
 
 
 
@@ -3262,6 +4324,10 @@ async function handlePrompt(ws, caller, speech) {
         : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
       return;
     }
+
+
+
+
 
 
 
@@ -3324,6 +4390,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "ask_item_issue_detail": {
       caller.issue = combineIssueContextAndDetail(caller.issue || caller.pendingIssueItem, text);
       caller.issueSummary = classifyIssue(caller.issue).summary;
@@ -3336,11 +4406,15 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+
+
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
       }
+
+
 
 
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
@@ -3368,6 +4442,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "leak_emergency_choice": {
       if (isNegative(text)) {
         markStandardService(caller);
@@ -3387,6 +4465,10 @@ async function handlePrompt(ws, caller, speech) {
           : "Alright. I've got this as a standard service request. I just need to gather a few details from you. Can I start with your full name?");
         return;
       }
+
+
+
+
 
 
 
@@ -3413,9 +4495,17 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       sendText(ws, "Do you want me to mark this as an emergency?");
       return;
     }
+
+
+
+
 
 
 
@@ -3448,6 +4538,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "ask_first_name_spelling": {
       const spelledFirstName = normalizeSpelledFirstName(text, caller.firstName || "");
       const remainingParts = cleanForSpeech(caller.fullName || "").split(/\s+/).filter(Boolean).slice(1).join(" ");
@@ -3465,6 +4559,10 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
+
+
+
+
 
 
 
@@ -3496,6 +4594,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "confirm_phone": {
       if (AI_INTERPRETER_ENABLED) {
         const phoneDecision = await interpretPhoneStep(text, buildAIContext(caller));
@@ -3507,6 +4609,8 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone") {
             caller.callbackConfirmed = false;
             caller.lastStep = "get_new_phone";
@@ -3515,12 +4619,16 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (phoneDecision.intent === "yes_waiting_for_number") {
             caller.callbackConfirmed = false;
             caller.lastStep = "get_new_phone";
             sendText(ws, "Alright. What is the best callback number to reach you?");
             return;
           }
+
+
 
 
           if (phoneDecision.intent === "confirm_existing_phone") {
@@ -3535,6 +4643,8 @@ async function handlePrompt(ws, caller, speech) {
           }
         }
       }
+
+
 
 
       if (isBrowserCaller(caller)) {
@@ -3556,6 +4666,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "get_new_phone": {
       if (AI_INTERPRETER_ENABLED) {
         const phoneDecision = await interpretPhoneStep(text, buildAIContext(caller));
@@ -3567,10 +4681,14 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (phoneDecision.intent === "confirm_existing_phone" && (caller.callbackNumber || caller.phone)) {
             confirmAndAdvancePhone(ws, caller);
             return;
           }
+
+
 
 
           if (phoneDecision.intent === "yes_waiting_for_number") {
@@ -3580,6 +4698,8 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone") {
             caller.callbackConfirmed = false;
             sendText(ws, "No problem. What is the best callback number to reach you?");
@@ -3587,6 +4707,8 @@ async function handlePrompt(ws, caller, speech) {
           }
         }
       }
+
+
 
 
       if (!isLikelyPhoneNumberResponse(text)) {
@@ -3608,6 +4730,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "capture_updated_callback_number": {
       if (!isLikelyPhoneNumberResponse(text)) {
         sendText(ws, "I'm sorry, I still need the updated callback number. What is the best number to use instead?");
@@ -3615,6 +4741,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.callbackNumber = normalizePhoneForStorage(text);
       caller.callbackConfirmed = true;
+
 
       if (caller.pendingUpdatedContactFullName) {
         caller.fullName = caller.pendingUpdatedContactFullName;
@@ -3624,6 +4751,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
         return;
       }
+
 
       if (caller.pendingUpdatedContactFirstName) {
         const existingLastName = extractLastNameFromFullName(caller.fullName || "");
@@ -3637,10 +4765,13 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       caller.lastStep = "confirm_contact_person_after_phone_change";
       sendText(ws, "Got it. Should the contact person stay the same, or would you like me to change that as well?");
       return;
     }
+
+
 
 
     case "confirm_contact_person_after_phone_change": {
@@ -3650,6 +4781,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Got it. I've updated the callback number. " + buildTechnicianNotesPrompt());
         return;
       }
+
 
       const extractedUpdatedName = extractUpdatedContactNameFromSpeech(text);
       if (extractedUpdatedName) {
@@ -3673,11 +4805,13 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isChangeContactPersonIntent(text)) {
         caller.lastStep = "capture_updated_contact_name";
         sendText(ws, "No problem. What name should I use instead?");
         return;
       }
+
 
       const parsedName = parseFullNameFromSpeech(text);
       if (parsedName) {
@@ -3701,9 +4835,12 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       sendText(ws, "I just want to make sure I have that right. Should the contact person stay the same, or would you like me to change that as well?");
       return;
     }
+
+
 
 
     case "capture_updated_contact_name": {
@@ -3733,6 +4870,8 @@ async function handlePrompt(ws, caller, speech) {
     }
 
 
+
+
     case "confirm_same_last_name_after_contact_change": {
       const existingLastName = extractLastNameFromFullName(caller.fullName || "");
       if (existingLastName && (isAffirmative(text) || isSameLastNameResponse(text))) {
@@ -3752,6 +4891,8 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, `I just need the last name for ${caller.pendingUpdatedContactFirstName}. What is it?`);
       return;
     }
+
+
 
 
     case "capture_updated_contact_last_name": {
@@ -3781,12 +4922,18 @@ async function handlePrompt(ws, caller, speech) {
     }
 
 
+
+
     case "ask_address": {
       caller.address = normalizeAddressInput(text);
       caller.lastStep = "confirm_address";
       sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
       return;
     }
+
+
+
+
 
 
 
@@ -3807,6 +4954,8 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `Got it. Let me read that back — ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
         return;
       }
+
+
 
 
       if (AI_INTERPRETER_ENABLED) {
@@ -3831,9 +4980,15 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+
+
       sendText(ws, `I just need a yes or no — is ${formatAddressForConfirmation(caller.address)} correct?`);
       return;
     }
+
+
+
+
 
 
 
@@ -3848,6 +5003,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "ask_project_scope": {
       caller.notes = normalizeProjectScopeNotes(text);
       caller.lastStep = "ask_proposal_deadline";
@@ -3858,12 +5017,20 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "ask_proposal_deadline": {
       if (!isNegative(text)) caller.proposalDeadline = cleanForSpeech(text);
       caller.lastStep = "ask_quote_email_optional";
       sendText(ws, "Would you like to include an email address with this quote request as well?");
       return;
     }
+
+
+
+
 
 
 
@@ -3885,12 +5052,20 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "capture_quote_email": {
       caller.demoEmail = cleanForSpeech(text);
       caller.lastStep = "ask_notes";
       sendText(ws, "Is there anything else you'd like me to include with this quote request?");
       return;
     }
+
+
+
+
 
 
 
@@ -3912,12 +5087,20 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "capture_demo_email": {
       caller.demoEmail = cleanForSpeech(text);
       caller.lastStep = "ask_notes";
       sendText(ws, "Before I submit this demo request, are there any notes or details you'd like me to add?");
       return;
     }
+
+
+
+
 
 
 
@@ -3946,6 +5129,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       if (wantsOfficeCallback(text)) {
         caller.status = "callback_requested";
         caller.lastStep = "ask_notes";
@@ -3956,10 +5143,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       caller.lastStep = "ask_appointment_day";
       sendText(ws, "What day works best for you?");
       return;
     }
+
+
+
+
 
 
 
@@ -3989,6 +5184,10 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, "What callback time works best for you?");
       return;
     }
+
+
+
+
 
 
 
@@ -4025,11 +5224,16 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "confirm_first_available": {
       if (isRepeatTimeRequest(text)) {
         sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
         return;
       }
+
 
       if (isSpecificTime(text) || detectTimePreference(text)) {
         const requestDetails = parseAvailabilityRequest(text, caller.pendingOfferedDate, caller.pendingOfferedTime);
@@ -4050,6 +5254,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isScheduleOfferAcceptance(text)) {
         caller.appointmentDate = caller.pendingOfferedDate;
         caller.appointmentTime = caller.pendingOfferedTime;
@@ -4059,6 +5264,8 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, buildTechnicianNotesPrompt());
         return;
       }
+
+
 
 
       if (AI_INTERPRETER_ENABLED) {
@@ -4075,11 +5282,15 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (schedulingDecision.intent === "reject_offered_time") {
             caller.lastStep = "ask_appointment_day";
             sendText(ws, "No problem. What day works better for a callback?");
             return;
           }
+
+
 
 
           if (schedulingDecision.intent === "request_office_callback") {
@@ -4088,6 +5299,8 @@ async function handlePrompt(ws, caller, speech) {
             sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt());
             return;
           }
+
+
 
 
           if (schedulingDecision.intent === "request_alternate_time") {
@@ -4110,12 +5323,16 @@ async function handlePrompt(ws, caller, speech) {
           }
 
 
+
+
           if (schedulingDecision.intent === "request_first_available") {
             sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
             return;
           }
         }
       }
+
+
 
 
       if (isAlternateAvailabilityRequest(text)) {
@@ -4138,6 +5355,8 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+
+
       if (isAffirmative(text)) {
         caller.appointmentDate = caller.pendingOfferedDate;
         caller.appointmentTime = caller.pendingOfferedTime;
@@ -4149,6 +5368,8 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+
+
       if (isNegative(text)) {
         caller.lastStep = "ask_appointment_day";
         sendText(ws, "No problem. What day works better for a callback?");
@@ -4156,9 +5377,15 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+
+
       sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
       return;
     }
+
+
+
+
 
 
 
@@ -4179,9 +5406,14 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       const wantsToFinishNow = isEndCallPhrase(text);
       const hadNotes = !wantsToFinishNow;
       if (hadNotes) caller.notes = cleanForSpeech(text);
+
+
+
+
 
 
 
@@ -4191,16 +5423,25 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       if (caller.leadType === "demo") {
         closeAfterDemoFollowup(ws, caller);
         return;
       }
+
 
       if (wantsToFinishNow) {
         caller.lastStep = "final_question";
         sendText(ws, `${buildPostNotesTransition(caller, hadNotes)} ${buildFinalSubmissionPrompt(caller)}`);
         return;
       }
+
+
+
+
 
 
 
@@ -4214,6 +5455,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "offer_demo_followup": {
       if (isDemoFollowupAcceptance(text)) {
         caller.demoFollowupRequested = true;
@@ -4222,15 +5467,19 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+
       if (isNegative(text) || isEndCallPhrase(text)) {
         caller.demoFollowupRequested = false;
         closeAfterDemoFollowup(ws, caller);
         return;
       }
 
+
       sendText(ws, "Would you like for me to have one of our team members call you to discuss how this could help your company?");
       return;
     }
+
+
 
 
     case "confirm_demo_followup_info": {
@@ -4238,6 +5487,10 @@ async function handlePrompt(ws, caller, speech) {
         caller.demoFollowupContactName = caller.fullName || "";
         caller.demoFollowupCallbackNumber = caller.callbackNumber || caller.phone || "";
         caller.demoFollowupEmail = caller.demoEmail || caller.demoFollowupEmail || "";
+
+
+
+
 
 
 
@@ -4251,10 +5504,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
         caller.lastStep = "ask_demo_followup_email_optional";
         sendText(ws, "Would you like to include an email address as well?");
         return;
       }
+
+
+
+
 
 
 
@@ -4268,9 +5529,17 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       sendText(ws, "Okay, should I use the contact information you already gave me?");
       return;
     }
+
+
+
+
 
 
 
@@ -4290,12 +5559,20 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "ask_demo_followup_phone": {
       caller.demoFollowupCallbackNumber = cleanForSpeech(text);
       caller.lastStep = "ask_demo_followup_email_optional";
       sendText(ws, "Would you like to include an email address as well?");
       return;
     }
+
+
+
+
 
 
 
@@ -4317,6 +5594,10 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "capture_demo_followup_email": {
       caller.demoFollowupEmail = cleanForSpeech(text);
       queueDemoFollowupSubmission(caller);
@@ -4327,11 +5608,19 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
     case "final_question": {
       if (isPricingQuestion(text)) {
         sendText(ws, `${pricingResponse()} ${buildFinalSubmissionPrompt(caller)}`);
         return;
       }
+
+
+
+
 
 
 
@@ -4351,10 +5640,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
       appendAdditionalIssue(caller, text);
       sendText(ws, `Got it — I'll add that as well. ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
+
+
+
+
 
 
 
@@ -4374,6 +5671,14 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+
+
+
+
+
+
+
 function serveBrowserCallingIndex(res) {
   const indexPath = path.join(__dirname, "public", "index.html");
   if (fs.existsSync(indexPath)) {
@@ -4385,11 +5690,19 @@ function serveBrowserCallingIndex(res) {
 
 
 
+
+
+
+
 function buildBrowserCallingIdentity(req) {
   const requested = cleanForSpeech(req.query.identity || "");
   if (requested) return requested.replace(/[^\w.-]/g, "").slice(0, 64) || "browser-user";
   return "browser-user";
 }
+
+
+
+
 
 
 
@@ -4412,6 +5725,10 @@ function createBrowserCallingToken(identity) {
 
 
 
+
+
+
+
 function verifyTwilioRequest(req) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) return true;
   try {
@@ -4423,6 +5740,10 @@ function verifyTwilioRequest(req) {
     return false;
   }
 }
+
+
+
+
 
 
 
@@ -4444,9 +5765,17 @@ app.get("/twilio-token", (req, res) => {
 
 
 
+
+
+
+
 app.get("/health", (req, res) => {
   res.send(`Server is running - ${APP_VERSION}`);
 });
+
+
+
+
 
 
 
@@ -4458,6 +5787,10 @@ app.get("/browser-call", (req, res) => {
 
 
 
+
+
+
+
 app.get("/pc-call", (req, res) => {
   return serveBrowserCallingIndex(res);
 });
@@ -4465,9 +5798,17 @@ app.get("/pc-call", (req, res) => {
 
 
 
+
+
+
+
 app.get("/", (req, res) => {
   return serveBrowserCallingIndex(res);
 });
+
+
+
+
 
 
 
@@ -4480,9 +5821,17 @@ app.post("/incoming-call", (req, res) => {
 
 
 
+
+
+
+
   if (!PUBLIC_BASE_URL) {
     return res.status(500).send("Missing PUBLIC_BASE_URL");
   }
+
+
+
+
 
 
 
@@ -4505,8 +5854,16 @@ app.post("/incoming-call", (req, res) => {
 
 
 
+
+
+
+
   res.type("text/xml").send(twiml.toString());
 });
+
+
+
+
 
 
 
@@ -4514,6 +5871,10 @@ app.post("/incoming-call", (req, res) => {
 app.post("/connect-action", (req, res) => {
   res.status(204).send();
 });
+
+
+
+
 
 
 
@@ -4527,10 +5888,18 @@ server.on("upgrade", (request, socket, head) => {
 
 
 
+
+
+
+
   wss.handleUpgrade(request, socket, head, (ws) => {
     wss.emit("connection", ws, request);
   });
 });
+
+
+
+
 
 
 
@@ -4544,11 +5913,19 @@ wss.on("connection", (ws, request) => {
 
 
 
+
+
+
+
   ws.on("message", async (message) => {
     try {
       const data = JSON.parse(message.toString("utf8"));
       const type = data.type;
       const caller = getOrCreateCaller(ws.sessionKey);
+
+
+
+
 
 
 
@@ -4563,6 +5940,10 @@ wss.on("connection", (ws, request) => {
 
 
 
+
+
+
+
       if (type === "interrupt") {
         if (cleanSpeechText(caller.promptBuffer || "")) {
           schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 250));
@@ -4573,10 +5954,15 @@ wss.on("connection", (ws, request) => {
 
 
 
+
+
+
+
       if (type === "prompt") {
         if (data.voicePrompt) {
           caller.promptBuffer = `${caller.promptBuffer ? caller.promptBuffer + " " : ""}${data.voicePrompt}`;
         }
+
 
         if (data.last === false) {
           if (cleanSpeechText(caller.promptBuffer || "")) {
@@ -4585,9 +5971,14 @@ wss.on("connection", (ws, request) => {
           return;
         }
 
+
         await processBufferedPrompt(ws, caller, data.voicePrompt || "");
         return;
       }
+
+
+
+
 
 
 
@@ -4600,9 +5991,17 @@ wss.on("connection", (ws, request) => {
 
 
 
+
+
+
+
       if (type === "dtmf") {
         return;
       }
+
+
+
+
 
 
 
@@ -4613,6 +6012,10 @@ wss.on("connection", (ws, request) => {
       sendText(ws, "I'm sorry, something went wrong. Could you please say that again?");
     }
   });
+
+
+
+
 
 
 
@@ -4629,10 +6032,18 @@ wss.on("connection", (ws, request) => {
 
 
 
+
+
+
+
   ws.on("error", (err) => {
     console.error("[WS ERROR]", err.message);
   });
 });
+
+
+
+
 
 
 
