@@ -2750,17 +2750,18 @@ function markEmergency(caller) {
 function buildEmergencyIntakePrompt(caller) {
   const acknowledgement = buildIssueAcknowledgement(caller);
   const withName = caller.firstName ? `${caller.firstName}, ` : "";
+  const leadIn = `${withName}${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away.`;
 
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
       return isBrowserCaller(caller)
-        ? `${withName}${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. ${buildBrowserCallbackPrompt()}`
-        : `${withName}${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+        ? `${leadIn} ${buildBrowserCallbackPrompt()}`
+        : `${leadIn} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
     }
-    return `${withName}${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`;
+    return `${leadIn} Before I go any further, can I get your last name as well?`;
   }
 
-  return `${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. Can I start by getting your full name, please?`;
+  return `${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away. Can I start by getting your full name, please?`;
 }
 
 
@@ -3134,23 +3135,24 @@ async function handlePrompt(ws, caller, speech) {
 
 
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      if (caller.emergencyAlert) {
+        caller.lastStep = nextStep;
+        sendText(ws, buildEmergencyIntakePrompt(caller));
+        return;
+      }
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
       }
       caller.lastStep = nextStep;
-      if (caller.emergencyAlert) {
-        sendText(ws, buildEmergencyIntakePrompt(caller));
-      } else {
-        sendText(ws, caller.fullName
-          ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. ${buildBrowserCallbackPrompt()}`
-              : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
-          : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
-      }
+      sendText(ws, caller.fullName
+        ? hasFullName(caller.fullName)
+          ? isBrowserCaller(caller)
+            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. ${buildBrowserCallbackPrompt()}`
+            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
+        : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
       return;
     }
 
@@ -3193,16 +3195,17 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      if (caller.emergencyAlert) {
+        caller.lastStep = nextStep;
+        sendText(ws, buildEmergencyIntakePrompt(caller));
+        return;
+      }
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
       }
       caller.lastStep = nextStep;
-      if (caller.emergencyAlert) {
-        sendText(ws, buildEmergencyIntakePrompt(caller));
-        return;
-      }
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
           ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get the best callback number in case we get disconnected?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
@@ -3234,16 +3237,17 @@ async function handlePrompt(ws, caller, speech) {
 
 
       const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      if (caller.emergencyAlert) {
+        caller.lastStep = nextStep;
+        sendText(ws, buildEmergencyIntakePrompt(caller));
+        return;
+      }
       const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
       }
       caller.lastStep = nextStep;
-      if (caller.emergencyAlert) {
-        sendText(ws, buildEmergencyIntakePrompt(caller));
-        return;
-      }
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
           ? isBrowserCaller(caller)
