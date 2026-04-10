@@ -1,6 +1,6 @@
 ﻿/*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 6 TARGETED STABILITY PATCH
- DATE: 2026-04-09 (targeted stability patch: intro pause handling, last-name handoff hardening, schedule acceptance, early emergency acknowledgment)
+ CONVERSATIONRELAY BASELINE V15 PASS 6 SEQUENCE + PACING PATCH
+ DATE: 2026-04-09 (sequence + pacing patch: early emergency acknowledgment, slight response delay, lower interrupt sensitivity)
 
 
 
@@ -18,6 +18,8 @@
  - Adds local guardrails for same-day alternate-slot requests
  - Fixes browser callback prompts in item-detail emergency branches
  - Expands outside-water emergency detection and issue summaries
+ - Moves strong emergency acknowledgment ahead of name completion when the issue is already clear
+ - Adds a very slight response delay so the assistant sounds like it is registering details
 
 
 
@@ -49,12 +51,13 @@
  - SUBMISSION_TIMEOUT_MS          (default 4000)
  - CLOSE_SESSION_MIN_MS           (default 4500)
  - CLOSE_SESSION_MAX_MS           (default 12000)
+ - RESPONSE_THINK_DELAY_MS       (default 220)
 *************************************************/
 
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 6 TARGETED STABILITY PATCH LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 6 SEQUENCE + PACING PATCH LOADED 🔥");
 
 
 
@@ -95,7 +98,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-TARGETED-STABILITY-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SEQUENCE-PACING-PASS";
 
 
 
@@ -120,6 +123,7 @@ const AVAILABILITY_TIMEOUT_MS = Number(process.env.AVAILABILITY_TIMEOUT_MS || 35
 const SUBMISSION_TIMEOUT_MS = Number(process.env.SUBMISSION_TIMEOUT_MS || 4000);
 const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
+const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 
 
@@ -393,28 +397,6 @@ function extractIntroFirstName(text) {
 }
 
 
-
-
-
-function isIncompleteOpeningIssue(text) {
-  const safe = cleanForSpeech(text || "");
-  const t = normalizeIntentText(safe);
-  if (!t) return true;
-  if (t.length <= 2) return true;
-  if (["i", "im", "i m", "i am", "and", "and i", "and im", "and i m", "and i am"].includes(t)) return true;
-  if (/^(and\s+)?i(\s+am|\s+m)?$/.test(t)) return true;
-  if (/\b(and|because|with|about|for)\s*$/.test(t)) return true;
-  return false;
-}
-
-
-function buildEmergencyMarkedPrompt(caller) {
-  const summary = humanizeIssueSummaryForSpeech(caller.issueSummary || caller.issue || "an emergency");
-  if (isMainLineEmergencyCandidate(caller.issue || "") || isOutsideWaterLossEmergency(caller.issue || "")) {
-    return `I'm sorry, it sounds like you're dealing with ${summary}. I'm going to mark this as an emergency.`;
-  }
-  return `I'm sorry, you're dealing with ${summary}. I'm going to mark this as an emergency.`;
-}
 
 
 function firstNameNeedsSpelling(name) {
@@ -1142,24 +1124,6 @@ function isAffirmative(text) {
 
 
 
-
-function isSchedulingAcceptance(text) {
-  const t = normalizeIntentText(text);
-  if (!t) return false;
-  if (isNegative(t)) return false;
-  if (isAffirmative(t)) return true;
-  return containsAny(t, [
-    "yeah that ll work", "yeah thatll work", "that ll work", "thatll work",
-    "yeah that works", "yep that ll work", "yep thatll work", "yep that works",
-    "sure that ll work", "sure thatll work", "sure that works",
-    "yes that ll work", "yes thatll work", "yes that works",
-    "okay that ll work", "okay thatll work", "ok that ll work", "ok thatll work",
-    "that should work", "yeah that should work", "sure that should work",
-    "that will work", "yeah that will work", "sure that will work"
-  ]);
-}
-
-
 function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -1712,9 +1676,9 @@ function classifyIssue(issue) {
   }
   if (isOutsideWaterLossEmergency(text)) {
     if (containsAny(text, ["water meter", "meter"])) return { summary: "a water meter leak" };
-    if (containsAny(text, ["front yard", "front lawn"])) return { summary: "water pooling in your front yard" };
-    if (containsAny(text, ["back yard", "back lawn"])) return { summary: "water pooling in your back yard" };
-    return { summary: "water pooling in your yard" };
+    if (containsAny(text, ["front yard", "front lawn"])) return { summary: "a possible water main leak in your front yard" };
+    if (containsAny(text, ["back yard", "back lawn"])) return { summary: "a possible water main leak in your back yard" };
+    return { summary: "a possible outside water-line leak in your yard" };
   }
   if (text.includes("kitchen faucet") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaky kitchen faucet" };
   if (text.includes("bathroom faucet") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaky bathroom faucet" };
@@ -2157,13 +2121,24 @@ function sendText(ws, text, options = {}) {
     caller.pendingPromptText = cleanForSpeech(text || "");
   }
   const pacedText = options.raw === true ? String(text || "") : lightlyPaceText(text);
-  ws.send(JSON.stringify({
-    type: "text",
-    token: pacedText,
-    last: true,
-    interruptible: options.interruptible !== false,
-    preemptible: options.preemptible === true
-  }));
+
+  const now = Date.now();
+  const baseDelay = Number.isFinite(options.delayMs) ? options.delayMs : RESPONSE_THINK_DELAY_MS;
+  const afterPreviousMs = Number.isFinite(options.afterPreviousMs) ? options.afterPreviousMs : 120;
+  const nextAvailable = typeof ws._nextSendAt === "number" ? ws._nextSendAt : now;
+  const sendAt = Math.max(now + baseDelay, nextAvailable + afterPreviousMs);
+  ws._nextSendAt = sendAt;
+
+  setTimeout(() => {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({
+      type: "text",
+      token: pacedText,
+      last: true,
+      interruptible: options.interruptible !== false,
+      preemptible: options.preemptible === true
+    }));
+  }, Math.max(0, sendAt - now));
 }
 
 
@@ -2612,6 +2587,44 @@ function markEmergency(caller) {
 
 
 
+function buildEmergencyIntakePrompt(caller) {
+  const acknowledgement = buildIssueAcknowledgement(caller);
+  const withName = caller.firstName ? `${caller.firstName}, ` : "";
+
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) {
+      return isBrowserCaller(caller)
+        ? `${withName}${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. ${buildBrowserCallbackPrompt()}`
+        : `${withName}${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+    }
+    return `${withName}${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`;
+  }
+
+  return `${acknowledgement} I'm going to get this marked as an emergency so our service team can review it right away. Can I start by getting your full name, please?`;
+}
+
+
+
+
+function isScheduleOfferAcceptance(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (isNegative(t)) return false;
+
+  return containsAny(t, [
+    "that ll work", "thatll work", "that will work",
+    "yeah that ll work", "yeah thatll work", "yeah that will work",
+    "yes that ll work", "yes thatll work", "yes that will work",
+    "sure that works", "sure that ll work", "sure thatll work",
+    "yep that ll work", "yep thatll work", "yup that ll work", "yup thatll work",
+    "works for me", "that works for me", "that should work for me"
+  ]) || isAffirmative(t);
+}
+
+
+
+
+
 function afterIssueCaptured(caller) {
   caller.issueSummary = classifyIssue(caller.issue).summary;
 
@@ -2790,25 +2803,6 @@ function confirmAndAdvancePhone(ws, caller) {
 
 
 
-
-function sendPostNameCollectionPrompt(ws, caller, standardLeadIn = "", emergencyLeadIn = "") {
-  const spellingPrompt = maybeQueueFirstNameSpelling(caller, getPhoneCollectionStep(caller));
-  if (spellingPrompt) {
-    sendText(ws, spellingPrompt);
-    return true;
-  }
-
-  caller.lastStep = getPhoneCollectionStep(caller);
-  const basePrompt = isBrowserCaller(caller)
-    ? buildBrowserCallbackPrompt()
-    : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
-
-  const leadIn = caller.emergencyAlert ? emergencyLeadIn : standardLeadIn;
-  sendText(ws, leadIn ? `${leadIn} ${basePrompt}` : basePrompt);
-  return true;
-}
-
-
 async function handlePrompt(ws, caller, speech) {
   const text = cleanSpeechText(speech || "");
   if (!text) {
@@ -2888,11 +2882,9 @@ async function handlePrompt(ws, caller, speech) {
         caller.firstName = getFirstName(parsed.name);
         caller.nameSpellingConfirmed = false;
       }
-      if (!parsed.issueText || isIncompleteOpeningIssue(parsed.issueText)) {
+      if (!parsed.issueText) {
         caller.lastStep = "ask_issue_again";
-        sendText(ws, caller.firstName
-          ? `Thanks, ${caller.firstName}. What can I help you with today?`
-          : "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?");
+        sendText(ws, "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?");
         return;
       }
       if (isGenericEmergencyIssue(parsed.issueText)) {
@@ -2975,13 +2967,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.lastStep = nextStep;
       if (caller.emergencyAlert) {
-        sendText(ws, caller.fullName
-          ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I have marked this as an emergency and will get this to our service team just as soon as I get all your information. ${buildBrowserCallbackPrompt()}`
-              : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
-          : `${buildIssueAcknowledgement(caller)} I have marked this as an emergency and will get this to our service team just as soon as I get all your information. Can I start by getting your full name, please?`);
+        sendText(ws, buildEmergencyIntakePrompt(caller));
       } else {
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
@@ -3040,13 +3026,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.lastStep = nextStep;
       if (caller.emergencyAlert) {
-        sendText(ws, caller.fullName
-          ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information. ${buildBrowserCallbackPrompt()}`
-              : `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} Before I go any further, can I get your last name as well?`
-          : `${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information. Can I start by getting your full name, please?`);
+        sendText(ws, buildEmergencyIntakePrompt(caller));
         return;
       }
       sendText(ws, caller.fullName
@@ -3087,13 +3067,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.lastStep = nextStep;
       if (caller.emergencyAlert) {
-        sendText(ws, caller.fullName
-          ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information. ${buildBrowserCallbackPrompt()}`
-              : `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} Before I go any further, can I get your last name as well?`
-          : `${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information. Can I start by getting your full name, please?`);
+        sendText(ws, buildEmergencyIntakePrompt(caller));
         return;
       }
       sendText(ws, caller.fullName
@@ -3211,32 +3185,26 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_last_name": {
-      const directLastName = parseLastNameResponse(text);
-      let possibleFullName = directLastName ? `${caller.firstName} ${directLastName}` : "";
+      let possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${text}`);
       if (!possibleFullName || !hasFullName(possibleFullName)) {
-        possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${text}`);
+        const parsedLastName = parseLastNameResponse(text);
+        if (parsedLastName) {
+          possibleFullName = `${caller.firstName} ${parsedLastName}`;
+        }
       }
       if (!possibleFullName || !hasFullName(possibleFullName)) {
         sendText(ws, "I'm sorry, I didn't quite catch the last name. Could you please repeat it?");
         return;
       }
-      caller.fullName = cleanForSpeech(possibleFullName);
-      caller.firstName = getFirstName(possibleFullName) || caller.firstName;
-      if (caller.emergencyAlert) {
-        sendPostNameCollectionPrompt(
-          ws,
-          caller,
-          "",
-          `Thank you, ${caller.firstName}. ${buildEmergencyMarkedPrompt(caller)} I'll get this to our service team as soon as I get all your information.`
-        );
+      caller.fullName = possibleFullName;
+      caller.firstName = getFirstName(possibleFullName);
+      const spellingPrompt = maybeQueueFirstNameSpelling(caller, getPhoneCollectionStep(caller));
+      if (spellingPrompt) {
+        sendText(ws, spellingPrompt);
         return;
       }
-      sendPostNameCollectionPrompt(
-        ws,
-        caller,
-        `Thank you, ${caller.firstName}.`,
-        ""
-      );
+      caller.lastStep = getPhoneCollectionStep(caller);
+      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
 
@@ -3605,7 +3573,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      if (isSchedulingAcceptance(text)) {
+      if (isScheduleOfferAcceptance(text)) {
         caller.appointmentDate = caller.pendingOfferedDate;
         caller.appointmentTime = caller.pendingOfferedTime;
         caller.status = "scheduled";
