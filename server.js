@@ -123,6 +123,7 @@ const AVAILABILITY_TIMEOUT_MS = Number(process.env.AVAILABILITY_TIMEOUT_MS || 35
 const SUBMISSION_TIMEOUT_MS = Number(process.env.SUBMISSION_TIMEOUT_MS || 4000);
 const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
+const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 
@@ -2200,6 +2201,55 @@ function sendText(ws, text, options = {}) {
 
 
 
+function clearPromptFinalizeTimer(caller) {
+  if (!caller || !caller.promptFinalizeTimer) return;
+  clearTimeout(caller.promptFinalizeTimer);
+  caller.promptFinalizeTimer = null;
+}
+
+
+async function processBufferedPrompt(ws, caller, fallbackText = "") {
+  if (!caller || caller.processingPrompt) return false;
+
+  clearPromptFinalizeTimer(caller);
+  const completePrompt = cleanSpeechText(caller.promptBuffer || fallbackText || "");
+  if (!completePrompt) return false;
+
+  caller.promptBuffer = "";
+  caller.processingPrompt = true;
+  try {
+    await handlePrompt(ws, caller, completePrompt);
+    return true;
+  } finally {
+    caller.processingPrompt = false;
+    if (cleanSpeechText(caller.promptBuffer || "")) {
+      schedulePromptFinalize(ws, caller, 200);
+    }
+  }
+}
+
+
+function schedulePromptFinalize(ws, caller, delayMs = PROMPT_FINALIZE_TIMEOUT_MS) {
+  if (!caller) return;
+
+  clearPromptFinalizeTimer(caller);
+  const generation = (Number(caller.promptProcessGeneration) || 0) + 1;
+  caller.promptProcessGeneration = generation;
+
+  caller.promptFinalizeTimer = setTimeout(async () => {
+    if (!ws || ws.readyState !== 1) return;
+    const currentCaller = getOrCreateCaller(ws.sessionKey);
+    if (currentCaller.promptProcessGeneration !== generation) return;
+    if (!cleanSpeechText(currentCaller.promptBuffer || "")) return;
+    try {
+      await processBufferedPrompt(ws, currentCaller);
+    } catch (err) {
+      console.error("[PROMPT FINALIZE ERROR]", err.message);
+    }
+  }, Math.max(150, delayMs));
+}
+
+
 
 function estimateSpeechDurationMs(text) {
   const safe = cleanForSpeech(text || "");
@@ -4215,6 +4265,9 @@ wss.on("connection", (ws, request) => {
 
 
       if (type === "interrupt") {
+        if (cleanSpeechText(caller.promptBuffer || "")) {
+          schedulePromptFinalize(ws, caller, 250);
+        }
         return;
       }
 
@@ -4225,10 +4278,15 @@ wss.on("connection", (ws, request) => {
         if (data.voicePrompt) {
           caller.promptBuffer = `${caller.promptBuffer ? caller.promptBuffer + " " : ""}${data.voicePrompt}`;
         }
-        if (data.last === false) return;
-        const completePrompt = cleanSpeechText(caller.promptBuffer || data.voicePrompt || "");
-        caller.promptBuffer = "";
-        await handlePrompt(ws, caller, completePrompt);
+
+        if (data.last === false) {
+          if (cleanSpeechText(caller.promptBuffer || "")) {
+            schedulePromptFinalize(ws, caller);
+          }
+          return;
+        }
+
+        await processBufferedPrompt(ws, caller, data.voicePrompt || "");
         return;
       }
 
@@ -4261,6 +4319,8 @@ wss.on("connection", (ws, request) => {
 
 
   ws.on("close", () => {
+    const caller = getOrCreateCaller(ws.sessionKey);
+    clearPromptFinalizeTimer(caller);
     wsBySession.delete(ws.sessionKey);
     setTimeout(() => {
       delete callerStore[ws.sessionKey];
