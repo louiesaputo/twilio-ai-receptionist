@@ -1238,6 +1238,34 @@ function isChangeContactPersonIntent(text) {
 }
 
 
+function extractUpdatedContactNameFromSpeech(text) {
+  const safe = cleanForSpeech(text || "");
+  if (!safe) return "";
+
+  const stripped = safe
+    .replace(/^(no|nope|nah)\s*,?\s*/i, "")
+    .replace(/^(please\s+)?(?:change|update)\s+(?:that\s+too|the\s+contact(?:\s+person)?|the\s+name|the\s+contact\s+name)\s+(?:to|for)\s+/i, "")
+    .replace(/^(?:change|update)\s+(?:it|that)\s+to\s+/i, "")
+    .replace(/^(?:use|make)\s+/i, "")
+    .replace(/^(?:my\s+wife(?:'s)?|my\s+husband(?:'s)?|my\s+wife|my\s+husband)\s+name\s+is\s+/i, "")
+    .replace(/^(?:my\s+wife(?:'s)?|my\s+husband(?:'s)?|my\s+wife|my\s+husband)\s+/i, "")
+    .replace(/^(?:her|him)\s+name\s+is\s+/i, "")
+    .replace(/^(?:it's|it is)\s+/i, "")
+    .trim();
+
+  const parsed = parseFullNameFromSpeech(stripped);
+  if (parsed) return parsed;
+
+  const direct = stripped.match(/^([A-Za-z'-]+(?:\s+[A-Za-z'-]+)?)\b/);
+  if (direct) {
+    const candidate = parseFullNameFromSpeech(direct[1]);
+    if (candidate) return candidate;
+  }
+
+  return "";
+}
+
+
 function extractLastNameFromFullName(name) {
   const parts = cleanForSpeech(name || "").split(/\s+/).filter(Boolean);
   if (parts.length < 2) return "";
@@ -1685,6 +1713,7 @@ function buildExplicitAlternateAvailabilityQuery(dateText, timeText, rawText = "
 function buildAlternateAvailabilityOffer(caller, requestedText, availability, previousDate, previousTime, usedNextDayFallback = false) {
   const phrase = spokenAvailabilityPhrase(availability.date, availability.time);
   const lowered = normalizedText(requestedText || "");
+  const sameDayAsPrevious = normalizedText(availability.date || "") === normalizedText(previousDate || "");
 
 
   if (usedNextDayFallback) {
@@ -1693,7 +1722,10 @@ function buildAlternateAvailabilityOffer(caller, requestedText, availability, pr
 
 
   if (containsAny(lowered, ["later that day", "later the same day", "later in the afternoon", "later that afternoon", "anything later", "something later"])) {
-    return `I don't have anything later than ${previousTime} open that day, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
+    if (sameDayAsPrevious) {
+      return `Yes — I do have ${availability.time} available that same day. Would you like me to schedule that callback instead?`;
+    }
+    return `I don't have anything later that day open, but I do have ${phrase} available. Would you like me to schedule that callback instead?`;
   }
 
 
@@ -1846,7 +1878,7 @@ function spokenAvailabilityPhrase(dateText, timeText) {
   const offeredDate = new Date(Date.UTC(year, parsed.month - 1, parsed.day));
   const diffDays = Math.round((offeredDate - currentDate) / 86400000);
   if (diffDays === 0) return `today at ${timeText}`;
-  if (diffDays === 1) return `tomorrow, ${parsed.weekday} at ${timeText}`;
+  if (diffDays === 1) return `tomorrow at ${timeText}`;
   return `${dateText} at ${timeText}`;
 }
 
@@ -2717,7 +2749,13 @@ async function findAlternateAvailability(caller, rawText, currentDate, currentTi
 
   availability = await checkCalendarAvailability(caller, nextDayAttempt);
   if (availability && !isSameAvailabilitySlot(availability.date, availability.time, currentDate, currentTime)) {
-    return { availability, usedNextDayFallback: true };
+    if (normalizedText(availability.date || "") === normalizedText(currentDate || "")) {
+      if (matchesAlternateAvailabilityRequest(rawText, currentDate, currentTime, availability.date, availability.time)) {
+        return { availability, usedNextDayFallback: false };
+      }
+    } else {
+      return { availability, usedNextDayFallback: true };
+    }
   }
 
 
@@ -3521,6 +3559,28 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+      const extractedUpdatedName = extractUpdatedContactNameFromSpeech(text);
+      if (extractedUpdatedName) {
+        if (hasFullName(extractedUpdatedName)) {
+          caller.fullName = extractedUpdatedName;
+          caller.firstName = getFirstName(extractedUpdatedName);
+          caller.pendingUpdatedContactFirstName = "";
+          caller.lastStep = "ask_notes";
+          sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+          return;
+        }
+        caller.pendingUpdatedContactFirstName = getFirstName(extractedUpdatedName) || extractedUpdatedName;
+        const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+        if (existingLastName) {
+          caller.lastStep = "confirm_same_last_name_after_contact_change";
+          sendText(ws, `Got it. Is ${caller.pendingUpdatedContactFirstName}'s last name the same as the current contact's last name?`);
+          return;
+        }
+        caller.lastStep = "capture_updated_contact_last_name";
+        sendText(ws, `Got it. Can I get ${caller.pendingUpdatedContactFirstName}'s last name as well?`);
+        return;
+      }
+
       if (isChangeContactPersonIntent(text)) {
         caller.lastStep = "capture_updated_contact_name";
         sendText(ws, "No problem. What name should I use instead?");
@@ -3532,6 +3592,7 @@ async function handlePrompt(ws, caller, speech) {
         if (hasFullName(parsedName)) {
           caller.fullName = parsedName;
           caller.firstName = getFirstName(parsedName);
+          caller.pendingUpdatedContactFirstName = "";
           caller.lastStep = "ask_notes";
           sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
           return;
@@ -3554,7 +3615,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "capture_updated_contact_name": {
-      const parsedName = parseFullNameFromSpeech(text);
+      const parsedName = extractUpdatedContactNameFromSpeech(text) || parseFullNameFromSpeech(text);
       if (!parsedName) {
         sendText(ws, "I'm sorry, I didn't quite catch the name. What name should I use instead?");
         return;
@@ -3562,6 +3623,7 @@ async function handlePrompt(ws, caller, speech) {
       if (hasFullName(parsedName)) {
         caller.fullName = parsedName;
         caller.firstName = getFirstName(parsedName);
+        caller.pendingUpdatedContactFirstName = "";
         caller.lastStep = "ask_notes";
         sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
         return;
@@ -3610,7 +3672,10 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
         return;
       }
-      const parsedLastName = parseLastNameResponse(text);
+      const cleanedLastNameText = cleanForSpeech(text)
+        .replace(/\b(as well|too|also)\b/gi, "")
+        .trim();
+      const parsedLastName = parseLastNameResponse(cleanedLastNameText);
       if (!parsedLastName) {
         sendText(ws, "I'm sorry, I didn't quite catch the last name. Could you repeat it for me?");
         return;
