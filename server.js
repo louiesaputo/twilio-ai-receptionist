@@ -124,6 +124,7 @@ const SUBMISSION_TIMEOUT_MS = Number(process.env.SUBMISSION_TIMEOUT_MS || 4000);
 const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
+const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 
@@ -995,7 +996,7 @@ function isBrowserCaller(caller) {
 
 
 function buildBrowserCallbackPrompt() {
-  return "Can I get a good callback number for you in case we get disconnected?";
+  return "Can I get a good callback number for this service request?";
 }
 
 
@@ -2269,6 +2270,22 @@ function getOrCreateCaller(key) {
 
 
 
+function isPhoneCaptureStep(step = "") {
+  return new Set([
+    "confirm_phone",
+    "get_new_phone",
+    "capture_updated_callback_number",
+    "ask_demo_followup_phone"
+  ]).has(step);
+}
+
+
+function promptFinalizeDelayForCaller(caller, fallbackMs = PROMPT_FINALIZE_TIMEOUT_MS) {
+  if (!caller) return fallbackMs;
+  return isPhoneCaptureStep(caller.lastStep) ? PHONE_PROMPT_FINALIZE_TIMEOUT_MS : fallbackMs;
+}
+
+
 function lightlyPaceText(text) {
   const safe = cleanForSpeech(text || "");
   if (!safe) return "";
@@ -2332,13 +2349,14 @@ async function processBufferedPrompt(ws, caller, fallbackText = "") {
   } finally {
     caller.processingPrompt = false;
     if (cleanSpeechText(caller.promptBuffer || "")) {
-      schedulePromptFinalize(ws, caller, 200);
+      schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 200));
     }
   }
 }
 
 
-function schedulePromptFinalize(ws, caller, delayMs = PROMPT_FINALIZE_TIMEOUT_MS) {
+function schedulePromptFinalize(ws, caller, delayMs) {
+  delayMs = promptFinalizeDelayForCaller(caller, delayMs ?? PROMPT_FINALIZE_TIMEOUT_MS);
   if (!caller) return;
 
   clearPromptFinalizeTimer(caller);
@@ -3273,7 +3291,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get the best callback number in case we get disconnected?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get a good callback number for this service request?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
             : `Thank you, ${caller.firstName}. Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -3297,7 +3315,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get the best callback number in case we get disconnected?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get a good callback number for this service request?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
           : `Thank you, ${caller.firstName}. Can I get your last name as well?`
         : "Can I start by getting your full name, please?");
       return;
@@ -3578,7 +3596,7 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         sendText(ws, isBrowserCaller(caller)
-          ? "I'm sorry, I still need a callback number in case we get disconnected. What is the best number to reach you?"
+          ? "I'm sorry, I still need a good callback number for this service request. What number should I use?"
           : "I'm sorry, I still need a callback number. What is the best number to reach you?");
         return;
       }
@@ -4547,7 +4565,7 @@ wss.on("connection", (ws, request) => {
 
       if (type === "interrupt") {
         if (cleanSpeechText(caller.promptBuffer || "")) {
-          schedulePromptFinalize(ws, caller, 250);
+          schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 250));
         }
         return;
       }
@@ -4562,7 +4580,7 @@ wss.on("connection", (ws, request) => {
 
         if (data.last === false) {
           if (cleanSpeechText(caller.promptBuffer || "")) {
-            schedulePromptFinalize(ws, caller);
+            schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller));
           }
           return;
         }
