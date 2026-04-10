@@ -1272,6 +1272,11 @@ function extractLastNameFromFullName(name) {
   return parts.slice(1).join(" ");
 }
 
+function clearPendingUpdatedContactName(caller) {
+  caller.pendingUpdatedContactFirstName = "";
+  caller.pendingUpdatedContactFullName = "";
+}
+
 
 function isSameLastNameResponse(text) {
   const t = normalizeIntentText(text);
@@ -2220,6 +2225,7 @@ function getOrCreateCaller(key) {
       pendingIssuePrompt: "",
       pendingPromptText: "",
       pendingUpdatedContactFirstName: "",
+      pendingUpdatedContactFullName: "",
       repeatPromptIndex: 0,
       promptBuffer: "",
       demoFollowupContactName: "",
@@ -2555,12 +2561,24 @@ function buildBookingPayload(caller) {
 async function sendBookingToMake(caller) {
   if (caller.bookingSent || caller.bookingSending) return;
   const payload = buildBookingPayload(caller);
-  if (!payload) return;
+  if (!payload) {
+    console.warn("[BOOKING SKIPPED]", JSON.stringify({
+      calendarSlotConfirmed: caller.calendarSlotConfirmed,
+      appointmentDate: caller.appointmentDate || "",
+      appointmentTime: caller.appointmentTime || "",
+      fullName: caller.fullName || "",
+      callbackNumber: caller.callbackNumber || caller.phone || ""
+    }));
+    return;
+  }
+  console.log("[BOOKING PAYLOAD]", JSON.stringify(payload));
   caller.bookingSending = true;
   const result = await postJsonToWebhook(BOOKING_WEBHOOK_URL, payload, "BOOKING", SUBMISSION_TIMEOUT_MS);
   caller.bookingSending = false;
   if (result && result.statusCode >= 200 && result.statusCode < 300) {
     caller.bookingSent = true;
+  } else {
+    console.error("[BOOKING FAILED]", result ? result.statusCode : "no response");
   }
 }
 
@@ -2788,7 +2806,7 @@ function markEmergency(caller) {
 function buildEmergencyIntakePrompt(caller) {
   const acknowledgement = buildIssueAcknowledgement(caller);
   const withName = caller.firstName ? `${caller.firstName}, ` : "";
-  const leadIn = `${withName}${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away.`;
+  const leadIn = `${withName}${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away. I just need to get some information from you.`;
 
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
@@ -2799,7 +2817,7 @@ function buildEmergencyIntakePrompt(caller) {
     return `${leadIn} Before I go any further, can I get your last name as well?`;
   }
 
-  return `${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away. Can I start by getting your full name, please?`;
+  return `${acknowledgement} I'm here to help, and I'm going to get this marked as an emergency so our service team can review it right away. I just need to get some information from you. Can I start by getting your full name, please?`;
 }
 
 
@@ -3041,6 +3059,15 @@ async function handlePrompt(ws, caller, speech) {
   ]);
 
   if (postIntakeSteps.has(caller.lastStep) && isCallbackNumberChangeIntent(text)) {
+    clearPendingUpdatedContactName(caller);
+    const extractedUpdatedName = extractUpdatedContactNameFromSpeech(text);
+    if (extractedUpdatedName) {
+      if (hasFullName(extractedUpdatedName)) {
+        caller.pendingUpdatedContactFullName = extractedUpdatedName;
+      } else {
+        caller.pendingUpdatedContactFirstName = getFirstName(extractedUpdatedName) || extractedUpdatedName;
+      }
+    }
     caller.lastStep = "capture_updated_callback_number";
     sendText(ws, "No problem. What is the best callback number to use instead?");
     return;
@@ -3546,6 +3573,28 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.callbackNumber = normalizePhoneForStorage(text);
       caller.callbackConfirmed = true;
+
+      if (caller.pendingUpdatedContactFullName) {
+        caller.fullName = caller.pendingUpdatedContactFullName;
+        caller.firstName = getFirstName(caller.fullName);
+        clearPendingUpdatedContactName(caller);
+        caller.lastStep = "ask_notes";
+        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        return;
+      }
+
+      if (caller.pendingUpdatedContactFirstName) {
+        const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+        if (existingLastName) {
+          caller.lastStep = "confirm_same_last_name_after_contact_change";
+          sendText(ws, `Got it. Should I use ${caller.pendingUpdatedContactFirstName} ${existingLastName} as the contact name?`);
+          return;
+        }
+        caller.lastStep = "capture_updated_contact_last_name";
+        sendText(ws, `Got it. Can I get ${caller.pendingUpdatedContactFirstName}'s last name as well?`);
+        return;
+      }
+
       caller.lastStep = "confirm_contact_person_after_phone_change";
       sendText(ws, "Got it. Should the contact person stay the same, or would you like me to change that as well?");
       return;
@@ -3554,6 +3603,7 @@ async function handlePrompt(ws, caller, speech) {
 
     case "confirm_contact_person_after_phone_change": {
       if (isKeepSameContactPerson(text)) {
+        clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
         sendText(ws, "Got it. I've updated the callback number. Is there anything else you'd like me to note for the technician?");
         return;
@@ -3564,7 +3614,7 @@ async function handlePrompt(ws, caller, speech) {
         if (hasFullName(extractedUpdatedName)) {
           caller.fullName = extractedUpdatedName;
           caller.firstName = getFirstName(extractedUpdatedName);
-          caller.pendingUpdatedContactFirstName = "";
+          clearPendingUpdatedContactName(caller);
           caller.lastStep = "ask_notes";
           sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
           return;
@@ -3592,7 +3642,7 @@ async function handlePrompt(ws, caller, speech) {
         if (hasFullName(parsedName)) {
           caller.fullName = parsedName;
           caller.firstName = getFirstName(parsedName);
-          caller.pendingUpdatedContactFirstName = "";
+          clearPendingUpdatedContactName(caller);
           caller.lastStep = "ask_notes";
           sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
           return;
@@ -3623,7 +3673,7 @@ async function handlePrompt(ws, caller, speech) {
       if (hasFullName(parsedName)) {
         caller.fullName = parsedName;
         caller.firstName = getFirstName(parsedName);
-        caller.pendingUpdatedContactFirstName = "";
+        clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
         sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
         return;
@@ -3646,7 +3696,7 @@ async function handlePrompt(ws, caller, speech) {
       if (existingLastName && (isAffirmative(text) || isSameLastNameResponse(text))) {
         caller.fullName = `${caller.pendingUpdatedContactFirstName} ${existingLastName}`.trim();
         caller.firstName = getFirstName(caller.fullName);
-        caller.pendingUpdatedContactFirstName = "";
+        clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
         sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
         return;
@@ -3667,7 +3717,7 @@ async function handlePrompt(ws, caller, speech) {
       if (existingLastName && isSameLastNameResponse(text)) {
         caller.fullName = `${caller.pendingUpdatedContactFirstName} ${existingLastName}`.trim();
         caller.firstName = getFirstName(caller.fullName);
-        caller.pendingUpdatedContactFirstName = "";
+        clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
         sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
         return;
