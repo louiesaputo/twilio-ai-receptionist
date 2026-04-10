@@ -816,8 +816,8 @@ function buildPostNotesTransition(caller, hadNotes) {
 
 function buildAddressRequestPrompt(caller) {
   return caller.leadType === "quote"
-    ? "Got it. Can I get the project address?"
-    : "Got it. Can I get the service address?";
+    ? "Got it, and what is the project address, please?"
+    : "Got it, and what is the service address, please?";
 }
 
 
@@ -832,22 +832,27 @@ function appendAdditionalIssue(caller, issueText) {
 }
 
 
+function buildTechnicianNotesPrompt() {
+  return "Before I wrap this up, are there any special instructions or notes you want me to include for the technician?";
+}
+
+
 
 
 function buildFinalSubmissionPrompt(caller) {
   if (caller.emergencyAlert) {
-    return "If there's nothing else, can I go ahead and get this submitted as an emergency and have somebody from our service team reach out to you?";
+    return "If there's anything else I can do for you, please let me know. Otherwise, I'll go ahead and get this submitted as an emergency so one of our team members can reach out to you as soon as possible.";
   }
   if (caller.leadType === "quote") {
-    return "If there's nothing else, can I go ahead and get this submitted and have somebody from the office reach out to you about your quote request?";
+    return "Is there anything else I can do for you today? Otherwise, someone from our office will reach out to you about your quote request.";
   }
   if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
-    return `If there's nothing else, can I go ahead and get this submitted and have somebody call you on ${caller.appointmentDate} at ${caller.appointmentTime}?`;
+    return `Alright, I have you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. Is there anything else I can do for you today?`;
   }
   if (caller.status === "scheduled_pending_confirmation" && caller.appointmentDate && caller.appointmentTime) {
-    return `If there's nothing else, can I go ahead and get this submitted and have somebody from the office confirm your requested callback time on ${caller.appointmentDate} at ${caller.appointmentTime}?`;
+    return `Alright, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. Is there anything else I can do for you today?`;
   }
-  return "If there's nothing else, can I go ahead and get this submitted and have somebody from the office reach out to you?";
+  return "Is there anything else I can do for you today? Otherwise, someone from our office will reach out to you very soon.";
 }
 
 
@@ -855,10 +860,8 @@ function buildFinalSubmissionPrompt(caller) {
 
 
 
-
-
 function buildFinalSubmissionClose(caller) {
-  return "Thank you for calling Blue Caller Automation, and you'll hear from us very soon.";
+  return "Great. Thank you for calling Blue Caller Automation. You will hear from one of our team members very soon. Enjoy the rest of your day. Goodbye.";
 }
 
 
@@ -959,6 +962,27 @@ function formatAddressForSpeech(address) {
   return city ? `${streetSpeech} in ${city}` : streetSpeech;
 }
 
+function formatAddressForConfirmation(address) {
+  const safe = cleanForSpeech(address || "");
+  if (!safe) return "";
+
+  let trimmed = safe;
+  if (trimmed.includes(",")) {
+    const parts = trimmed.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
+    if (parts.length >= 2) {
+      trimmed = `${parts[0]}, ${parts[1]}`;
+    }
+  } else {
+    trimmed = trimmed
+      .replace(/,?\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)\s+\d{5}(?:-\d{4})?$/i, "")
+      .replace(/,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i, "")
+      .trim();
+  }
+
+  return formatAddressForSpeech(trimmed);
+}
+
+
 
 
 
@@ -971,7 +995,7 @@ function isBrowserCaller(caller) {
 
 
 function buildBrowserCallbackPrompt() {
-  return "It looks like your number didn't come through on my end. What is a good callback number in case we get disconnected?";
+  return "Can I get a good callback number for you in case we get disconnected?";
 }
 
 
@@ -2080,9 +2104,9 @@ function nextPromptIndex(caller, key) {
 
 function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
   const firstAvailablePrompts = [
-    "I already have the calendar up. Let me see what the first available is.",
-    "Let's see what the first available is.",
-    "Let me see what I have available first."
+    "Okay, I'm looking at the calendar now and checking for the first available date for you.",
+    "Okay, I'm looking at the calendar now and checking for the first available date for you.",
+    "Okay, I'm looking at the calendar now and checking for the first available date for you."
   ];
 
 
@@ -2913,7 +2937,7 @@ function buildNextPrompt(caller) {
 
 
   if (caller.lastStep === "confirm_address") {
-    return `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`;
+    return `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`;
   }
 
 
@@ -3001,7 +3025,7 @@ function sendAfterAddressConfirmed(ws, caller) {
   }
   if (caller.emergencyAlert) {
     caller.lastStep = "ask_notes";
-    sendText(ws, "Before I submit this, is there anything else you'd like me to note for the technician?");
+    sendText(ws, buildTechnicianNotesPrompt());
     return;
   }
   caller.lastStep = "schedule_or_callback";
@@ -3579,7 +3603,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.firstName = getFirstName(caller.fullName);
         clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
         return;
       }
 
@@ -3605,7 +3629,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isKeepSameContactPerson(text)) {
         clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number. Is there anything else you'd like me to note for the technician?");
+        sendText(ws, "Got it. I've updated the callback number. " + buildTechnicianNotesPrompt());
         return;
       }
 
@@ -3616,7 +3640,7 @@ async function handlePrompt(ws, caller, speech) {
           caller.firstName = getFirstName(extractedUpdatedName);
           clearPendingUpdatedContactName(caller);
           caller.lastStep = "ask_notes";
-          sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+          sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
           return;
         }
         caller.pendingUpdatedContactFirstName = getFirstName(extractedUpdatedName) || extractedUpdatedName;
@@ -3644,7 +3668,7 @@ async function handlePrompt(ws, caller, speech) {
           caller.firstName = getFirstName(parsedName);
           clearPendingUpdatedContactName(caller);
           caller.lastStep = "ask_notes";
-          sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+          sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
           return;
         }
         caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
@@ -3675,7 +3699,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.firstName = getFirstName(parsedName);
         clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
         return;
       }
       caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
@@ -3698,7 +3722,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.firstName = getFirstName(caller.fullName);
         clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
         return;
       }
       if (isNegative(text)) {
@@ -3719,7 +3743,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.firstName = getFirstName(caller.fullName);
         clearPendingUpdatedContactName(caller);
         caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
         return;
       }
       const cleanedLastNameText = cleanForSpeech(text)
@@ -3734,7 +3758,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.firstName = getFirstName(caller.fullName);
       caller.pendingUpdatedContactFirstName = "";
       caller.lastStep = "ask_notes";
-      sendText(ws, "Got it. I've updated the callback number and contact name. Is there anything else you'd like me to note for the technician?");
+      sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
       return;
     }
 
@@ -3742,7 +3766,7 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_address": {
       caller.address = normalizeAddressInput(text);
       caller.lastStep = "confirm_address";
-      sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForSpeech(caller.address)}. Is that correct?`);
+      sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
       return;
     }
 
@@ -3762,7 +3786,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       if (looksLikeAddressCorrection(text)) {
         caller.address = normalizeAddressInput(text);
-        sendText(ws, `Got it. Let me read that back — ${formatAddressForSpeech(caller.address)}. Is that correct?`);
+        sendText(ws, `Got it. Let me read that back — ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
         return;
       }
 
@@ -3782,14 +3806,14 @@ async function handlePrompt(ws, caller, speech) {
           }
           if (addressDecision.intent === "correct_address" && addressDecision.corrected_address) {
             caller.address = normalizeAddressInput(addressDecision.corrected_address);
-            sendText(ws, `Got it. Let me read that back — ${formatAddressForSpeech(caller.address)}. Is that correct?`);
+            sendText(ws, `Got it. Let me read that back — ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
             return;
           }
         }
       }
 
 
-      sendText(ws, `I just need a yes or no — is ${formatAddressForSpeech(caller.address)} correct?`);
+      sendText(ws, `I just need a yes or no — is ${formatAddressForConfirmation(caller.address)} correct?`);
       return;
     }
 
@@ -3891,7 +3915,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!availability) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. Is there anything else you'd like me to note for the technician?");
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
           return;
         }
         caller.pendingOfferedDate = availability.date;
@@ -3907,7 +3931,7 @@ async function handlePrompt(ws, caller, speech) {
       if (wantsOfficeCallback(text)) {
         caller.status = "callback_requested";
         caller.lastStep = "ask_notes";
-        sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. Is there anything else you'd like me to note for the technician?");
+        sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt());
         return;
       }
 
@@ -3933,7 +3957,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!availability) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. Is there anything else you'd like me to note for the technician?");
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
           return;
         }
         caller.pendingOfferedDate = availability.date;
@@ -3963,7 +3987,7 @@ async function handlePrompt(ws, caller, speech) {
           caller.status = "callback_requested";
           caller.appointmentTime = detectTimePreference(text) || cleanForSpeech(text);
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. Is there anything else you'd like me to note for the technician?");
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
           return;
         }
         caller.pendingOfferedDate = availability.date;
@@ -3976,7 +4000,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.status = "scheduled_pending_confirmation";
       caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
-      sendText(ws, `Okay, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from the office will confirm the exact callback time. Is there anything else you'd like me to note for the technician?`);
+      sendText(ws, buildTechnicianNotesPrompt());
       return;
     }
 
@@ -3989,13 +4013,32 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+      if (isSpecificTime(text) || detectTimePreference(text)) {
+        const requestDetails = parseAvailabilityRequest(text, caller.pendingOfferedDate, caller.pendingOfferedTime);
+        caller.requestedDate = requestDetails.requestedDate || caller.pendingOfferedDate;
+        caller.requestedTimePreference = requestDetails.requestedTimePreference;
+        caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
+        announceCalendarLookup(ws, caller, text, "specific_date");
+        const availability = await checkCalendarAvailability(caller, requestDetails);
+        if (!availability) {
+          caller.status = "callback_requested";
+          caller.lastStep = "ask_notes";
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          return;
+        }
+        caller.pendingOfferedDate = availability.date;
+        caller.pendingOfferedTime = availability.time;
+        sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
+        return;
+      }
+
       if (isScheduleOfferAcceptance(text)) {
         caller.appointmentDate = caller.pendingOfferedDate;
         caller.appointmentTime = caller.pendingOfferedTime;
         caller.status = "scheduled";
         caller.calendarSlotConfirmed = true;
         caller.lastStep = "ask_notes";
-        sendText(ws, `Okay, I have you scheduled for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Is there anything else you'd like me to note for the technician?`);
+        sendText(ws, buildTechnicianNotesPrompt());
         return;
       }
 
@@ -4009,7 +4052,7 @@ async function handlePrompt(ws, caller, speech) {
             caller.status = "scheduled";
             caller.calendarSlotConfirmed = true;
             caller.lastStep = "ask_notes";
-            sendText(ws, `Okay, I have you scheduled for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Is there anything else you'd like me to note for the technician?`);
+            sendText(ws, buildTechnicianNotesPrompt());
             return;
           }
 
@@ -4024,7 +4067,7 @@ async function handlePrompt(ws, caller, speech) {
           if (schedulingDecision.intent === "request_office_callback") {
             caller.status = "callback_requested";
             caller.lastStep = "ask_notes";
-            sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. Is there anything else you'd like me to note for the technician?");
+            sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt());
             return;
           }
 
@@ -4039,7 +4082,7 @@ async function handlePrompt(ws, caller, speech) {
               sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
               caller.status = "callback_requested";
               caller.lastStep = "ask_notes";
-              sendText(ws, "Is there anything else you'd like me to note for the technician?");
+              sendText(ws, buildTechnicianNotesPrompt());
               return;
             }
             caller.pendingOfferedDate = alternateResult.availability.date;
@@ -4067,7 +4110,7 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "Is there anything else you'd like me to note for the technician?");
+          sendText(ws, buildTechnicianNotesPrompt());
           return;
         }
         caller.pendingOfferedDate = alternateResult.availability.date;
@@ -4083,7 +4126,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.status = "scheduled";
         caller.calendarSlotConfirmed = true;
         caller.lastStep = "ask_notes";
-        sendText(ws, `Okay, I have you scheduled for your callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Is there anything else you'd like me to note for the technician?`);
+        sendText(ws, buildTechnicianNotesPrompt());
         return;
       }
 
@@ -4104,6 +4147,15 @@ async function handlePrompt(ws, caller, speech) {
 
     case "ask_notes": {
       if (isCallbackNumberChangeIntent(text)) {
+        clearPendingUpdatedContactName(caller);
+        const extractedUpdatedName = extractUpdatedContactNameFromSpeech(text);
+        if (extractedUpdatedName) {
+          if (hasFullName(extractedUpdatedName)) {
+            caller.pendingUpdatedContactFullName = extractedUpdatedName;
+          } else {
+            caller.pendingUpdatedContactFirstName = getFirstName(extractedUpdatedName) || extractedUpdatedName;
+          }
+        }
         caller.lastStep = "capture_updated_callback_number";
         sendText(ws, "No problem. What is the best callback number to use instead?");
         return;
