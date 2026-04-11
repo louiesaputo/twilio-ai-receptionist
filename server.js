@@ -1,4 +1,4 @@
-﻿/*************************************************
+/*************************************************
  CONVERSATIONRELAY BASELINE V15 PASS 6 SEQUENCE + PACING PATCH
  DATE: 2026-04-09 (sequence + pacing patch: early emergency acknowledgment, slight response delay, lower interrupt sensitivity)
 
@@ -524,16 +524,17 @@ function extractIntroFirstName(text) {
   const safe = stripGreetingPrefix(text || "");
   if (!safe) return "";
 
-
-
+  const direct = safe.match(/^(?:this is|my name is|i am|i'm)\s+([A-Za-z'-]+)\b/i)
+    || safe.match(/^([A-Za-z'-]+)\s+here\b/i);
+  if (direct) {
+    const first = cleanForSpeech(direct[1] || "").replace(/[^A-Za-z'-]/g, "");
+    if (first) return toTitleCase(first);
+  }
 
   const patterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z'-]+)(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i,
     /^([a-zA-Z'-]+)\s+here(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i
   ];
-
-
-
 
   for (const pattern of patterns) {
     const match = safe.match(pattern);
@@ -541,9 +542,6 @@ function extractIntroFirstName(text) {
     const possibleName = normalizeNameCandidate(match[1]);
     if (possibleName) return getFirstName(possibleName);
   }
-
-
-
 
   return "";
 }
@@ -1123,8 +1121,8 @@ function buildPostNotesTransition(caller, hadNotes) {
 
 function buildAddressRequestPrompt(caller) {
   return caller.leadType === "quote"
-    ? "Got it, and what is the project address, please?"
-    : "Got it, and what is the service address, please?";
+    ? "What is the project address?"
+    : "What is the service address?";
 }
 
 
@@ -1377,7 +1375,7 @@ function isBrowserCaller(caller) {
 
 
 function buildBrowserCallbackPrompt() {
-  return "Can I get a good callback number for this service request?";
+  return "Can I get a good callback number for you?";
 }
 
 
@@ -1718,34 +1716,41 @@ function extractUpdatedContactNameFromSpeech(text) {
   const safe = cleanForSpeech(text || "");
   if (!safe) return "";
 
+  const rawSpouse = safe.match(/(?:my\s+wife|my\s+husband)\s+([A-Za-z'-]+(?:\s+[A-Za-z'-]+){0,2})\b/i);
+  if (rawSpouse) {
+    const spouseCandidate = parseFullNameFromSpeech(rawSpouse[1]);
+    if (spouseCandidate) return spouseCandidate;
+  }
+
+  const rawNamed = safe.match(/(?:her|his)\s+name\s+is\s+([A-Za-z'-]+(?:\s+[A-Za-z'-]+){0,2})\b/i);
+  if (rawNamed) {
+    const namedCandidate = parseFullNameFromSpeech(rawNamed[1]);
+    if (namedCandidate) return namedCandidate;
+  }
 
   const stripped = safe
     .replace(/^(no|nope|nah)\s*,?\s*/i, "")
-    .replace(/^(please\s+)?(?:change|update)\s+(?:that\s+too|the\s+contact(?:\s+person)?|the\s+name|the\s+contact\s+name)\s+(?:to|for)\s+/i, "")
+    .replace(/^(?:can|could|would)\s+you\s+(?:switch|change|update)\s+(?:it|that|the\s+contact(?:\s+person)?|the\s+name)?\s*(?:to|for)\s+/i, "")
+    .replace(/^(please\s+)?(?:switch|change|update)\s+(?:that\s+too|the\s+contact(?:\s+person)?|the\s+name|the\s+contact\s+name)?\s*(?:to|for)\s+/i, "")
     .replace(/^(?:change|update)\s+(?:it|that)\s+to\s+/i, "")
     .replace(/^(?:use|make)\s+/i, "")
     .replace(/^(?:my\s+wife(?:'s)?|my\s+husband(?:'s)?|my\s+wife|my\s+husband)\s+name\s+is\s+/i, "")
     .replace(/^(?:my\s+wife(?:'s)?|my\s+husband(?:'s)?|my\s+wife|my\s+husband)\s+/i, "")
-    .replace(/^(?:her|him)\s+name\s+is\s+/i, "")
+    .replace(/^(?:her|him|his)\s+name\s+is\s+/i, "")
     .replace(/^(?:it's|it is)\s+/i, "")
     .trim();
-
 
   const parsed = parseFullNameFromSpeech(stripped);
   if (parsed) return parsed;
 
-
-  const direct = stripped.match(/^([A-Za-z'-]+(?:\s+[A-Za-z'-]+)?)\b/);
+  const direct = stripped.match(/^([A-Za-z'-]+(?:\s+[A-Za-z'-]+){0,2})\b/);
   if (direct) {
     const candidate = parseFullNameFromSpeech(direct[1]);
     if (candidate) return candidate;
   }
 
-
   return "";
 }
-
-
 
 
 function extractLastNameFromFullName(name) {
@@ -1932,6 +1937,91 @@ function buildRepeatPrompt(caller) {
   const index = nextPromptIndex(caller, "repeatPromptIndex");
   return variants[index % variants.length];
 }
+
+function stripSocialLeadIn(text) {
+  let safe = cleanSpeechText(text || "");
+  if (!safe) return "";
+
+  safe = safe
+    .replace(/^(?:hi|hello|hey)\s*,?\s*alex\s*[,.!? -]*/i, "")
+    .replace(/^(?:hi|hello|hey)\s*[,.!? -]*/i, "")
+    .replace(/^(?:how are you(?: doing)?|how're you(?: doing)?|how are ya|how ya doing|how you doing)\s*[,.!? -]*/i, "")
+    .trim();
+
+  return safe;
+}
+
+function isHowAreYouOnly(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (!containsAny(t, ["how are you", "how re you", "how are ya", "how ya doing", "how you doing"])) return false;
+
+  const stripped = stripSocialLeadIn(text);
+  if (!stripped) return true;
+  if (looksLikeIssueText(stripped)) return false;
+  const opening = extractOpeningNameAndIssue(stripped);
+  return !cleanForSpeech(opening.issueText || "");
+}
+
+function isShortCourtesyResponse(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return new Set([
+    "thank you", "thanks", "thank you alex", "thanks alex", "okay thank you", "ok thank you",
+    "alright thank you", "all right thank you", "appreciate it", "i appreciate it", "thank you so much",
+    "thanks so much", "much appreciated"
+  ]).has(t);
+}
+
+function buildResumePromptForCurrentStep(caller) {
+  switch (caller.lastStep) {
+    case "ask_issue":
+    case "ask_issue_again":
+      return "How can I help you today?";
+    case "ask_name":
+      return "Can I start by getting your full name, please?";
+    case "ask_last_name":
+      return "Can I get your last name as well?";
+    case "confirm_phone":
+      return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+    case "get_new_phone":
+      return isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : "What is the best callback number to reach you?";
+    case "ask_address":
+      return buildAddressRequestPrompt(caller);
+    case "confirm_address":
+      return `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`;
+    case "schedule_or_callback":
+      return buildSchedulingChoicePrompt(caller);
+    case "ask_appointment_day":
+      return "What day works best for you?";
+    case "ask_appointment_time":
+      return "What callback time works best for you?";
+    case "confirm_first_available":
+      return caller.pendingOfferedDate && caller.pendingOfferedTime ? buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime) : "Would you like me to schedule that callback?";
+    case "ask_notes":
+      return buildTechnicianNotesPrompt();
+    case "offer_demo_followup":
+      return "Would you like me to have one of our team members call you to discuss how this could help your company?";
+    case "confirm_demo_followup_info":
+      return "Should I use the contact information you already gave me?";
+    case "ask_demo_followup_contact_name":
+      return "What is a good contact name?";
+    case "ask_demo_followup_phone":
+      return "What about a phone number?";
+    case "ask_demo_followup_email_optional":
+    case "ask_demo_email_optional":
+      return "Would you like to include an email address as well?";
+    case "ask_quote_email_optional":
+      return "Would you like to include an email address with this quote request as well?";
+    default:
+      return "";
+  }
+}
+
+function buildServiceIntakeLeadIn() {
+  return "I'm here to help, so let's get a few details from you.";
+}
+
 
 
 
@@ -2830,9 +2920,9 @@ function buildCalendarLookupPrompt(caller, rawText, mode = "general") {
 
 
   const specificDatePrompts = [
-    "Alright, let me see if that date is available.",
-    "Let me see if that date is open.",
-    "I already have the calendar up. Let me see if that date is available."
+    "Alright, let me see if that slot is available.",
+    "Let me see if that time is open.",
+    "Let me check whether that slot is available."
   ];
 
 
@@ -4087,12 +4177,17 @@ async function handlePrompt(ws, caller, speech) {
     return;
   }
 
+  if (isShortCourtesyResponse(text)) {
+    const resumePrompt = buildResumePromptForCurrentStep(caller);
+    sendText(ws, resumePrompt ? `You're welcome. ${resumePrompt}` : "You're welcome.");
+    return;
+  }
 
-
-
-
-
-
+  if ((caller.lastStep === "ask_issue" || caller.lastStep === "ask_issue_again") && isHowAreYouOnly(text)) {
+    caller.lastStep = "ask_issue_again";
+    sendText(ws, "I'm doing well, thank you. How can I help you today?");
+    return;
+  }
 
   if (isPricingQuestion(text)) {
     sendText(ws, pricingResponse());
@@ -4150,7 +4245,9 @@ async function handlePrompt(ws, caller, speech) {
   switch (caller.lastStep) {
     case "ask_issue": {
       let parsed = null;
-      const rawIntroFirstName = extractIntroFirstName(text);
+      const strippedOpeningText = stripSocialLeadIn(text);
+      const workingOpeningText = strippedOpeningText && strippedOpeningText !== text ? strippedOpeningText : text;
+      const rawIntroFirstName = extractIntroFirstName(workingOpeningText);
       if (rawIntroFirstName && !caller.firstName) {
         caller.firstName = rawIntroFirstName;
         caller.fullName = caller.fullName || rawIntroFirstName;
@@ -4158,7 +4255,7 @@ async function handlePrompt(ws, caller, speech) {
       }
 
       if (AI_INTERPRETER_ENABLED) {
-        const extractedOpening = await extractOpeningTurn(text, buildAIContext(caller));
+        const extractedOpening = await extractOpeningTurn(workingOpeningText, buildAIContext(caller));
         if (extractedOpening && extractedOpening.intent && extractedOpening.intent !== "unclear") {
           applyExtractedName(caller, extractedOpening.full_name, extractedOpening.first_name);
 
@@ -4191,14 +4288,14 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (!parsed) {
-        parsed = extractOpeningNameAndIssue(text);
+        parsed = extractOpeningNameAndIssue(workingOpeningText);
       }
 
 
 
 
       if (!parsed.name) {
-        const introFirstName = extractIntroFirstName(text);
+        const introFirstName = extractIntroFirstName(workingOpeningText);
         if (introFirstName) parsed.name = introFirstName;
       }
 
@@ -4212,7 +4309,11 @@ async function handlePrompt(ws, caller, speech) {
       }
       if (!parsed.issueText) {
         caller.lastStep = "ask_issue_again";
-        sendText(ws, "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?");
+        if (workingOpeningText !== text) {
+          sendText(ws, "I'm doing well, thank you. How can I help you today?");
+        } else {
+          sendText(ws, "I'm sorry, I didn't quite catch the problem. Could you briefly tell me what is going on?");
+        }
         return;
       }
       if (isGenericEmergencyIssue(parsed.issueText)) {
@@ -4318,10 +4419,10 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
           ? isBrowserCaller(caller)
-            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. ${buildBrowserCallbackPrompt()}`
-            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
-        : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
+            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} ${buildBrowserCallbackPrompt()}`
+            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Before I go any further, can I get your last name as well?`
+        : `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
       return;
     }
 
@@ -4333,11 +4434,17 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_issue_again": {
-      if (isGenericEmergencyIssue(text)) {
+      const strippedFollowupText = stripSocialLeadIn(text);
+      const workingFollowupText = strippedFollowupText && strippedFollowupText !== text ? strippedFollowupText : text;
+      if (!workingFollowupText) {
+        sendText(ws, "I'm doing well, thank you. What can I help you with today?");
+        return;
+      }
+      if (isGenericEmergencyIssue(workingFollowupText)) {
         sendText(ws, "I understand this is urgent. What exactly is going on so I can note the emergency correctly?");
         return;
       }
-      caller.issue = normalizeGenericServiceIssue(text);
+      caller.issue = normalizeGenericServiceIssue(workingFollowupText);
       afterIssueCaptured(caller);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
@@ -4357,8 +4464,8 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get a good callback number for this service request?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
-            : `Thank you, ${caller.firstName}. Can I get your last name as well?`
+            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get a good callback number for you?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+            : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn()} Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
@@ -4381,9 +4488,9 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get a good callback number for this service request?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
-          : `Thank you, ${caller.firstName}. Can I get your last name as well?`
-        : "Can I start by getting your full name, please?");
+          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${buildServiceIntakeLeadIn()} ${isBrowserCaller(caller) ? "Can I get a good callback number for you?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+          : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn()} Can I get your last name as well?`
+        : `${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
       return;
     }
 
@@ -4432,10 +4539,10 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
           ? isBrowserCaller(caller)
-            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. ${buildBrowserCallbackPrompt()}`
-            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} Before I go any further, can I get your last name as well?`
-        : `${buildIssueAcknowledgement(caller)} I'd be happy to help with that. Can I start by getting your full name, please?`);
+            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} ${buildBrowserCallbackPrompt()}`
+            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Before I go any further, can I get your last name as well?`
+        : `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
       return;
     }
 
@@ -4718,7 +4825,7 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         sendText(ws, isBrowserCaller(caller)
-          ? "I'm sorry, I still need a good callback number for this service request. What number should I use?"
+          ? "I'm sorry, I still need a good callback number. What number should I use?"
           : "I'm sorry, I still need a callback number. What is the best number to reach you?");
         return;
       }
@@ -5522,7 +5629,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isNegative(text)) {
         caller.lastStep = "ask_demo_followup_contact_name";
-        sendText(ws, "What is the best contact name for us to use regarding this demo?");
+        sendText(ws, "What is a good contact name?");
         return;
       }
 
@@ -5547,12 +5654,12 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_demo_followup_contact_name": {
       const parsedName = parseFullNameFromSpeech(text);
       if (!parsedName) {
-        sendText(ws, "I'm sorry, I didn't quite catch the contact name. What is the best contact name for us to use regarding this demo?");
+        sendText(ws, "I'm sorry, I didn't quite catch the contact name. What is a good contact name?");
         return;
       }
       caller.demoFollowupContactName = parsedName;
       caller.lastStep = "ask_demo_followup_phone";
-      sendText(ws, "What is the best callback number for us to use regarding this demo?");
+      sendText(ws, "What about a phone number?");
       return;
     }
 
