@@ -526,24 +526,10 @@ function extractIntroFirstName(text) {
 
   const direct = safe.match(/^(?:this is|my name is|i am|i'm)\s+([A-Za-z'-]+)\b/i)
     || safe.match(/^([A-Za-z'-]+)\s+here\b/i);
-  if (direct) {
-    const first = cleanForSpeech(direct[1] || "").replace(/[^A-Za-z'-]/g, "");
-    if (first) return toTitleCase(first);
-  }
+  if (!direct) return "";
 
-  const patterns = [
-    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z'-]+)(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i,
-    /^([a-zA-Z'-]+)\s+here(?:(?:\s*,\s*)|(?:\s+and\s+)|(?:\s+i\s+)|(?:\s+$)|$)/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = safe.match(pattern);
-    if (!match) continue;
-    const possibleName = normalizeNameCandidate(match[1]);
-    if (possibleName) return getFirstName(possibleName);
-  }
-
-  return "";
+  const first = cleanForSpeech(direct[1] || "").replace(/[^A-Za-z'-]/g, "");
+  return first ? toTitleCase(first) : "";
 }
 
 
@@ -1945,7 +1931,8 @@ function stripSocialLeadIn(text) {
   safe = safe
     .replace(/^(?:hi|hello|hey)\s*,?\s*alex\s*[,.!? -]*/i, "")
     .replace(/^(?:hi|hello|hey)\s*[,.!? -]*/i, "")
-    .replace(/^(?:how are you(?: doing)?|how're you(?: doing)?|how are ya|how ya doing|how you doing)\s*[,.!? -]*/i, "")
+    .replace(/^(?:how are you(?: doing)?|how're you(?: doing)?|how are ya|how ya doing|how you doing)\s*,?\s*(?:alex)?\s*[,.!? -]*/i, "")
+    .replace(/^(?:alex)\s*[,.!? -]*/i, "")
     .trim();
 
   return safe;
@@ -1958,6 +1945,7 @@ function isHowAreYouOnly(text) {
 
   const stripped = stripSocialLeadIn(text);
   if (!stripped) return true;
+  if (/^(alex)$/i.test(cleanForSpeech(stripped))) return true;
   if (looksLikeIssueText(stripped)) return false;
   const opening = extractOpeningNameAndIssue(stripped);
   return !cleanForSpeech(opening.issueText || "");
@@ -1980,12 +1968,32 @@ function buildResumePromptForCurrentStep(caller) {
       return "How can I help you today?";
     case "ask_name":
       return "Can I start by getting your full name, please?";
+    case "ask_first_name_spelling":
+      return caller.firstName ? `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?` : "How do you spell your first name?";
     case "ask_last_name":
       return "Can I get your last name as well?";
+    case "ask_item_issue_detail":
+      return caller.pendingIssuePrompt ? `What seems to be going on with ${caller.pendingIssuePrompt}?` : "What seems to be going on?";
+    case "leak_emergency_choice":
+      return "Do you want me to mark this as an emergency?";
     case "confirm_phone":
       return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
     case "get_new_phone":
       return isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : "What is the best callback number to reach you?";
+    case "capture_updated_callback_number":
+      return "What is the best callback number to use instead?";
+    case "confirm_contact_person_after_phone_change":
+      return "Should the contact person stay the same, or would you like me to change that as well?";
+    case "capture_updated_contact_name":
+      return "What name should I use instead?";
+    case "confirm_same_last_name_after_contact_change": {
+      const existingLastName = extractLastNameFromFullName(caller.fullName || "");
+      return existingLastName && caller.pendingUpdatedContactFirstName
+        ? `Should I use ${caller.pendingUpdatedContactFirstName} ${existingLastName} as the contact name?`
+        : "Should I use that as the contact name?";
+    }
+    case "capture_updated_contact_last_name":
+      return caller.pendingUpdatedContactFirstName ? `What is ${caller.pendingUpdatedContactFirstName}'s last name?` : "What is the last name?";
     case "ask_address":
       return buildAddressRequestPrompt(caller);
     case "confirm_address":
@@ -2011,8 +2019,19 @@ function buildResumePromptForCurrentStep(caller) {
     case "ask_demo_followup_email_optional":
     case "ask_demo_email_optional":
       return "Would you like to include an email address as well?";
+    case "capture_demo_followup_email":
+    case "capture_demo_email":
+      return "Alright, go ahead and spell that out for me.";
+    case "ask_project_timeline":
+      return "What is the projected timeline or anticipated start date for this project?";
+    case "ask_project_scope":
+      return "Can you give me a quick idea of what all you'd like done?";
+    case "ask_proposal_deadline":
+      return "Is there a deadline you're working with for the estimate or proposal?";
     case "ask_quote_email_optional":
       return "Would you like to include an email address with this quote request as well?";
+    case "capture_quote_email":
+      return "Alright, go ahead and spell that out for me.";
     default:
       return "";
   }
@@ -3099,6 +3118,7 @@ function getOrCreateCaller(key) {
       pendingPromptText: "",
       pendingUpdatedContactFirstName: "",
       pendingUpdatedContactFullName: "",
+      pendingLeadResubmission: false,
       repeatPromptIndex: 0,
       promptBuffer: "",
       demoFollowupContactName: "",
@@ -3106,6 +3126,7 @@ function getOrCreateCaller(key) {
       demoFollowupEmail: "",
       additionalIssues: [],
       calendarPromptIndex: 0,
+      scheduleChoicePromptIndex: 0,
       callbackOfferIndex: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -3504,13 +3525,27 @@ function postJsonToWebhook(webhookUrl, payload, label, timeoutMs = WEBHOOK_TIMEO
 
 
 
-async function sendLeadToMake(caller) {
-  if (caller.makeSent || caller.makeSending || !shouldSendToMake(caller)) return;
+async function sendLeadToMake(caller, force = false) {
+  if (!shouldSendToMake(caller)) return;
+  if (caller.makeSending) {
+    if (force) caller.pendingLeadResubmission = true;
+    return;
+  }
+  if (!force && caller.makeSent) return;
+
   caller.makeSending = true;
   const result = await postJsonToWebhook(MAKE_WEBHOOK_URL, buildMakePayload(caller), "MAKE", SUBMISSION_TIMEOUT_MS);
   caller.makeSending = false;
   if (result && result.statusCode >= 200 && result.statusCode < 300) {
     caller.makeSent = true;
+  }
+
+  if (caller.pendingLeadResubmission) {
+    caller.pendingLeadResubmission = false;
+    caller.makeSent = false;
+    queueBackgroundTask("MAKE RESUBMIT", async () => {
+      await sendLeadToMake(caller, true);
+    });
   }
 }
 
@@ -3583,8 +3618,8 @@ async function sendBookingToMake(caller) {
 
 
 
-async function submitPrimaryLeadAndBooking(caller) {
-  await sendLeadToMake(caller);
+async function submitPrimaryLeadAndBooking(caller, options = {}) {
+  await sendLeadToMake(caller, options.forceLead === true);
   await sendBookingToMake(caller);
 }
 
@@ -3595,9 +3630,9 @@ async function submitPrimaryLeadAndBooking(caller) {
 
 
 
-function queuePrimaryLeadAndBooking(caller) {
+function queuePrimaryLeadAndBooking(caller, options = {}) {
   queueBackgroundTask("PRIMARY SUBMIT", async () => {
-    await submitPrimaryLeadAndBooking(caller);
+    await submitPrimaryLeadAndBooking(caller, options);
   });
 }
 
@@ -4246,7 +4281,7 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_issue": {
       let parsed = null;
       const strippedOpeningText = stripSocialLeadIn(text);
-      const workingOpeningText = strippedOpeningText && strippedOpeningText !== text ? strippedOpeningText : text;
+      const workingOpeningText = strippedOpeningText ? strippedOpeningText : text;
       const rawIntroFirstName = extractIntroFirstName(workingOpeningText);
       if (rawIntroFirstName && !caller.firstName) {
         caller.firstName = rawIntroFirstName;
@@ -4904,7 +4939,7 @@ async function handlePrompt(ws, caller, speech) {
         const existingLastName = extractLastNameFromFullName(caller.fullName || "");
         if (existingLastName) {
           caller.lastStep = "confirm_same_last_name_after_contact_change";
-          sendText(ws, `Got it. Is ${caller.pendingUpdatedContactFirstName}'s last name the same as the current contact's last name?`);
+          sendText(ws, `Got it. Should I use ${caller.pendingUpdatedContactFirstName} ${existingLastName} as the contact name?`);
           return;
         }
         caller.lastStep = "capture_updated_contact_last_name";
@@ -4934,7 +4969,7 @@ async function handlePrompt(ws, caller, speech) {
         const existingLastName = extractLastNameFromFullName(caller.fullName || "");
         if (existingLastName) {
           caller.lastStep = "confirm_same_last_name_after_contact_change";
-          sendText(ws, `Got it. Is ${caller.pendingUpdatedContactFirstName}'s last name the same as the current contact's last name?`);
+          sendText(ws, `Got it. Should I use ${caller.pendingUpdatedContactFirstName} ${existingLastName} as the contact name?`);
           return;
         }
         caller.lastStep = "capture_updated_contact_last_name";
@@ -4968,7 +5003,7 @@ async function handlePrompt(ws, caller, speech) {
       const existingLastName = extractLastNameFromFullName(caller.fullName || "");
       if (existingLastName) {
         caller.lastStep = "confirm_same_last_name_after_contact_change";
-        sendText(ws, `Got it. Is ${caller.pendingUpdatedContactFirstName}'s last name the same as the current contact's last name?`);
+        sendText(ws, `Got it. Should I use ${caller.pendingUpdatedContactFirstName} ${existingLastName} as the contact name?`);
         return;
       }
       caller.lastStep = "capture_updated_contact_last_name";
@@ -4995,7 +5030,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.lastStep = "capture_updated_contact_last_name";
-      sendText(ws, `I just need the last name for ${caller.pendingUpdatedContactFirstName}. What is it?`);
+      sendText(ws, `No problem. What is ${caller.pendingUpdatedContactFirstName}'s last name?`);
       return;
     }
 
@@ -5342,6 +5377,17 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
+      if (isScheduleOfferAcceptance(text)) {
+        caller.appointmentDate = caller.pendingOfferedDate;
+        caller.appointmentTime = caller.pendingOfferedTime;
+        caller.status = "scheduled";
+        caller.calendarSlotConfirmed = true;
+        caller.lastStep = "ask_notes";
+        sendText(ws, buildTechnicianNotesPrompt());
+        return;
+      }
+
+
       if (isSpecificTime(text) || detectTimePreference(text)) {
         const requestDetails = parseAvailabilityRequest(text, caller.pendingOfferedDate, caller.pendingOfferedTime);
         caller.requestedDate = requestDetails.requestedDate || caller.pendingOfferedDate;
@@ -5358,17 +5404,6 @@ async function handlePrompt(ws, caller, speech) {
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
-        return;
-      }
-
-
-      if (isScheduleOfferAcceptance(text)) {
-        caller.appointmentDate = caller.pendingOfferedDate;
-        caller.appointmentTime = caller.pendingOfferedTime;
-        caller.status = "scheduled";
-        caller.calendarSlotConfirmed = true;
-        caller.lastStep = "ask_notes";
-        sendText(ws, buildTechnicianNotesPrompt());
         return;
       }
 
@@ -5498,22 +5533,6 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_notes": {
-      if (isCallbackNumberChangeIntent(text)) {
-        clearPendingUpdatedContactName(caller);
-        const extractedUpdatedName = extractUpdatedContactNameFromSpeech(text);
-        if (extractedUpdatedName) {
-          if (hasFullName(extractedUpdatedName)) {
-            caller.pendingUpdatedContactFullName = extractedUpdatedName;
-          } else {
-            caller.pendingUpdatedContactFirstName = getFirstName(extractedUpdatedName) || extractedUpdatedName;
-          }
-        }
-        caller.lastStep = "capture_updated_callback_number";
-        sendText(ws, "No problem. What is the best callback number to use instead?");
-        return;
-      }
-
-
       const wantsToFinishNow = isEndCallPhrase(text);
       const hadNotes = !wantsToFinishNow;
       if (hadNotes) caller.notes = cleanForSpeech(text);
@@ -5752,6 +5771,8 @@ async function handlePrompt(ws, caller, speech) {
 
 
       appendAdditionalIssue(caller, text);
+      caller.makeSent = false;
+      queuePrimaryLeadAndBooking(caller, { forceLead: true });
       sendText(ws, `Got it — I'll add that as well. ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
