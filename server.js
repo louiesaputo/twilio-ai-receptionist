@@ -1,6 +1,6 @@
 /*************************************************
  CONVERSATIONRELAY BASELINE V15 PASS 7 SCHEDULING + URGENCY + COMPANY PATCH
- DATE: 2026-04-11 (scheduling + urgency + company patch: 4:30 cutoff, late-day fallback, urgent tier, appliance clarification, company parsing)
+ DATE: 2026-04-11 (debug-only pass: prompt transcript logging for social opener diagnosis)
 
 
 
@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 8 SOCIAL OPENER MINIMAL PATCH LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 9 SOCIAL OPENER DEBUG LOGGER LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SOCIAL-OPENER-MINIMAL-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SOCIAL-OPENER-DEBUG-PASS";
 
 
 
@@ -4410,6 +4410,7 @@ function confirmAndAdvancePhone(ws, caller) {
 
 async function handlePrompt(ws, caller, speech) {
   const text = cleanSpeechText(speech || "");
+  console.log("[PROMPT RECEIVED]", JSON.stringify({ step: caller.lastStep, text }));
   if (!text) {
     sendText(ws, "I'm sorry, I didn't catch that. Could you say that again?");
     return;
