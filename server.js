@@ -1,6 +1,6 @@
 /*************************************************
- CONVERSATIONRELAY BASELINE V15 PASS 6 SEQUENCE + PACING PATCH
- DATE: 2026-04-09 (sequence + pacing patch: early emergency acknowledgment, slight response delay, lower interrupt sensitivity)
+ CONVERSATIONRELAY BASELINE V15 PASS 7 SCHEDULING + URGENCY + COMPANY PATCH
+ DATE: 2026-04-11 (scheduling + urgency + company patch: 4:30 cutoff, late-day fallback, urgent tier, appliance clarification, company parsing)
 
 
 
@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 6 SEQUENCE + PACING PATCH LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 8 SOCIAL OPENER MINIMAL PATCH LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SEQUENCE-PACING-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SOCIAL-OPENER-MINIMAL-PASS";
 
 
 
@@ -255,6 +255,10 @@ const REPEAT_TIME_PHRASES = [
   "i missed that", "i missed the time", "can you repeat the time", "repeat the time",
   "what time was that"
 ];
+
+const BUSINESS_DAY_START_MINUTES = 8 * 60;
+const BUSINESS_DAY_END_MINUTES = 17 * 60;
+const LATEST_CALLBACK_START_MINUTES = 16 * 60 + 30;
 
 
 
@@ -445,6 +449,43 @@ function hasFullName(name) {
 
 
 
+function normalizeCompanyName(input) {
+  const safe = cleanForSpeech(input || "")
+    .replace(/[.,]+$/g, "")
+    .trim();
+  if (!safe) return "";
+  return safe
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      if (/^(llc|inc|co|corp|ltd|lp|pllc|pc|pa)$/i.test(word)) return word.toUpperCase();
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+function splitNameAndCompany(rawValue) {
+  const safe = cleanForSpeech(rawValue || "")
+    .replace(/[.,]+$/g, "")
+    .trim();
+  if (!safe) return { nameCandidate: "", companyName: "" };
+
+  const match = safe.match(/^(.+?)\s+(?:from|with|at)\s+([A-Za-z0-9&'. -]+)$/i);
+  if (!match) return { nameCandidate: safe, companyName: "" };
+
+  const nameCandidate = cleanForSpeech(match[1] || "");
+  const companyName = normalizeCompanyName(match[2] || "");
+  if (!nameCandidate || !companyName || looksLikeIssueText(companyName)) {
+    return { nameCandidate: safe, companyName: "" };
+  }
+
+  return { nameCandidate, companyName };
+}
+
+function extractCompanyNameFromSpeech(rawValue) {
+  return splitNameAndCompany(cleanName(rawValue || "")).companyName || "";
+}
+
 function normalizeNameCandidate(rawName) {
   if (!rawName) return "";
 
@@ -455,7 +496,9 @@ function normalizeNameCandidate(rawName) {
 
 
 
-  const cleaned = cleanName(rawName).toLowerCase();
+  const cleanedName = cleanName(rawName);
+  const { nameCandidate } = splitNameAndCompany(cleanedName);
+  const cleaned = (nameCandidate || cleanedName).toLowerCase();
   const stopWords = new Set([
     "and", "i", "have", "need", "calling", "about", "with", "for", "regarding",
     "because", "alex", "my", "name", "is", "this", "am", "im", "hi", "hello", "hey"
@@ -807,6 +850,12 @@ function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
+  const normalizedOriginalIntent = normalizeIntentText(original);
+  const fullyStrippedSocial = stripSocialLeadIn(original);
+  if (!fullyStrippedSocial && containsAny(normalizedOriginalIntent, ["how are you", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) {
+    return { name: null, issueText: "" };
+  }
+
 
 
 
@@ -874,8 +923,9 @@ function extractOpeningNameAndIssue(text) {
       const match = first.match(pattern);
       if (!match) continue;
       const possibleName = normalizeNameCandidate(match[1]);
+      const companyName = extractCompanyNameFromSpeech(match[1]);
       const issueText = tryIssueCleanup(match[2]);
-      if (possibleName && issueText) return { name: possibleName, issueText };
+      if (possibleName && issueText) return { name: possibleName, companyName, issueText };
     }
 
 
@@ -952,9 +1002,11 @@ function extractOpeningNameAndIssue(text) {
 
 
     if (earliestIndex > 0) {
-      const possibleName = normalizeNameCandidate(remainder.slice(0, earliestIndex));
+      const nameSegment = remainder.slice(0, earliestIndex);
+      const possibleName = normalizeNameCandidate(nameSegment);
+      const companyName = extractCompanyNameFromSpeech(nameSegment);
       const issueText = tryIssueCleanup(remainder.slice(earliestIndex));
-      if (possibleName && issueText) return { name: possibleName, issueText };
+      if (possibleName && issueText) return { name: possibleName, companyName, issueText };
     }
 
 
@@ -965,7 +1017,8 @@ function extractOpeningNameAndIssue(text) {
 
 
     const possibleNameOnly = normalizeNameCandidate(remainder);
-    if (possibleNameOnly) return { name: possibleNameOnly, issueText: "" };
+    const companyNameOnly = extractCompanyNameFromSpeech(remainder);
+    if (possibleNameOnly) return { name: possibleNameOnly, companyName: companyNameOnly, issueText: "" };
   }
 
 
@@ -978,8 +1031,9 @@ function extractOpeningNameAndIssue(text) {
   const directFallback = normalized.match(/^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+)(.+)$/i);
   if (directFallback) {
     const possibleName = normalizeNameCandidate(directFallback[1]);
+    const companyName = extractCompanyNameFromSpeech(directFallback[1]);
     const issueText = tryIssueCleanup(directFallback[2]);
-    if (possibleName && issueText) return { name: possibleName, issueText };
+    if (possibleName && issueText) return { name: possibleName, companyName, issueText };
   }
 
 
@@ -1316,6 +1370,13 @@ function formatAddressForConfirmation(address) {
   const safe = cleanForSpeech(address || "");
   if (!safe) return "";
 
+  const isStateOrZipPart = (value) => {
+    const part = cleanForSpeech(value || "");
+    if (!part) return false;
+    if (/^\d{5}(?:-\d{4})?$/i.test(part)) return true;
+    return /^(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)(?:\s+\d{5}(?:-\d{4})?)?$/i.test(part);
+  };
+
   const stripTrailingStateZip = (value) => cleanForSpeech(value || "")
     .replace(/,?\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)\s+\d{5}(?:-\d{4})?$/i, "")
     .replace(/,?\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)$/i, "")
@@ -1324,19 +1385,15 @@ function formatAddressForConfirmation(address) {
     .replace(/\s+\d{5}(?:-\d{4})?$/i, "")
     .trim();
 
-  let trimmed = safe;
-  if (trimmed.includes(",")) {
-    const parts = trimmed.split(",").map((p) => stripTrailingStateZip(p)).filter(Boolean);
-    if (parts.length >= 2) {
-      trimmed = `${parts[0]}, ${parts[1]}`;
-    } else if (parts.length === 1) {
-      trimmed = parts[0];
-    }
-  } else {
-    trimmed = stripTrailingStateZip(trimmed);
+  const rawParts = safe.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
+  if (rawParts.length >= 2) {
+    const normalizedParts = rawParts.map((part) => stripTrailingStateZip(part)).filter(Boolean);
+    const streetLine = normalizedParts.find((part) => /\d/.test(part)) || normalizedParts[0] || "";
+    const city = normalizedParts.find((part) => part !== streetLine && !isStateOrZipPart(part)) || "";
+    return formatAddressForSpeech(city ? `${streetLine}, ${city}` : streetLine);
   }
 
-  return formatAddressForSpeech(trimmed);
+  return formatAddressForSpeech(stripTrailingStateZip(safe));
 }
 
 
@@ -1931,7 +1988,7 @@ function stripSocialLeadIn(text) {
   safe = safe
     .replace(/^(?:hi|hello|hey)\s*,?\s*alex\s*[,.!? -]*/i, "")
     .replace(/^(?:hi|hello|hey)\s*[,.!? -]*/i, "")
-    .replace(/^(?:how are you(?: doing)?|how're you(?: doing)?|how are ya|how ya doing|how you doing)\s*,?\s*(?:alex)?\s*[,.!? -]*/i, "")
+    .replace(/^(?:how are you(?: doing)?|how're you(?: doing)?|how are ya|how ya doing|how ya doin|how you doing|how you doin|howya doing|howya doin|how ya been|how have you been)\s*,?\s*(?:alex)?\s*[,.!? -]*/i, "")
     .replace(/^(?:alex)\s*[,.!? -]*/i, "")
     .trim();
 
@@ -1941,7 +1998,7 @@ function stripSocialLeadIn(text) {
 function isHowAreYouOnly(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
-  if (!containsAny(t, ["how are you", "how re you", "how are ya", "how ya doing", "how you doing"])) return false;
+  if (!containsAny(t, ["how are you", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) return false;
 
   const stripped = stripSocialLeadIn(text);
   if (!stripped) return true;
@@ -1976,6 +2033,10 @@ function buildResumePromptForCurrentStep(caller) {
       return caller.pendingIssuePrompt ? `What seems to be going on with ${caller.pendingIssuePrompt}?` : "What seems to be going on?";
     case "leak_emergency_choice":
       return "Do you want me to mark this as an emergency?";
+    case "refrigerator_emergency_choice":
+      return "Do you want me to mark this as an emergency?";
+    case "appliance_priority_choice":
+      return "Would you like me to flag it as urgent, or mark it as an emergency?";
     case "confirm_phone":
       return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
     case "get_new_phone":
@@ -2006,6 +2067,8 @@ function buildResumePromptForCurrentStep(caller) {
       return "What callback time works best for you?";
     case "confirm_first_available":
       return caller.pendingOfferedDate && caller.pendingOfferedTime ? buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime) : "Would you like me to schedule that callback?";
+    case "late_day_preference_choice":
+      return buildLateDayFallbackPrompt(caller);
     case "ask_notes":
       return buildTechnicianNotesPrompt();
     case "offer_demo_followup":
@@ -2040,6 +2103,88 @@ function buildResumePromptForCurrentStep(caller) {
 function buildServiceIntakeLeadIn() {
   return "I'm here to help, so let's get a few details from you.";
 }
+
+function buildStandardIntakePrompt(caller) {
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) {
+      return isBrowserCaller(caller)
+        ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} ${buildBrowserCallbackPrompt()}`
+        : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+    }
+    return `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Before I go any further, can I get your last name as well?`;
+  }
+  return `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`;
+}
+
+function buildUrgentFlaggedLine() {
+  return "Understood. I'll go ahead and flag this as urgent so the office knows you'd like to hear from someone as soon as possible.";
+}
+
+function isUrgentSelection(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "urgent", "mark it as urgent", "mark this as urgent", "flag it as urgent",
+    "flag this as urgent", "as soon as possible", "right away", "asap"
+  ]) && !containsAny(t, ["emergency", "mark it as an emergency", "mark this as an emergency"]);
+}
+
+function isUrgentNonEmergencyRequest(text) {
+  const t = normalizeIntentText(text);
+  if (!t || isHardEmergency(text)) return false;
+  if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency"])) {
+    return containsAny(t, ["urgent", "right away", "as soon as possible", "asap", "today", "tomorrow", "soon as possible"]);
+  }
+  return containsAny(t, ["urgent", "as soon as possible", "asap", "right away"]) && !containsAny(t, ["not urgent"]);
+}
+
+function isRefrigeratorEmergencyCandidate(issue) {
+  const t = normalizedText(issue);
+  return containsAny(t, ["refrigerator", "fridge", "freezer"]) && containsAny(t, ["not cooling", "isn't cooling", "isnt cooling", "too warm", "not freezing", "isn't freezing", "isnt freezing"]);
+}
+
+function isCookingAppliancePriorityCandidate(issue) {
+  const t = normalizedText(issue);
+  const cookingAppliance = containsAny(t, ["oven", "cooktop", "cook top", "range", "stove"]);
+  const timingProblem = containsAny(t, [
+    "not heating", "isn't heating", "isnt heating", "not turning on", "won't turn on", "wont turn on",
+    "not igniting", "won't ignite", "wont ignite", "burner", "burners"
+  ]);
+  return cookingAppliance && timingProblem;
+}
+
+function buildRefrigeratorEmergencyPrompt(caller) {
+  return `${buildIssueAcknowledgement(caller)} If your refrigerator isn't cooling, I know that can get urgent quickly. Do you want me to mark this as an emergency?`;
+}
+
+function buildCookingPriorityPrompt(caller) {
+  return `${buildIssueAcknowledgement(caller)} If you're needing to use it soon, I can go ahead and flag this as urgent. If it needs attention right away, I can mark it as an emergency. Would you like me to flag it as urgent, or mark it as an emergency?`;
+}
+
+function markUrgent(caller) {
+  caller.emergencyAlert = false;
+  caller.urgency = "urgent";
+  caller.leadType = "service";
+  caller.status = "new_lead";
+}
+
+function buildUrgentIntakePrompt(caller) {
+  const acknowledgement = buildIssueAcknowledgement(caller);
+  const withName = caller.firstName ? `${caller.firstName}, ` : "";
+  const leadIn = `${withName}${acknowledgement} ${buildUrgentFlaggedLine()} I just need to get some information from you.`;
+
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) {
+      return isBrowserCaller(caller)
+        ? `${leadIn} ${buildBrowserCallbackPrompt()}`
+        : `${leadIn} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+    }
+    return `${leadIn} Before I go any further, can I get your last name as well?`;
+  }
+
+  return `${acknowledgement} ${buildUrgentFlaggedLine()} I just need to get some information from you. Can I start by getting your full name, please?`;
+}
+
 
 
 
@@ -2386,6 +2531,57 @@ function parseTimeToMinutes(timeText) {
   if (meridiem === "AM" && hour === 12) hour = 0;
   return (hour * 60) + minute;
 }
+
+function isAllowedCallbackStartTime(timeText) {
+  const minutes = parseTimeToMinutes(timeText || "");
+  if (minutes === null) return false;
+  return minutes >= BUSINESS_DAY_START_MINUTES && minutes <= LATEST_CALLBACK_START_MINUTES;
+}
+
+function isLateDayPreferenceRequest(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return containsAny(t, [
+    "after 4 30", "after 430", "after four thirty", "after 5", "after five",
+    "5 pm", "5 00 pm", "five pm", "five o clock", "five oclock",
+    "close to 5", "close to five", "as close to 5 as possible", "as close to five as possible",
+    "as late as possible", "late in the day", "as late in the day as possible"
+  ]);
+}
+
+function buildLateDayFallbackPrompt(caller) {
+  const variants = [
+    "Our office closes at 5:00, but I can add a note that you're hoping for a call as late in the day as possible, or as close to 5:00 as we can get.",
+    "We close at 5:00, so I can't promise a 5:00 callback, but I can absolutely note that you'd prefer as late in the day as possible.",
+    "Our office closes at 5:00, but I can put that in the notes and ask for someone to call you as close to 5:00 as possible."
+  ];
+  const index = nextPromptIndex(caller, "lateDayPromptIndex");
+  return `${variants[index % variants.length]} Would you like me to note that, or would you prefer an earlier callback time?`;
+}
+
+function addLateDayPreferenceNote(caller) {
+  const preferredDate = caller.pendingLateDayDate || caller.appointmentDate || caller.requestedDate || "";
+  const note = preferredDate
+    ? `Late-day preference: caller is hoping for a callback on ${preferredDate} as close to 5:00 PM as possible.`
+    : "Late-day preference: caller is hoping for a callback as close to 5:00 PM as possible.";
+  if ((caller.notes || "").includes("Late-day preference:")) return;
+  caller.notes = caller.notes ? `${caller.notes} ${note}` : note;
+}
+
+function finalizeLateDayPreference(caller) {
+  addLateDayPreferenceNote(caller);
+  if (!caller.appointmentDate) {
+    caller.appointmentDate = caller.pendingLateDayDate || caller.requestedDate || caller.appointmentDate || "";
+  }
+  caller.appointmentTime = "as close to 5:00 PM as possible";
+  caller.status = "scheduled_pending_confirmation";
+  caller.calendarSlotConfirmed = false;
+}
+
+function offeredAvailabilityNeedsLateDayFallback(availability) {
+  return Boolean(availability && availability.time && !isAllowedCallbackStartTime(availability.time));
+}
+
 
 
 
@@ -3081,6 +3277,7 @@ function getOrCreateCaller(key) {
       phone: "",
       fullName: "",
       firstName: "",
+      companyName: "",
       callbackNumber: "",
       callbackConfirmed: null,
       address: "",
@@ -3116,6 +3313,7 @@ function getOrCreateCaller(key) {
       pendingIssueItem: "",
       pendingIssuePrompt: "",
       pendingPromptText: "",
+      pendingLateDayDate: "",
       pendingUpdatedContactFirstName: "",
       pendingUpdatedContactFullName: "",
       pendingLeadResubmission: false,
@@ -3128,6 +3326,7 @@ function getOrCreateCaller(key) {
       calendarPromptIndex: 0,
       scheduleChoicePromptIndex: 0,
       callbackOfferIndex: 0,
+      lateDayPromptIndex: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -3381,6 +3580,7 @@ function buildMakePayload(caller) {
     leadType,
     fullName: caller.fullName || "",
     firstName: caller.firstName || "",
+    companyName: caller.companyName || "",
     phone: caller.phone || "",
     callbackNumber: caller.callbackNumber || caller.phone || "",
     callbackConfirmed: caller.callbackConfirmed === true,
@@ -3558,12 +3758,14 @@ async function sendLeadToMake(caller, force = false) {
 
 function buildBookingPayload(caller) {
   if (!caller.calendarSlotConfirmed || !caller.appointmentDate || !caller.appointmentTime) return null;
+  if (!isAllowedCallbackStartTime(caller.appointmentTime)) return null;
   const slotTimes = parseCallbackDateAndTimeToLocal(caller.appointmentDate, caller.appointmentTime);
   if (!slotTimes) return null;
   return {
     action: "create_callback_booking",
     fullName: caller.fullName || "",
     firstName: caller.firstName || "",
+    companyName: caller.companyName || "",
     phone: caller.phone || "",
     callbackNumber: caller.callbackNumber || caller.phone || "",
     issueSummary: caller.issueSummary || "",
@@ -4100,7 +4302,8 @@ function buildAIContext(caller) {
     lead_type: caller.leadType || "",
     issue_summary: caller.issueSummary || "",
     first_name: caller.firstName || "",
-    full_name: caller.fullName || ""
+    full_name: caller.fullName || "",
+    company_name: caller.companyName || ""
   };
 }
 
@@ -4281,7 +4484,12 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_issue": {
       let parsed = null;
       const strippedOpeningText = stripSocialLeadIn(text);
-      const workingOpeningText = strippedOpeningText ? strippedOpeningText : text;
+      const workingOpeningText = strippedOpeningText !== text ? strippedOpeningText : text;
+      if (!workingOpeningText && isHowAreYouOnly(text)) {
+        caller.lastStep = "ask_issue_again";
+        sendText(ws, "Doing well, thanks for asking. What can I do for you today?");
+        return;
+      }
       const rawIntroFirstName = extractIntroFirstName(workingOpeningText);
       if (rawIntroFirstName && !caller.firstName) {
         caller.firstName = rawIntroFirstName;
@@ -4341,6 +4549,9 @@ async function handlePrompt(ws, caller, speech) {
         caller.fullName = parsed.name;
         caller.firstName = getFirstName(parsed.name);
         caller.nameSpellingConfirmed = false;
+      }
+      if (parsed.companyName) {
+        caller.companyName = parsed.companyName;
       }
       if (!parsed.issueText) {
         caller.lastStep = "ask_issue_again";
@@ -4418,6 +4629,32 @@ async function handlePrompt(ws, caller, speech) {
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
+      if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "refrigerator_emergency_choice";
+        sendText(ws, buildRefrigeratorEmergencyPrompt(caller));
+        return;
+      }
+
+      if (isCookingAppliancePriorityCandidate(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "appliance_priority_choice";
+        sendText(ws, buildCookingPriorityPrompt(caller));
+        return;
+      }
+
+      if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
+        markUrgent(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildUrgentIntakePrompt(caller));
+        return;
+      }
+
+
 
 
 
@@ -4451,13 +4688,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.lastStep = nextStep;
-      sendText(ws, caller.fullName
-        ? hasFullName(caller.fullName)
-          ? isBrowserCaller(caller)
-            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} ${buildBrowserCallbackPrompt()}`
-            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Before I go any further, can I get your last name as well?`
-        : `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
+      sendText(ws, buildStandardIntakePrompt(caller));
       return;
     }
 
@@ -4470,9 +4701,9 @@ async function handlePrompt(ws, caller, speech) {
 
     case "ask_issue_again": {
       const strippedFollowupText = stripSocialLeadIn(text);
-      const workingFollowupText = strippedFollowupText && strippedFollowupText !== text ? strippedFollowupText : text;
+      const workingFollowupText = strippedFollowupText !== text ? strippedFollowupText : text;
       if (!workingFollowupText) {
-        sendText(ws, "I'm doing well, thank you. What can I help you with today?");
+        sendText(ws, "Doing well, thanks for asking. What can I do for you today?");
         return;
       }
       if (isGenericEmergencyIssue(workingFollowupText)) {
@@ -4504,6 +4735,32 @@ async function handlePrompt(ws, caller, speech) {
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
+      if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "refrigerator_emergency_choice";
+        sendText(ws, buildRefrigeratorEmergencyPrompt(caller));
+        return;
+      }
+
+      if (isCookingAppliancePriorityCandidate(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "appliance_priority_choice";
+        sendText(ws, buildCookingPriorityPrompt(caller));
+        return;
+      }
+
+      if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
+        markUrgent(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildUrgentIntakePrompt(caller));
+        return;
+      }
+
+
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
@@ -4546,6 +4803,32 @@ async function handlePrompt(ws, caller, speech) {
       } else {
         markStandardService(caller);
       }
+      if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "refrigerator_emergency_choice";
+        sendText(ws, buildRefrigeratorEmergencyPrompt(caller));
+        return;
+      }
+
+      if (isCookingAppliancePriorityCandidate(caller.issue) && !caller.emergencyAlert) {
+        caller.lastStep = "appliance_priority_choice";
+        sendText(ws, buildCookingPriorityPrompt(caller));
+        return;
+      }
+
+      if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
+        markUrgent(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildUrgentIntakePrompt(caller));
+        return;
+      }
+
+
 
 
 
@@ -4571,13 +4854,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       caller.lastStep = nextStep;
-      sendText(ws, caller.fullName
-        ? hasFullName(caller.fullName)
-          ? isBrowserCaller(caller)
-            ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} ${buildBrowserCallbackPrompt()}`
-            : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-          : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Before I go any further, can I get your last name as well?`
-        : `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
+      sendText(ws, buildStandardIntakePrompt(caller));
       return;
     }
 
@@ -4652,6 +4929,103 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+    case "refrigerator_emergency_choice": {
+      if (isAffirmative(text) || containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
+        markEmergency(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildEmergencyIntakePrompt(caller));
+        return;
+      }
+
+      if (isNegative(text) || isUrgentSelection(text)) {
+        markUrgent(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildUrgentIntakePrompt(caller));
+        return;
+      }
+
+      sendText(ws, buildRefrigeratorEmergencyPrompt(caller));
+      return;
+    }
+
+
+    case "appliance_priority_choice": {
+      if (containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
+        markEmergency(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildEmergencyIntakePrompt(caller));
+        return;
+      }
+
+      if (isUrgentSelection(text) || isAffirmative(text)) {
+        markUrgent(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildUrgentIntakePrompt(caller));
+        return;
+      }
+
+      if (isNegative(text) || containsAny(normalizeIntentText(text), ["normal", "standard", "regular service"])) {
+        markStandardService(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildStandardIntakePrompt(caller));
+        return;
+      }
+
+      sendText(ws, buildCookingPriorityPrompt(caller));
+      return;
+    }
+
+
+    case "late_day_preference_choice": {
+      const normalized = normalizeIntentText(text);
+      if (isAffirmative(text) || containsAny(normalized, ["note that", "as close to 5", "as close to five", "as late as possible", "late in the day", "that works", "that is fine", "thats fine"])) {
+        finalizeLateDayPreference(caller);
+        caller.lastStep = "ask_notes";
+        sendText(ws, `Got it. I'll note that you'd prefer a callback as close to 5:00 as possible. ${buildTechnicianNotesPrompt()}`);
+        return;
+      }
+
+      if (isNegative(text) || containsAny(normalized, ["earlier", "something earlier", "different time", "another time"])) {
+        caller.lastStep = caller.appointmentDate || caller.requestedDate ? "ask_appointment_time" : "ask_appointment_day";
+        sendText(ws, caller.lastStep === "ask_appointment_time" ? "No problem. What earlier callback time works better for you?" : "No problem. What day works better for a callback?");
+        return;
+      }
+
+      sendText(ws, buildLateDayFallbackPrompt(caller));
+      return;
+    }
+
+
     case "ask_name": {
       const parsedName = parseFullNameFromSpeech(text);
       if (!parsedName) {
@@ -4661,6 +5035,8 @@ async function handlePrompt(ws, caller, speech) {
       caller.fullName = parsedName;
       caller.firstName = getFirstName(parsedName);
       caller.nameSpellingConfirmed = false;
+      const companyName = extractCompanyNameFromSpeech(text);
+      if (companyName) caller.companyName = companyName;
       const nextStep = hasFullName(parsedName) ? getPhoneCollectionStep(caller) : "ask_last_name";
       const spellingPrompt = maybeQueueFirstNameSpelling(caller, nextStep);
       if (spellingPrompt) {
@@ -5261,6 +5637,12 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
           return;
         }
+        if (offeredAvailabilityNeedsLateDayFallback(availability)) {
+          caller.pendingLateDayDate = availability.date;
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
+          return;
+        }
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         caller.lastStep = "confirm_first_available";
@@ -5303,6 +5685,14 @@ async function handlePrompt(ws, caller, speech) {
 
     case "ask_appointment_day": {
       const requestDetails = parseAvailabilityRequest(text, caller.requestedDate, caller.pendingOfferedTime);
+      if (isLateDayPreferenceRequest(text)) {
+        caller.requestedDate = requestDetails.requestedDate || caller.requestedDate || "";
+        caller.appointmentDate = requestDetails.requestedDate || caller.appointmentDate || caller.requestedDate || "";
+        caller.pendingLateDayDate = requestDetails.requestedDate || caller.appointmentDate || "";
+        caller.lastStep = "late_day_preference_choice";
+        sendText(ws, buildLateDayFallbackPrompt(caller));
+        return;
+      }
       if (requestDetails.requestedDate || requestDetails.requestedTimePreference || isSpecificTime(text) || isFirstAvailableRequest(text)) {
         caller.requestedDate = requestDetails.requestedDate || cleanForSpeech(text);
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
@@ -5313,6 +5703,12 @@ async function handlePrompt(ws, caller, speech) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
           sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          return;
+        }
+        if (offeredAvailabilityNeedsLateDayFallback(availability)) {
+          caller.pendingLateDayDate = availability.date;
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
           return;
         }
         caller.pendingOfferedDate = availability.date;
@@ -5335,6 +5731,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_appointment_time": {
+      if (isLateDayPreferenceRequest(text)) {
+        caller.pendingLateDayDate = caller.appointmentDate || caller.requestedDate || "";
+        caller.lastStep = "late_day_preference_choice";
+        sendText(ws, buildLateDayFallbackPrompt(caller));
+        return;
+      }
       if (isFirstAvailableRequest(text) || isAlternateAvailabilityRequest(text) || isSpecificTime(text) || detectTimePreference(text)) {
         const requestDetails = parseAvailabilityRequest(text, caller.appointmentDate, caller.pendingOfferedTime);
         caller.requestedDate = requestDetails.requestedDate || caller.appointmentDate;
@@ -5349,6 +5751,12 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
           return;
         }
+        if (offeredAvailabilityNeedsLateDayFallback(availability)) {
+          caller.pendingLateDayDate = availability.date || caller.appointmentDate || "";
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
+          return;
+        }
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         caller.lastStep = "confirm_first_available";
@@ -5359,7 +5767,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.status = "scheduled_pending_confirmation";
       caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
-      sendText(ws, buildTechnicianNotesPrompt());
+      sendText(ws, `Okay, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. ${buildTechnicianNotesPrompt()}`);
       return;
     }
 
@@ -5376,8 +5784,20 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+      if (isLateDayPreferenceRequest(text)) {
+        caller.pendingLateDayDate = caller.pendingOfferedDate || caller.requestedDate || "";
+        caller.lastStep = "late_day_preference_choice";
+        sendText(ws, buildLateDayFallbackPrompt(caller));
+        return;
+      }
 
       if (isScheduleOfferAcceptance(text)) {
+        if (!isAllowedCallbackStartTime(caller.pendingOfferedTime)) {
+          caller.pendingLateDayDate = caller.pendingOfferedDate || caller.requestedDate || "";
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
+          return;
+        }
         caller.appointmentDate = caller.pendingOfferedDate;
         caller.appointmentTime = caller.pendingOfferedTime;
         caller.status = "scheduled";
@@ -5401,6 +5821,12 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
           return;
         }
+        if (offeredAvailabilityNeedsLateDayFallback(availability)) {
+          caller.pendingLateDayDate = availability.date || caller.pendingOfferedDate || caller.requestedDate || "";
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
+          return;
+        }
         caller.pendingOfferedDate = availability.date;
         caller.pendingOfferedTime = availability.time;
         sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
@@ -5414,6 +5840,12 @@ async function handlePrompt(ws, caller, speech) {
         const schedulingDecision = await interpretSchedulingStep(text, buildAIContext(caller));
         if (schedulingDecision && schedulingDecision.intent && schedulingDecision.intent !== "unclear") {
           if (schedulingDecision.intent === "accept_offered_time") {
+            if (!isAllowedCallbackStartTime(caller.pendingOfferedTime)) {
+              caller.pendingLateDayDate = caller.pendingOfferedDate || caller.requestedDate || "";
+              caller.lastStep = "late_day_preference_choice";
+              sendText(ws, buildLateDayFallbackPrompt(caller));
+              return;
+            }
             caller.appointmentDate = caller.pendingOfferedDate;
             caller.appointmentTime = caller.pendingOfferedTime;
             caller.status = "scheduled";
@@ -5458,6 +5890,12 @@ async function handlePrompt(ws, caller, speech) {
               sendText(ws, buildTechnicianNotesPrompt());
               return;
             }
+            if (offeredAvailabilityNeedsLateDayFallback(alternateResult.availability)) {
+              caller.pendingLateDayDate = alternateResult.availability.date || previousDate || caller.requestedDate || "";
+              caller.lastStep = "late_day_preference_choice";
+              sendText(ws, buildLateDayFallbackPrompt(caller));
+              return;
+            }
             caller.pendingOfferedDate = alternateResult.availability.date;
             caller.pendingOfferedTime = alternateResult.availability.time;
             sendText(ws, buildAlternateAvailabilityOffer(caller, text, alternateResult.availability, previousDate, previousTime, alternateResult.usedNextDayFallback));
@@ -5488,6 +5926,12 @@ async function handlePrompt(ws, caller, speech) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
           sendText(ws, buildTechnicianNotesPrompt());
+          return;
+        }
+        if (offeredAvailabilityNeedsLateDayFallback(alternateResult.availability)) {
+          caller.pendingLateDayDate = alternateResult.availability.date || previousDate || caller.requestedDate || "";
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
           return;
         }
         caller.pendingOfferedDate = alternateResult.availability.date;
