@@ -925,11 +925,10 @@ function extractOpeningNameAndIssue(text) {
   if (sentenceParts.length) {
     const first = sentenceParts[0];
 
-
-
-
-
-
+    const sameSentenceIssueAndName = splitIssueAndTrailingName(first);
+    if (sameSentenceIssueAndName) {
+      return sameSentenceIssueAndName;
+    }
 
     for (const pattern of nameAndIssuePatterns) {
       const match = first.match(pattern);
@@ -980,6 +979,14 @@ function extractOpeningNameAndIssue(text) {
 
 
     for (const part of sentenceParts) {
+      const sameSentencePartIssueAndName = splitIssueAndTrailingName(part);
+      if (sameSentencePartIssueAndName) {
+        issueFirstName = issueFirstName || sameSentencePartIssueAndName.name;
+        issueFirstCompanyName = issueFirstCompanyName || sameSentencePartIssueAndName.companyName || "";
+        issueFirstIssueText = issueFirstIssueText || sameSentencePartIssueAndName.issueText;
+        continue;
+      }
+
       for (const pattern of nameOnlyPatterns) {
         const match = part.match(pattern);
         if (!match) continue;
@@ -989,12 +996,6 @@ function extractOpeningNameAndIssue(text) {
         issueFirstCompanyName = issueFirstCompanyName || extractCompanyNameFromSpeech(match[1]);
         break;
       }
-
-
-
-
-
-
 
       if (!issueFirstIssueText) {
         const cleanedPart = tryIssueCleanup(part);
