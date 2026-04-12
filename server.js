@@ -931,7 +931,6 @@ function extractOpeningNameAndIssue(text) {
 
 
 
-
     for (const pattern of nameAndIssuePatterns) {
       const match = first.match(pattern);
       if (!match) continue;
@@ -940,7 +939,6 @@ function extractOpeningNameAndIssue(text) {
       const issueText = tryIssueCleanup(match[2]);
       if (possibleName && issueText) return { name: possibleName, companyName, issueText };
     }
-
 
 
 
@@ -960,19 +958,62 @@ function extractOpeningNameAndIssue(text) {
 
 
 
-
       const remainder = sentenceParts.slice(1).join(" ");
       if (remainder) return { name: possibleName, issueText: tryIssueCleanup(remainder) };
       return { name: possibleName, issueText: "" };
     }
+
+
+
+
+
+
+
+    let issueFirstName = null;
+    let issueFirstCompanyName = "";
+    let issueFirstIssueText = "";
+
+
+
+
+
+
+
+    for (const part of sentenceParts) {
+      for (const pattern of nameOnlyPatterns) {
+        const match = part.match(pattern);
+        if (!match) continue;
+        const possibleName = normalizeNameCandidate(match[1]);
+        if (!possibleName) continue;
+        issueFirstName = issueFirstName || possibleName;
+        issueFirstCompanyName = issueFirstCompanyName || extractCompanyNameFromSpeech(match[1]);
+        break;
+      }
+
+
+
+
+
+
+
+      if (!issueFirstIssueText) {
+        const cleanedPart = tryIssueCleanup(part);
+        if (looksLikeIssueText(cleanedPart)) {
+          issueFirstIssueText = cleanedPart;
+        }
+      }
+    }
+
+
+
+
+
+
+
+    if (issueFirstName && issueFirstIssueText) {
+      return { name: issueFirstName, companyName: issueFirstCompanyName, issueText: issueFirstIssueText };
+    }
   }
-
-
-
-
-
-
-
 
   const introMarker = normalized.match(/^(?:this is|my name is|i am|i'm)\s+/i);
   if (introMarker) {
