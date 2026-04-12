@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 9 SOCIAL OPENER DEBUG LOGGER LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 10 SOCIAL OPENER STT VARIANT PATCH LOADED 🔥");
 
 
 
@@ -852,7 +852,7 @@ function extractOpeningNameAndIssue(text) {
 
   const normalizedOriginalIntent = normalizeIntentText(original);
   const fullyStrippedSocial = stripSocialLeadIn(original);
-  if (!fullyStrippedSocial && containsAny(normalizedOriginalIntent, ["how are you", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) {
+  if (!fullyStrippedSocial && containsAny(normalizedOriginalIntent, ["how are you", "how are doing", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) {
     return { name: null, issueText: "" };
   }
 
@@ -1998,7 +1998,7 @@ function stripSocialLeadIn(text) {
 function isHowAreYouOnly(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
-  if (!containsAny(t, ["how are you", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) return false;
+  if (!containsAny(t, ["how are you", "how are doing", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) return false;
 
   const stripped = stripSocialLeadIn(text);
   if (!stripped) return true;
