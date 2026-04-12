@@ -1,6 +1,6 @@
 /*************************************************
  CONVERSATIONRELAY BASELINE V15 PASS 7 SCHEDULING + URGENCY + COMPANY PATCH
- DATE: 2026-04-11 (debug-only pass: prompt transcript logging for social opener diagnosis)
+ DATE: 2026-04-12 (post-config once-over: keep opener transcript logging, add AI opener config/result logging)
 
 
 
@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 10 SOCIAL OPENER STT VARIANT PATCH LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 11 POST-CONFIG ONCE-OVER LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-SOCIAL-OPENER-DEBUG-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-POST-CONFIG-ONCE-OVER-PASS";
 
 
 
@@ -166,6 +166,8 @@ const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
+
+console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
 
 
 
@@ -4500,6 +4502,14 @@ async function handlePrompt(ws, caller, speech) {
 
       if (AI_INTERPRETER_ENABLED) {
         const extractedOpening = await extractOpeningTurn(workingOpeningText, buildAIContext(caller));
+        console.log("[AI OPENING RESULT]", JSON.stringify({
+          step: caller.lastStep,
+          input: workingOpeningText,
+          intent: extractedOpening?.intent || "",
+          full_name: extractedOpening?.full_name || "",
+          first_name: extractedOpening?.first_name || "",
+          issue_text: extractedOpening?.issue_text || ""
+        }));
         if (extractedOpening && extractedOpening.intent && extractedOpening.intent !== "unclear") {
           applyExtractedName(caller, extractedOpening.full_name, extractedOpening.first_name);
 
