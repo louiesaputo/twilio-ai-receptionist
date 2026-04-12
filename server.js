@@ -1,6 +1,6 @@
 /*************************************************
  CONVERSATIONRELAY BASELINE V15 PASS 7 SCHEDULING + URGENCY + COMPANY PATCH
- DATE: 2026-04-12 (post-config once-over: keep opener transcript logging, add AI opener config/result logging)
+ DATE: 2026-04-12 (AI opener fallback fix: greeting-prefixed social openers + AI-empty backstop)
 
 
 
@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 11 POST-CONFIG ONCE-OVER LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 12 AI OPENER FALLBACK FIX LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-POST-CONFIG-ONCE-OVER-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-AI-OPENER-FALLBACK-FIX-PASS";
 
 
 
@@ -380,6 +380,18 @@ function normalizeIntentText(text) {
 
 function containsAny(text, phrases) {
   return phrases.some((p) => text.includes(p));
+}
+
+const SOCIAL_OPENER_PHRASES = [
+  "how are you", "how are doing", "how re you", "how are ya",
+  "how ya doing", "how ya doin", "how you doing", "how you doin",
+  "howya doing", "howya doin", "how ya been", "how you been",
+  "how have you been"
+];
+
+function hasSocialOpenerPhrase(text) {
+  const t = normalizeIntentText(text);
+  return Boolean(t) && containsAny(t, SOCIAL_OPENER_PHRASES);
 }
 
 
@@ -852,9 +864,8 @@ function extractOpeningNameAndIssue(text) {
   const original = cleanSpeechText(text || "");
   if (!original) return { name: null, issueText: "" };
 
-  const normalizedOriginalIntent = normalizeIntentText(original);
   const fullyStrippedSocial = stripSocialLeadIn(original);
-  if (!fullyStrippedSocial && containsAny(normalizedOriginalIntent, ["how are you", "how are doing", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) {
+  if (!fullyStrippedSocial && hasSocialOpenerPhrase(original)) {
     return { name: null, issueText: "" };
   }
 
@@ -1988,9 +1999,9 @@ function stripSocialLeadIn(text) {
   if (!safe) return "";
 
   safe = safe
-    .replace(/^(?:hi|hello|hey)\s*,?\s*alex\s*[,.!? -]*/i, "")
-    .replace(/^(?:hi|hello|hey)\s*[,.!? -]*/i, "")
-    .replace(/^(?:how are you(?: doing)?|how're you(?: doing)?|how are ya|how ya doing|how ya doin|how you doing|how you doin|howya doing|howya doin|how ya been|how have you been)\s*,?\s*(?:alex)?\s*[,.!? -]*/i, "")
+    .replace(/^(?:hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)\s*,?\s*alex\s*[,.!? -]*/i, "")
+    .replace(/^(?:hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)\s*[,.!? -]*/i, "")
+    .replace(/^(?:how are you(?: doing)?|how are doing|how're you(?: doing)?|how are ya|how ya doing|how ya doin|how you doing|how you doin|howya doing|howya doin|how ya been|how you been|how have you been)(?:\s+(?:today|tonight|this morning|this afternoon|this evening))?\s*,?\s*(?:alex)?\s*[,.!? -]*/i, "")
     .replace(/^(?:alex)\s*[,.!? -]*/i, "")
     .trim();
 
@@ -1998,16 +2009,13 @@ function stripSocialLeadIn(text) {
 }
 
 function isHowAreYouOnly(text) {
-  const t = normalizeIntentText(text);
-  if (!t) return false;
-  if (!containsAny(t, ["how are you", "how are doing", "how re you", "how are ya", "how ya doing", "how ya doin", "how you doing", "how you doin", "howya doing", "howya doin", "how ya been", "how have you been"])) return false;
+  if (!hasSocialOpenerPhrase(text)) return false;
 
   const stripped = stripSocialLeadIn(text);
   if (!stripped) return true;
   if (/^(alex)$/i.test(cleanForSpeech(stripped))) return true;
   if (looksLikeIssueText(stripped)) return false;
-  const opening = extractOpeningNameAndIssue(stripped);
-  return !cleanForSpeech(opening.issueText || "");
+  return hasSocialOpenerPhrase(stripped);
 }
 
 function isShortCourtesyResponse(text) {
@@ -4535,6 +4543,13 @@ async function handlePrompt(ws, caller, speech) {
               issueText: extractedOpening.issue_text
             };
           }
+        }
+
+        const aiOpeningReturnedNothing = extractedOpening && !extractedOpening.intent && !extractedOpening.full_name && !extractedOpening.first_name && !extractedOpening.issue_text;
+        if (aiOpeningReturnedNothing && isHowAreYouOnly(text)) {
+          caller.lastStep = "ask_issue_again";
+          sendText(ws, "Doing well, thanks for asking. What can I do for you today?");
+          return;
         }
       }
 
