@@ -570,6 +570,38 @@ function parseFullNameFromSpeech(rawName) {
   return normalizeNameCandidate(rawName);
 }
 
+function splitIssueAndTrailingName(text) {
+  const safe = cleanForSpeech(text || "");
+  if (!safe) return null;
+
+  const socialStripped = stripSocialLeadIn(safe) || safe;
+  const trailingNamePatterns = [
+    /^(.*?)(?:,\s*|\s+and\s+)(?:my\s+name\s+is|this\s+is|i\s+am|i'm)\s+([A-Za-z' -]+)$/i,
+    /^(.*?)(?:,\s*|\s+and\s+)([A-Za-z' -]+?)\s+here$/i
+  ];
+
+  for (const pattern of trailingNamePatterns) {
+    const match = socialStripped.match(pattern);
+    if (!match) continue;
+
+    const issueCandidate = stripIssueLeadIn(cleanForSpeech(match[1] || ""));
+    const possibleName = normalizeNameCandidate(match[2]);
+    if (!possibleName || !issueCandidate) continue;
+
+    if (!looksLikeIssueText(issueCandidate) && !detectServiceItem(issueCandidate) && !hasSpecificProblemDetail(issueCandidate)) {
+      continue;
+    }
+
+    return {
+      name: possibleName,
+      companyName: extractCompanyNameFromSpeech(match[2]),
+      issueText: issueCandidate
+    };
+  }
+
+  return null;
+}
+
 
 
 
