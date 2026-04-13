@@ -1,6 +1,6 @@
 /*************************************************
  CONVERSATIONRELAY BASELINE V15 PASS 7 SCHEDULING + URGENCY + COMPANY PATCH
- DATE: 2026-04-12 (AI opener fallback fix: greeting-prefixed social openers + AI-empty backstop)
+ DATE: 2026-04-13 (opener finalization tuning: reduced opener wait while keeping name-only safety)
 
 
 
@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 12 AI OPENER FALLBACK FIX LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 13 OPENER FINALIZATION TUNING FIX LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-AI-OPENER-FALLBACK-FIX-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-OPENER-FINALIZATION-TUNING-PASS";
 
 
 
@@ -165,7 +165,7 @@ const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
-const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1500);
+const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1000);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
