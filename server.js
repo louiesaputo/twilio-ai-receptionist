@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 13 OPENER FINALIZATION TUNING FIX LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 22 PHONE/ADDRESS WORDING ONLY UPDATE LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-OPENER-FINALIZATION-TUNING-PASS";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-PHONE-ADDRESS-WORDING-ONLY-UPDATE";
 
 
 
@@ -166,6 +166,7 @@ const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
 const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1000);
+const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
@@ -598,6 +599,65 @@ function splitIssueAndTrailingName(text) {
       companyName: extractCompanyNameFromSpeech(match[2]),
       issueText: issueCandidate
     };
+  }
+
+  return null;
+}
+
+function extractStrongLocalNameAndIssue(text) {
+  const safe = cleanSpeechText(text || "");
+  if (!safe) return null;
+
+  const socialStripped = stripSocialLeadIn(safe) || safe;
+  const sentenceParts = socialStripped
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => cleanSpeechText(part.replace(/[.!?]+$/g, "")))
+    .filter(Boolean);
+
+  const nameOnlyPatterns = [
+    /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+)$/i,
+    /^([A-Za-z' -]+?)\s+here$/i
+  ];
+
+  const nameAndIssuePatterns = [
+    /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*(?:,\s*|\s+and\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
+    /^([A-Za-z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i
+  ];
+
+  const tryIssueCleanup = (value) => stripIssueLeadIn(cleanForSpeech(value || ""));
+  const joined = sentenceParts.join(" ");
+
+  for (const pattern of nameAndIssuePatterns) {
+    const match = joined.match(pattern);
+    if (!match) continue;
+    const possibleName = normalizeNameCandidate(match[1]);
+    const issueText = tryIssueCleanup(match[2]);
+    if (possibleName && issueText) {
+      return {
+        name: possibleName,
+        companyName: extractCompanyNameFromSpeech(match[1]),
+        issueText
+      };
+    }
+  }
+
+  if (sentenceParts.length >= 2) {
+    const first = sentenceParts[0];
+    const remainder = sentenceParts.slice(1).join(" ");
+    for (const pattern of nameOnlyPatterns) {
+      const match = first.match(pattern);
+      if (!match) continue;
+      const possibleName = normalizeNameCandidate(match[1]);
+      const issueText = tryIssueCleanup(remainder);
+      if (possibleName && issueText) {
+        return {
+          name: possibleName,
+          companyName: extractCompanyNameFromSpeech(match[1]),
+          issueText
+        };
+      }
+    }
   }
 
   return null;
@@ -1250,7 +1310,7 @@ function buildPostNotesTransition(caller, hadNotes) {
 function buildAddressRequestPrompt(caller) {
   return caller.leadType === "quote"
     ? "What is the project address?"
-    : "What is the service address?";
+    : "Okay, and what about the service address? Can I have that, please?";
 }
 
 
@@ -1506,7 +1566,7 @@ function isBrowserCaller(caller) {
 
 
 function buildBrowserCallbackPrompt() {
-  return "Can I get a good callback number for you?";
+  return "Can I get your best contact number?";
 }
 
 
@@ -2125,9 +2185,9 @@ function buildResumePromptForCurrentStep(caller) {
     case "confirm_phone":
       return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
     case "get_new_phone":
-      return isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : "What is the best callback number to reach you?";
+      return isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : "Can I get your best contact number?";
     case "capture_updated_callback_number":
-      return "What is the best callback number to use instead?";
+      return "What is the best contact number to use instead?";
     case "confirm_contact_person_after_phone_change":
       return "Should the contact person stay the same, or would you like me to change that as well?";
     case "capture_updated_contact_name":
@@ -4402,6 +4462,19 @@ function buildAIContext(caller) {
 
 
 
+async function safeAIInterpret(label, interpreterFn, text, context) {
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => interpreterFn(text, context)),
+      new Promise((resolve) => setTimeout(() => resolve(null), AI_INTERPRETER_TIMEOUT_MS))
+    ]);
+  } catch (err) {
+    console.error(`[${label} ERROR]`, err.message);
+    return null;
+  }
+}
+
+
 function applyExtractedName(caller, fullName, firstName = "") {
   const safeFullName = cleanForSpeech(fullName || "");
   const safeFirstName = cleanForSpeech(firstName || "");
@@ -4562,7 +4635,7 @@ async function handlePrompt(ws, caller, speech) {
       }
     }
     caller.lastStep = "capture_updated_callback_number";
-    sendText(ws, "No problem. What is the best callback number to use instead?");
+    sendText(ws, "No problem. What is the best contact number to use instead?");
     return;
   }
 
@@ -4586,10 +4659,11 @@ async function handlePrompt(ws, caller, speech) {
         caller.nameSpellingConfirmed = false;
       }
 
-      const localOpeningParse = extractOpeningNameAndIssue(workingOpeningText);
+      const strongLocalOpeningParse = extractStrongLocalNameAndIssue(workingOpeningText);
+      const localOpeningParse = strongLocalOpeningParse || extractOpeningNameAndIssue(workingOpeningText);
       if (localOpeningParse && localOpeningParse.name && localOpeningParse.issueText) {
         parsed = localOpeningParse;
-        console.log("[LOCAL OPENING PARSE]", JSON.stringify({
+        console.log(strongLocalOpeningParse ? "[STRONG LOCAL OPENING PARSE]" : "[LOCAL OPENING PARSE]", JSON.stringify({
           step: caller.lastStep,
           input: workingOpeningText,
           full_name: localOpeningParse.name || "",
@@ -4608,7 +4682,7 @@ async function handlePrompt(ws, caller, speech) {
       }
 
       if (!parsed && AI_INTERPRETER_ENABLED) {
-        const extractedOpening = await extractOpeningTurn(workingOpeningText, buildAIContext(caller));
+        const extractedOpening = await safeAIInterpret("AI OPENING", extractOpeningTurn, workingOpeningText, buildAIContext(caller));
         console.log("[AI OPENING RESULT]", JSON.stringify({
           step: caller.lastStep,
           input: workingOpeningText,
@@ -4855,7 +4929,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get a good callback number for you?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
             : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn()} Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -4905,7 +4979,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${buildServiceIntakeLeadIn()} ${isBrowserCaller(caller) ? "Can I get a good callback number for you?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${buildServiceIntakeLeadIn()} ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
           : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn()} Can I get your last name as well?`
         : `${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
       return;
@@ -5233,17 +5307,34 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
-
-
-
-
-
-
-
-
     case "confirm_phone": {
+      if (isBrowserCaller(caller) && !(caller.callbackNumber || caller.phone)) {
+        caller.callbackConfirmed = false;
+        caller.lastStep = "get_new_phone";
+        sendText(ws, buildBrowserCallbackPrompt());
+        return;
+      }
+
+      if (isLikelyPhoneNumberResponse(text)) {
+        caller.callbackNumber = normalizePhoneForStorage(text);
+        confirmAndAdvancePhone(ws, caller);
+        return;
+      }
+
+      if (isAffirmative(text)) {
+        confirmAndAdvancePhone(ws, caller);
+        return;
+      }
+
+      if (isPhoneCorrection(text) || isNegative(text)) {
+        caller.callbackConfirmed = false;
+        caller.lastStep = "get_new_phone";
+        sendText(ws, "No problem. What is your best contact number?");
+        return;
+      }
+
       if (AI_INTERPRETER_ENABLED) {
-        const phoneDecision = await interpretPhoneStep(text, buildAIContext(caller));
+        const phoneDecision = await safeAIInterpret("AI PHONE", interpretPhoneStep, text, buildAIContext(caller));
         if (phoneDecision && phoneDecision.intent && phoneDecision.intent !== "unclear") {
           if (phoneDecision.intent === "provide_new_phone_number" && phoneDecision.phone_number) {
             caller.callbackNumber = normalizePhoneForStorage(phoneDecision.phone_number);
@@ -5251,125 +5342,70 @@ async function handlePrompt(ws, caller, speech) {
             return;
           }
 
-
-
-
-          if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone") {
+          if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone" || phoneDecision.intent === "yes_waiting_for_number") {
             caller.callbackConfirmed = false;
             caller.lastStep = "get_new_phone";
-            sendText(ws, "No problem. What is the best callback number to reach you?");
+            sendText(ws, "No problem. What is your best contact number?");
             return;
           }
-
-
-
-
-          if (phoneDecision.intent === "yes_waiting_for_number") {
-            caller.callbackConfirmed = false;
-            caller.lastStep = "get_new_phone";
-            sendText(ws, "Alright. What is the best callback number to reach you?");
-            return;
-          }
-
-
-
 
           if (phoneDecision.intent === "confirm_existing_phone") {
-            if (isBrowserCaller(caller) && !(caller.callbackNumber || caller.phone)) {
-              caller.callbackConfirmed = false;
-              caller.lastStep = "get_new_phone";
-              sendText(ws, buildBrowserCallbackPrompt());
-              return;
-            }
             confirmAndAdvancePhone(ws, caller);
             return;
           }
         }
       }
 
-
-
-
-      if (isBrowserCaller(caller)) {
-        caller.callbackConfirmed = false;
-        caller.lastStep = "get_new_phone";
-        sendText(ws, buildBrowserCallbackPrompt());
-        return;
-      }
-      if (isPhoneCorrection(text)) {
-        caller.callbackConfirmed = false;
-        caller.lastStep = "get_new_phone";
-        sendText(ws, "No problem. What is the best callback number to reach you?");
-        return;
-      }
       confirmAndAdvancePhone(ws, caller);
       return;
     }
-
-
-
-
-
-
-
-
     case "get_new_phone": {
+      if (isLikelyPhoneNumberResponse(text)) {
+        caller.callbackNumber = normalizePhoneForStorage(text);
+        confirmAndAdvancePhone(ws, caller);
+        return;
+      }
+
+      if (isAffirmative(text)) {
+        caller.callbackConfirmed = false;
+        sendText(ws, "Alright. What is your best contact number?");
+        return;
+      }
+
       if (AI_INTERPRETER_ENABLED) {
-        const phoneDecision = await interpretPhoneStep(text, buildAIContext(caller));
+        const phoneDecision = await safeAIInterpret("AI PHONE", interpretPhoneStep, text, buildAIContext(caller));
         if (phoneDecision && phoneDecision.intent && phoneDecision.intent !== "unclear") {
           if (phoneDecision.intent === "provide_new_phone_number" && phoneDecision.phone_number) {
             caller.callbackNumber = normalizePhoneForStorage(phoneDecision.phone_number);
             confirmAndAdvancePhone(ws, caller);
             return;
           }
-
-
-
 
           if (phoneDecision.intent === "confirm_existing_phone" && (caller.callbackNumber || caller.phone)) {
             confirmAndAdvancePhone(ws, caller);
             return;
           }
 
-
-
-
           if (phoneDecision.intent === "yes_waiting_for_number") {
             caller.callbackConfirmed = false;
-            sendText(ws, "Alright. What is the best callback number to reach you?");
+            sendText(ws, "Alright. What is your best contact number?");
             return;
           }
-
-
-
 
           if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone") {
             caller.callbackConfirmed = false;
-            sendText(ws, "No problem. What is the best callback number to reach you?");
+            sendText(ws, "No problem. What is your best contact number?");
             return;
           }
         }
       }
 
-
-
-
-      if (!isLikelyPhoneNumberResponse(text)) {
-        caller.callbackConfirmed = false;
-        if (isAffirmative(text)) {
-          sendText(ws, "Alright. What is the best callback number to reach you?");
-          return;
-        }
-        sendText(ws, isBrowserCaller(caller)
-          ? "I'm sorry, I still need a good callback number. What number should I use?"
-          : "I'm sorry, I still need a callback number. What is the best number to reach you?");
-        return;
-      }
-      caller.callbackNumber = normalizePhoneForStorage(text);
-      confirmAndAdvancePhone(ws, caller);
+      caller.callbackConfirmed = false;
+      sendText(ws, isBrowserCaller(caller)
+        ? "I'm sorry, I still need a good callback number. What number should I use?"
+        : "I'm sorry, I still need a callback number. What is the best number to reach you?");
       return;
     }
-
 
 
 
@@ -5602,7 +5638,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (AI_INTERPRETER_ENABLED) {
-        const addressDecision = await interpretAddressStep(text, buildAIContext(caller));
+        const addressDecision = await safeAIInterpret("AI ADDRESS", interpretAddressStep, text, buildAIContext(caller));
         if (addressDecision && addressDecision.intent && addressDecision.intent !== "unclear") {
           if (addressDecision.intent === "confirm_address") {
             sendAfterAddressConfirmed(ws, caller);
@@ -5962,7 +5998,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (AI_INTERPRETER_ENABLED) {
-        const schedulingDecision = await interpretSchedulingStep(text, buildAIContext(caller));
+        const schedulingDecision = await safeAIInterpret("AI SCHEDULING", interpretSchedulingStep, text, buildAIContext(caller));
         if (schedulingDecision && schedulingDecision.intent && schedulingDecision.intent !== "unclear") {
           if (schedulingDecision.intent === "accept_offered_time") {
             if (!isAllowedCallbackStartTime(caller.pendingOfferedTime)) {
