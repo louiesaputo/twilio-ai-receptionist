@@ -166,7 +166,6 @@ const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
 const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1000);
-const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
@@ -4403,19 +4402,6 @@ function buildAIContext(caller) {
 
 
 
-async function safeAIInterpret(label, interpreterFn, text, context) {
-  try {
-    return await Promise.race([
-      Promise.resolve().then(() => interpreterFn(text, context)),
-      new Promise((resolve) => setTimeout(() => resolve(null), AI_INTERPRETER_TIMEOUT_MS))
-    ]);
-  } catch (err) {
-    console.error(`[${label} ERROR]`, err.message);
-    return null;
-  }
-}
-
-
 function applyExtractedName(caller, fullName, firstName = "") {
   const safeFullName = cleanForSpeech(fullName || "");
   const safeFirstName = cleanForSpeech(firstName || "");
@@ -4622,7 +4608,7 @@ async function handlePrompt(ws, caller, speech) {
       }
 
       if (!parsed && AI_INTERPRETER_ENABLED) {
-        const extractedOpening = await safeAIInterpret("AI OPENING", extractOpeningTurn, workingOpeningText, buildAIContext(caller));
+        const extractedOpening = await extractOpeningTurn(workingOpeningText, buildAIContext(caller));
         console.log("[AI OPENING RESULT]", JSON.stringify({
           step: caller.lastStep,
           input: workingOpeningText,
@@ -5247,34 +5233,17 @@ async function handlePrompt(ws, caller, speech) {
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
       return;
     }
+
+
+
+
+
+
+
+
     case "confirm_phone": {
-      if (isBrowserCaller(caller) && !(caller.callbackNumber || caller.phone)) {
-        caller.callbackConfirmed = false;
-        caller.lastStep = "get_new_phone";
-        sendText(ws, buildBrowserCallbackPrompt());
-        return;
-      }
-
-      if (isLikelyPhoneNumberResponse(text)) {
-        caller.callbackNumber = normalizePhoneForStorage(text);
-        confirmAndAdvancePhone(ws, caller);
-        return;
-      }
-
-      if (isAffirmative(text)) {
-        confirmAndAdvancePhone(ws, caller);
-        return;
-      }
-
-      if (isPhoneCorrection(text) || isNegative(text)) {
-        caller.callbackConfirmed = false;
-        caller.lastStep = "get_new_phone";
-        sendText(ws, "No problem. What is the best callback number to reach you?");
-        return;
-      }
-
       if (AI_INTERPRETER_ENABLED) {
-        const phoneDecision = await safeAIInterpret("AI PHONE", interpretPhoneStep, text, buildAIContext(caller));
+        const phoneDecision = await interpretPhoneStep(text, buildAIContext(caller));
         if (phoneDecision && phoneDecision.intent && phoneDecision.intent !== "unclear") {
           if (phoneDecision.intent === "provide_new_phone_number" && phoneDecision.phone_number) {
             caller.callbackNumber = normalizePhoneForStorage(phoneDecision.phone_number);
@@ -5282,38 +5251,71 @@ async function handlePrompt(ws, caller, speech) {
             return;
           }
 
-          if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone" || phoneDecision.intent === "yes_waiting_for_number") {
+
+
+
+          if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone") {
             caller.callbackConfirmed = false;
             caller.lastStep = "get_new_phone";
             sendText(ws, "No problem. What is the best callback number to reach you?");
             return;
           }
 
+
+
+
+          if (phoneDecision.intent === "yes_waiting_for_number") {
+            caller.callbackConfirmed = false;
+            caller.lastStep = "get_new_phone";
+            sendText(ws, "Alright. What is the best callback number to reach you?");
+            return;
+          }
+
+
+
+
           if (phoneDecision.intent === "confirm_existing_phone") {
+            if (isBrowserCaller(caller) && !(caller.callbackNumber || caller.phone)) {
+              caller.callbackConfirmed = false;
+              caller.lastStep = "get_new_phone";
+              sendText(ws, buildBrowserCallbackPrompt());
+              return;
+            }
             confirmAndAdvancePhone(ws, caller);
             return;
           }
         }
       }
 
+
+
+
+      if (isBrowserCaller(caller)) {
+        caller.callbackConfirmed = false;
+        caller.lastStep = "get_new_phone";
+        sendText(ws, buildBrowserCallbackPrompt());
+        return;
+      }
+      if (isPhoneCorrection(text)) {
+        caller.callbackConfirmed = false;
+        caller.lastStep = "get_new_phone";
+        sendText(ws, "No problem. What is the best callback number to reach you?");
+        return;
+      }
       confirmAndAdvancePhone(ws, caller);
       return;
     }
+
+
+
+
+
+
+
+
     case "get_new_phone": {
-      if (isLikelyPhoneNumberResponse(text)) {
-        caller.callbackNumber = normalizePhoneForStorage(text);
-        confirmAndAdvancePhone(ws, caller);
-        return;
-      }
-
-      if (isAffirmative(text)) {
-        caller.callbackConfirmed = false;
-        sendText(ws, "Alright. What is the best callback number to reach you?");
-        return;
-      }
-
       if (AI_INTERPRETER_ENABLED) {
-        const phoneDecision = await safeAIInterpret("AI PHONE", interpretPhoneStep, text, buildAIContext(caller));
+        const phoneDecision = await interpretPhoneStep(text, buildAIContext(caller));
         if (phoneDecision && phoneDecision.intent && phoneDecision.intent !== "unclear") {
           if (phoneDecision.intent === "provide_new_phone_number" && phoneDecision.phone_number) {
             caller.callbackNumber = normalizePhoneForStorage(phoneDecision.phone_number);
@@ -5321,16 +5323,25 @@ async function handlePrompt(ws, caller, speech) {
             return;
           }
 
+
+
+
           if (phoneDecision.intent === "confirm_existing_phone" && (caller.callbackNumber || caller.phone)) {
             confirmAndAdvancePhone(ws, caller);
             return;
           }
+
+
+
 
           if (phoneDecision.intent === "yes_waiting_for_number") {
             caller.callbackConfirmed = false;
             sendText(ws, "Alright. What is the best callback number to reach you?");
             return;
           }
+
+
+
 
           if (phoneDecision.intent === "request_phone_change" || phoneDecision.intent === "reject_phone") {
             caller.callbackConfirmed = false;
@@ -5340,12 +5351,25 @@ async function handlePrompt(ws, caller, speech) {
         }
       }
 
-      caller.callbackConfirmed = false;
-      sendText(ws, isBrowserCaller(caller)
-        ? "I'm sorry, I still need a good callback number. What number should I use?"
-        : "I'm sorry, I still need a callback number. What is the best number to reach you?");
+
+
+
+      if (!isLikelyPhoneNumberResponse(text)) {
+        caller.callbackConfirmed = false;
+        if (isAffirmative(text)) {
+          sendText(ws, "Alright. What is the best callback number to reach you?");
+          return;
+        }
+        sendText(ws, isBrowserCaller(caller)
+          ? "I'm sorry, I still need a good callback number. What number should I use?"
+          : "I'm sorry, I still need a callback number. What is the best number to reach you?");
+        return;
+      }
+      caller.callbackNumber = normalizePhoneForStorage(text);
+      confirmAndAdvancePhone(ws, caller);
       return;
     }
+
 
 
 
@@ -5578,7 +5602,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (AI_INTERPRETER_ENABLED) {
-        const addressDecision = await safeAIInterpret("AI ADDRESS", interpretAddressStep, text, buildAIContext(caller));
+        const addressDecision = await interpretAddressStep(text, buildAIContext(caller));
         if (addressDecision && addressDecision.intent && addressDecision.intent !== "unclear") {
           if (addressDecision.intent === "confirm_address") {
             sendAfterAddressConfirmed(ws, caller);
@@ -5938,7 +5962,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (AI_INTERPRETER_ENABLED) {
-        const schedulingDecision = await safeAIInterpret("AI SCHEDULING", interpretSchedulingStep, text, buildAIContext(caller));
+        const schedulingDecision = await interpretSchedulingStep(text, buildAIContext(caller));
         if (schedulingDecision && schedulingDecision.intent && schedulingDecision.intent !== "unclear") {
           if (schedulingDecision.intent === "accept_offered_time") {
             if (!isAllowedCallbackStartTime(caller.pendingOfferedTime)) {
