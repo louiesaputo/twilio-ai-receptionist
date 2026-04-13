@@ -4582,7 +4582,18 @@ async function handlePrompt(ws, caller, speech) {
         caller.nameSpellingConfirmed = false;
       }
 
-      if (AI_INTERPRETER_ENABLED) {
+      const localOpeningParse = extractOpeningNameAndIssue(workingOpeningText);
+      if (localOpeningParse && localOpeningParse.name && localOpeningParse.issueText) {
+        parsed = localOpeningParse;
+        console.log("[LOCAL OPENING PARSE]", JSON.stringify({
+          step: caller.lastStep,
+          input: workingOpeningText,
+          full_name: localOpeningParse.name || "",
+          issue_text: localOpeningParse.issueText || ""
+        }));
+      }
+
+      if (!parsed && AI_INTERPRETER_ENABLED) {
         const extractedOpening = await extractOpeningTurn(workingOpeningText, buildAIContext(caller));
         console.log("[AI OPENING RESULT]", JSON.stringify({
           step: caller.lastStep,
@@ -4631,7 +4642,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (!parsed) {
-        parsed = extractOpeningNameAndIssue(workingOpeningText);
+        parsed = localOpeningParse || extractOpeningNameAndIssue(workingOpeningText);
       }
 
 
