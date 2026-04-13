@@ -165,6 +165,7 @@ const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
+const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1500);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
 console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
@@ -3440,6 +3441,9 @@ function isPhoneCaptureStep(step = "") {
 
 function promptFinalizeDelayForCaller(caller, fallbackMs = PROMPT_FINALIZE_TIMEOUT_MS) {
   if (!caller) return fallbackMs;
+  if (caller.lastStep === "ask_issue" || caller.lastStep === "ask_issue_again") {
+    return OPENER_PROMPT_FINALIZE_TIMEOUT_MS;
+  }
   return isPhoneCaptureStep(caller.lastStep) ? PHONE_PROMPT_FINALIZE_TIMEOUT_MS : fallbackMs;
 }
 
@@ -4591,6 +4595,16 @@ async function handlePrompt(ws, caller, speech) {
           full_name: localOpeningParse.name || "",
           issue_text: localOpeningParse.issueText || ""
         }));
+      }
+      const localNameOnlyIntro = Boolean(localOpeningParse && localOpeningParse.name && !cleanForSpeech(localOpeningParse.issueText || ""));
+      if (!parsed && localNameOnlyIntro && !looksLikeIssueText(workingOpeningText)) {
+        caller.fullName = localOpeningParse.name;
+        caller.firstName = getFirstName(localOpeningParse.name);
+        caller.nameSpellingConfirmed = false;
+        if (localOpeningParse.companyName) caller.companyName = localOpeningParse.companyName;
+        caller.lastStep = "ask_issue_again";
+        sendText(ws, caller.firstName ? `Thanks, ${caller.firstName}. What can I help you with today?` : "What can I help you with today?");
+        return;
       }
 
       if (!parsed && AI_INTERPRETER_ENABLED) {
