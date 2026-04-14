@@ -165,9 +165,9 @@ const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
-const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1150);
-const FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS || 1050);
-const MID_THOUGHT_EXTRA_MS = Number(process.env.MID_THOUGHT_EXTRA_MS || 300);
+const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 950);
+const FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS || 900);
+const MID_THOUGHT_EXTRA_MS = Number(process.env.MID_THOUGHT_EXTRA_MS || 180);
 const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
@@ -3533,7 +3533,6 @@ function isLikelyMidThought(text = "") {
   if (!safe) return false;
   if (/[,:;\-]\s*$/.test(safe)) return true;
   if (/\b(and|or|but|so|because|that|which|with|for|to|about|on|at|in|of|um|uh)\s*$/.test(safe)) return true;
-  if (/^(hi|hello|hey|good morning|good afternoon|good evening)[\s,.!?-]*$/i.test(safe)) return true;
   return false;
 }
 
