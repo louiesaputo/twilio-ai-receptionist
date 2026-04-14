@@ -1735,6 +1735,8 @@ function isAffirmative(text) {
 
   if (/\bthat\s+(works|will work|should work|will be fine|should be fine|is fine|is okay|is ok|is good|is great|is correct|is right)\b/.test(t)) return true;
   if (/\bit\s+(is|s)\s+(correct|right)\b/.test(t)) return true;
+  if (/^it\s+is\s+(yes|yeah|yep|yup|correct|right)$/i.test(t)) return true;
+  if (/^that\s+(is|s)\s+(yes|yeah|yep|yup|correct|right)$/i.test(t)) return true;
   if (/^(yes|yeah|yep|yup|correct|absolutely|ok|okay)\b.*\b(correct|right|works|work)\b/.test(t)) return true;
   if (/\b(i|we)\s+(ll|will)\s+take\s+(it|that)\b/.test(t)) return true;
   if (/\b(go ahead|please do|do that|book it|schedule it|book that|schedule that)\b/.test(t)) return true;
@@ -3115,6 +3117,7 @@ function looksLikeAddressCorrection(text) {
 
 
   const startsLikeCorrection = /^((no\s+wait)|(actually)|(it s)|(its)|(it is)|(wait)|(sorry))\b/.test(t);
+  const confirmationish = /^(it\s+is|it s|its|that\s+is|that s|thats)\s+(yes|yeah|yep|yup|correct|right)$/i.test(t);
   const hasAddressSignals = /\d/.test(t)
     || containsAny(t, [
       "street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr",
@@ -3125,6 +3128,7 @@ function looksLikeAddressCorrection(text) {
 
 
 
+  if (confirmationish) return false;
   if (hasAddressSignals) return true;
   if (startsLikeCorrection && t.split(/\s+/).filter(Boolean).length >= 2) return true;
   return false;
