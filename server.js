@@ -3164,12 +3164,41 @@ function looksLikeAddressCorrection(text) {
 function extractDatePart(text) {
   const value = cleanForSpeech(text || "");
   if (!value) return "";
-  const t = normalizedText(value);
-  if (containsAny(t, [
-    "today", "tomorrow", "next week", "this week",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-  ])) return value;
+
+  const relativeMatch = value.match(/\b(today|tomorrow|next week|this week)\b/i);
+  if (relativeMatch) return cleanForSpeech(relativeMatch[1]);
+
+  const qualifiedWeekdayMatch = value.match(/\b(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (qualifiedWeekdayMatch) {
+    return `${toTitleCase(qualifiedWeekdayMatch[1])} ${toTitleCase(qualifiedWeekdayMatch[2])}`;
+  }
+
+  const weekdayMatch = value.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (weekdayMatch) return toTitleCase(weekdayMatch[1]);
+
   return "";
+}
+
+function extractSpecificTimeText(text) {
+  const value = cleanForSpeech(text || "");
+  if (!value) return "";
+
+  const numericMatch = value.match(/\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/i);
+  if (numericMatch) {
+    const hour = String(Number(numericMatch[1]));
+    const minute = numericMatch[2] || "00";
+    const meridiem = numericMatch[3].toUpperCase();
+    return `${hour}:${minute} ${meridiem}`;
+  }
+
+  const namedMatch = value.match(/\b(noon|midnight)\b/i);
+  if (namedMatch) return cleanForSpeech(namedMatch[1]).toLowerCase();
+
+  return "";
+}
+
+function hasExplicitSchedulingRequest(text) {
+  return Boolean(extractDatePart(text) || extractSpecificTimeText(text) || detectTimePreference(text));
 }
 
 
@@ -3203,12 +3232,14 @@ function buildAvailabilityRawQuery(rawText, existingDate = "", existingTime = ""
 function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   const raw = cleanForSpeech(text || "");
   let requestedDate = extractDatePart(raw);
-  const requestedTimePreference = detectTimePreference(raw);
+  const requestedExactTime = extractSpecificTimeText(raw);
+  const requestedTimePreference = requestedExactTime || detectTimePreference(raw);
   if (!requestedDate && existingDate && isAlternateAvailabilityRequest(raw)) requestedDate = existingDate;
   return {
     rawQuery: buildAvailabilityRawQuery(raw, existingDate, existingTime),
     requestedDate: requestedDate || existingDate || "",
-    requestedTimePreference
+    requestedTimePreference,
+    requestedExactTime
   };
 }
 
@@ -4202,7 +4233,8 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
     address: caller.address || "",
     requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
     requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
-    requestedAfterTime: requestDetails.requestedAfterTime || "",
+    requestedExactTime: requestDetails.requestedExactTime || "",
+    requestedAfterTime: requestDetails.requestedAfterTime || requestDetails.requestedExactTime || "",
     availabilityMode: requestDetails.mode || "",
     avoidDate: requestDetails.avoidDate || "",
     avoidTime: requestDetails.avoidTime || "",
@@ -5912,12 +5944,31 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-
-
-
-
-
-
+      if (hasExplicitSchedulingRequest(text)) {
+        const requestDetails = parseAvailabilityRequest(text, caller.requestedDate, caller.pendingOfferedTime);
+        caller.requestedDate = requestDetails.requestedDate || caller.requestedDate || "";
+        caller.requestedTimePreference = requestDetails.requestedTimePreference;
+        caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
+        announceCalendarLookup(ws, caller, text, "specific_date");
+        const availability = await checkCalendarAvailability(caller, requestDetails);
+        if (!availability) {
+          caller.status = "callback_requested";
+          caller.lastStep = "ask_notes";
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          return;
+        }
+        if (offeredAvailabilityNeedsLateDayFallback(availability)) {
+          caller.pendingLateDayDate = availability.date;
+          caller.lastStep = "late_day_preference_choice";
+          sendText(ws, buildLateDayFallbackPrompt(caller));
+          return;
+        }
+        caller.pendingOfferedDate = availability.date;
+        caller.pendingOfferedTime = availability.time;
+        caller.lastStep = "confirm_first_available";
+        sendText(ws, buildCallbackOfferPrompt(caller, caller.pendingOfferedDate, caller.pendingOfferedTime));
+        return;
+      }
 
       if (wantsOfficeCallback(text)) {
         caller.status = "callback_requested";
@@ -5925,13 +5976,6 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt());
         return;
       }
-
-
-
-
-
-
-
 
       caller.lastStep = "ask_appointment_day";
       sendText(ws, "What day works best for you?");
@@ -5955,7 +5999,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, buildLateDayFallbackPrompt(caller));
         return;
       }
-      if (requestDetails.requestedDate || requestDetails.requestedTimePreference || isSpecificTime(text) || isFirstAvailableRequest(text)) {
+      if (requestDetails.requestedDate || requestDetails.requestedTimePreference || requestDetails.requestedExactTime || isSpecificTime(text) || isFirstAvailableRequest(text)) {
         caller.requestedDate = requestDetails.requestedDate || cleanForSpeech(text);
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
         caller.pendingAvailabilityQuery = requestDetails.rawQuery || cleanForSpeech(text);
@@ -5999,7 +6043,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, buildLateDayFallbackPrompt(caller));
         return;
       }
-      if (isFirstAvailableRequest(text) || isAlternateAvailabilityRequest(text) || isSpecificTime(text) || detectTimePreference(text)) {
+      if (isFirstAvailableRequest(text) || isAlternateAvailabilityRequest(text) || hasExplicitSchedulingRequest(text) || isSpecificTime(text) || detectTimePreference(text)) {
         const requestDetails = parseAvailabilityRequest(text, caller.appointmentDate, caller.pendingOfferedTime);
         caller.requestedDate = requestDetails.requestedDate || caller.appointmentDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
@@ -6070,7 +6114,7 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
-      if (isSpecificTime(text) || detectTimePreference(text)) {
+      if (hasExplicitSchedulingRequest(text) || isSpecificTime(text) || detectTimePreference(text)) {
         const requestDetails = parseAvailabilityRequest(text, caller.pendingOfferedDate, caller.pendingOfferedTime);
         caller.requestedDate = requestDetails.requestedDate || caller.pendingOfferedDate;
         caller.requestedTimePreference = requestDetails.requestedTimePreference;
