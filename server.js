@@ -168,6 +168,7 @@ const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZ
 const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 950);
 const FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const MID_THOUGHT_EXTRA_MS = Number(process.env.MID_THOUGHT_EXTRA_MS || 180);
+const GREETING_CONTINUATION_GRACE_MS = Number(process.env.GREETING_CONTINUATION_GRACE_MS || 550);
 const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
@@ -3487,6 +3488,8 @@ function getOrCreateCaller(key) {
       pendingLeadResubmission: false,
       repeatPromptIndex: 0,
       promptBuffer: "",
+      pendingGreetingPrompt: "",
+      greetingContinuationTimer: null,
       demoFollowupContactName: "",
       demoFollowupCallbackNumber: "",
       demoFollowupEmail: "",
@@ -3624,6 +3627,12 @@ async function processBufferedPrompt(ws, caller, fallbackText = "") {
 
 
   caller.promptBuffer = "";
+  if (shouldHoldGreetingForContinuation(caller, completePrompt)) {
+    scheduleGreetingContinuationGrace(ws, caller, completePrompt);
+    return true;
+  }
+
+
   caller.processingPrompt = true;
   try {
     await handlePrompt(ws, caller, completePrompt);
@@ -6738,6 +6747,12 @@ wss.on("connection", (ws, request) => {
 
       if (type === "prompt") {
         if (data.voicePrompt) {
+          const pendingGreeting = cleanSpeechText(caller.pendingGreetingPrompt || "");
+          if (pendingGreeting) {
+            clearGreetingContinuationTimer(caller);
+            caller.pendingGreetingPrompt = "";
+            caller.promptBuffer = `${pendingGreeting}${caller.promptBuffer ? " " + caller.promptBuffer : ""}`;
+          }
           caller.promptBuffer = `${caller.promptBuffer ? caller.promptBuffer + " " : ""}${data.voicePrompt}`;
         }
 
@@ -6801,6 +6816,8 @@ wss.on("connection", (ws, request) => {
   ws.on("close", () => {
     const caller = getOrCreateCaller(ws.sessionKey);
     clearPromptFinalizeTimer(caller);
+    clearGreetingContinuationTimer(caller);
+    caller.pendingGreetingPrompt = "";
     wsBySession.delete(ws.sessionKey);
     setTimeout(() => {
       delete callerStore[ws.sessionKey];
