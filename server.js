@@ -1799,7 +1799,7 @@ function isAffirmative(text) {
 
 
 
-function isNegative(text) {
+/* Updated */ function isNegative_Old(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (["no", "nope", "nah", "skip", "pass"].includes(t)) return true;
