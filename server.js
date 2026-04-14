@@ -165,7 +165,9 @@ const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
 const PHONE_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PHONE_PROMPT_FINALIZE_TIMEOUT_MS || 450);
-const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1000);
+const OPENER_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.OPENER_PROMPT_FINALIZE_TIMEOUT_MS || 1150);
+const FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS || 1050);
+const MID_THOUGHT_EXTRA_MS = Number(process.env.MID_THOUGHT_EXTRA_MS || 300);
 const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
 
@@ -3517,15 +3519,38 @@ function isPhoneCaptureStep(step = "") {
   ]).has(step);
 }
 
+function isFreeformSpeechStep(step = "") {
+  return new Set([
+    "ask_issue",
+    "ask_issue_again",
+    "ask_item_issue_detail",
+    "ask_notes"
+  ]).has(step);
+}
 
+function isLikelyMidThought(text = "") {
+  const safe = cleanSpeechText(text || "").toLowerCase();
+  if (!safe) return false;
+  if (/[,:;\-]\s*$/.test(safe)) return true;
+  if (/\b(and|or|but|so|because|that|which|with|for|to|about|on|at|in|of|um|uh)\s*$/.test(safe)) return true;
+  if (/^(hi|hello|hey|good morning|good afternoon|good evening)[\s,.!?-]*$/i.test(safe)) return true;
+  return false;
+}
 
-
-function promptFinalizeDelayForCaller(caller, fallbackMs = PROMPT_FINALIZE_TIMEOUT_MS) {
+function promptFinalizeDelayForCaller(caller, fallbackMs = PROMPT_FINALIZE_TIMEOUT_MS, bufferedText = "") {
   if (!caller) return fallbackMs;
-  if (caller.lastStep === "ask_issue" || caller.lastStep === "ask_issue_again") {
-    return OPENER_PROMPT_FINALIZE_TIMEOUT_MS;
+  if (isPhoneCaptureStep(caller.lastStep)) {
+    return PHONE_PROMPT_FINALIZE_TIMEOUT_MS;
   }
-  return isPhoneCaptureStep(caller.lastStep) ? PHONE_PROMPT_FINALIZE_TIMEOUT_MS : fallbackMs;
+  if (caller.lastStep === "ask_issue" || caller.lastStep === "ask_issue_again") {
+    const base = OPENER_PROMPT_FINALIZE_TIMEOUT_MS;
+    return isLikelyMidThought(bufferedText) ? base + MID_THOUGHT_EXTRA_MS : base;
+  }
+  if (isFreeformSpeechStep(caller.lastStep)) {
+    const base = FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS;
+    return isLikelyMidThought(bufferedText) ? base + MID_THOUGHT_EXTRA_MS : base;
+  }
+  return fallbackMs;
 }
 
 
@@ -3607,7 +3632,7 @@ async function processBufferedPrompt(ws, caller, fallbackText = "") {
   } finally {
     caller.processingPrompt = false;
     if (cleanSpeechText(caller.promptBuffer || "")) {
-      schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 200));
+      schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 200, caller.promptBuffer || ""));
     }
   }
 }
@@ -3616,7 +3641,7 @@ async function processBufferedPrompt(ws, caller, fallbackText = "") {
 
 
 function schedulePromptFinalize(ws, caller, delayMs) {
-  delayMs = promptFinalizeDelayForCaller(caller, delayMs ?? PROMPT_FINALIZE_TIMEOUT_MS);
+  delayMs = promptFinalizeDelayForCaller(caller, delayMs ?? PROMPT_FINALIZE_TIMEOUT_MS, caller && caller.promptBuffer ? caller.promptBuffer : "");
   if (!caller) return;
 
 
@@ -6700,7 +6725,7 @@ wss.on("connection", (ws, request) => {
 
       if (type === "interrupt") {
         if (cleanSpeechText(caller.promptBuffer || "")) {
-          schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 250));
+          schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, 250, caller.promptBuffer || ""));
         }
         return;
       }
@@ -6720,7 +6745,7 @@ wss.on("connection", (ws, request) => {
 
         if (data.last === false) {
           if (cleanSpeechText(caller.promptBuffer || "")) {
-            schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller));
+            schedulePromptFinalize(ws, caller, promptFinalizeDelayForCaller(caller, PROMPT_FINALIZE_TIMEOUT_MS, caller.promptBuffer || ""));
           }
           return;
         }
