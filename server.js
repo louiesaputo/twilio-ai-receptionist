@@ -3556,6 +3556,53 @@ function promptFinalizeDelayForCaller(caller, fallbackMs = PROMPT_FINALIZE_TIMEO
 }
 
 
+function isGreetingOnlyPrompt(text = "") {
+  const safe = cleanSpeechText(text || "");
+  if (!safe) return false;
+  return /^(?:hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)\s*,?\s*(?:alex)?[.!?]*$/i.test(safe);
+}
+
+function clearGreetingContinuationTimer(caller) {
+  if (!caller || !caller.greetingContinuationTimer) return;
+  clearTimeout(caller.greetingContinuationTimer);
+  caller.greetingContinuationTimer = null;
+}
+
+function shouldHoldGreetingForContinuation(caller, completePrompt = "") {
+  if (!caller) return false;
+  if (!(caller.lastStep === "ask_issue" || caller.lastStep === "ask_issue_again")) return false;
+  return isGreetingOnlyPrompt(completePrompt);
+}
+
+function scheduleGreetingContinuationGrace(ws, caller, greetingText) {
+  if (!caller) return;
+  clearGreetingContinuationTimer(caller);
+  caller.pendingGreetingPrompt = cleanSpeechText(greetingText || "");
+  caller.greetingContinuationTimer = setTimeout(async () => {
+    if (!ws || ws.readyState !== 1) return;
+    const currentCaller = getOrCreateCaller(ws.sessionKey);
+    currentCaller.greetingContinuationTimer = null;
+    const pendingGreeting = cleanSpeechText(currentCaller.pendingGreetingPrompt || "");
+    currentCaller.pendingGreetingPrompt = "";
+    if (!pendingGreeting) return;
+    if (cleanSpeechText(currentCaller.promptBuffer || "")) {
+      currentCaller.promptBuffer = `${pendingGreeting}${currentCaller.promptBuffer ? " " + currentCaller.promptBuffer : ""}`;
+      try {
+        await processBufferedPrompt(ws, currentCaller);
+      } catch (err) {
+        console.error("[PROMPT FINALIZE ERROR]", err.message);
+      }
+      return;
+    }
+    try {
+      await handlePrompt(ws, currentCaller, pendingGreeting);
+    } catch (err) {
+      console.error("[PROMPT FINALIZE ERROR]", err.message);
+    }
+  }, Math.max(200, GREETING_CONTINUATION_GRACE_MS));
+}
+
+
 
 
 function lightlyPaceText(text) {
