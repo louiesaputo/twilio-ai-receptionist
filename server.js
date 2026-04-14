@@ -73,7 +73,7 @@
 
 
 
-console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 22 PHONE/ADDRESS WORDING ONLY UPDATE LOADED 🔥");
+console.log("🔥 BLUE CALLER CONVERSATIONRELAY BASELINE V15 PASS 23 INTRO ISSUE-FIRST NAME-LATER FIX LOADED 🔥");
 
 
 
@@ -130,7 +130,7 @@ const wss = new WebSocketServer({ noServer: true });
 
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-PHONE-ADDRESS-WORDING-ONLY-UPDATE";
+const APP_VERSION = "CONVERSATIONRELAY-STRUCTURED-AI-PHASE1-INTRO-ISSUE-FIRST-NAME-LATER-FIX";
 
 
 
@@ -1070,6 +1070,10 @@ function extractOpeningNameAndIssue(text) {
 
 
 
+    const issueLooksSpecificEnough = (value) => {
+      const cleaned = tryIssueCleanup(value);
+      return Boolean(cleaned && (looksLikeIssueText(cleaned) || detectServiceItem(cleaned) || hasSpecificProblemDetail(cleaned)));
+    };
 
     for (const part of sentenceParts) {
       const sameSentencePartIssueAndName = splitIssueAndTrailingName(part);
@@ -1078,6 +1082,20 @@ function extractOpeningNameAndIssue(text) {
         issueFirstCompanyName = issueFirstCompanyName || sameSentencePartIssueAndName.companyName || "";
         issueFirstIssueText = issueFirstIssueText || sameSentencePartIssueAndName.issueText;
         continue;
+      }
+
+      for (const pattern of nameAndIssuePatterns) {
+        const match = part.match(pattern);
+        if (!match) continue;
+        const possibleName = normalizeNameCandidate(match[1]);
+        const candidateIssueText = tryIssueCleanup(match[2]);
+        if (!possibleName) continue;
+        issueFirstName = issueFirstName || possibleName;
+        issueFirstCompanyName = issueFirstCompanyName || extractCompanyNameFromSpeech(match[1]);
+        if (!issueFirstIssueText && issueLooksSpecificEnough(candidateIssueText)) {
+          issueFirstIssueText = candidateIssueText;
+        }
+        break;
       }
 
       for (const pattern of nameOnlyPatterns) {
@@ -1092,12 +1110,11 @@ function extractOpeningNameAndIssue(text) {
 
       if (!issueFirstIssueText) {
         const cleanedPart = tryIssueCleanup(part);
-        if (looksLikeIssueText(cleanedPart)) {
+        if (issueLooksSpecificEnough(cleanedPart)) {
           issueFirstIssueText = cleanedPart;
         }
       }
     }
-
 
 
 
