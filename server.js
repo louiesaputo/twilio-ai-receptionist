@@ -1811,7 +1811,14 @@ function isNegative(text) {
     "that s not necessary", "thats not necessary", "that is not necessary",
     "that s not needed", "thats not needed", "that is not needed",
     "that won t be necessary", "that wont be necessary", "that will not be necessary",
-    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that"
+    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that",
+    "no that s all right", "no thats all right", "no that is all right",
+    "no that s okay", "no thats okay", "no that is okay",
+    "no that s fine", "no thats fine", "no that is fine",
+    "no notes", "no i don t have any", "no i dont have any",
+    "i don t have any notes", "i dont have any notes",
+    "nothing to add", "nothing else to add", "no nothing",
+    "i m good no", "im good no"
   ]);
 }
 
@@ -6284,7 +6291,8 @@ async function handlePrompt(ws, caller, speech) {
 
     case "ask_notes": {
       const wantsToFinishNow = isEndCallPhrase(text);
-      const hadNotes = !wantsToFinishNow;
+      const declinedNotes = !wantsToFinishNow && isNegative(text);
+      const hadNotes = !wantsToFinishNow && !declinedNotes;
       if (hadNotes) caller.notes = cleanForSpeech(text);
 
 
