@@ -612,7 +612,7 @@ function extractStrongLocalNameAndIssue(text) {
   const sentenceParts = socialStripped
     .split(/(?<=[.!?])\s+/)
     .map((part) => cleanSpeechText(part.replace(/[.!?]+$/g, "")))
-    .filter(Boolean);
+    .filter((part) => Boolean(part) && !/^(?:hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)(?:\s*,?\s*alex)?$/i.test(part));
 
   const nameOnlyPatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+)$/i,
@@ -790,8 +790,8 @@ function stripIssueLeadIn(text) {
 
 function stripGreetingPrefix(text) {
   return cleanSpeechText(text || "")
-    .replace(/^(hi|hello|hey)\s*,?\s*alex\s*[,. -]*\s*/i, "")
-    .replace(/^(hi|hello|hey)\s*[,. -]*\s*/i, "")
+    .replace(/^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)\s*,?\s*alex\s*[,. -]*\s*/i, "")
+    .replace(/^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)\s*[,. -]*\s*/i, "")
     .trim();
 }
 
