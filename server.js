@@ -3172,6 +3172,41 @@ function extractDatePart(text) {
   const value = cleanForSpeech(text || "");
   if (!value) return "";
 
+  // Explicit month/day like "April 22", "April 22nd", "Apr 22", optionally with year.
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  const monthAbbrevs = {
+    jan: "January", feb: "February", mar: "March", apr: "April", may: "May", jun: "June",
+    jul: "July", aug: "August", sep: "September", sept: "September", oct: "October", nov: "November", dec: "December"
+  };
+  const monthDayMatch = value.match(
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i
+  );
+  if (monthDayMatch) {
+    const rawMonth = monthDayMatch[1].toLowerCase();
+    const month = monthAbbrevs[rawMonth] || toTitleCase(rawMonth);
+    const day = String(Number(monthDayMatch[2]));
+    const year = monthDayMatch[3] ? String(Number(monthDayMatch[3])) : "";
+    return year ? `${month} ${day} ${year}` : `${month} ${day}`;
+  }
+
+  // Numeric formats like 4/22, 04-22, 4/22/2026, 04-22-26.
+  const numericMatch = value.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  if (numericMatch) {
+    const mm = Number(numericMatch[1]);
+    const dd = Number(numericMatch[2]);
+    const yyyyRaw = numericMatch[3] ? String(numericMatch[3]) : "";
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      const month = monthNames[mm - 1];
+      const year = yyyyRaw
+        ? (yyyyRaw.length === 2 ? `20${yyyyRaw}` : `${Number(yyyyRaw)}`)
+        : "";
+      return year ? `${month} ${dd} ${year}` : `${month} ${dd}`;
+    }
+  }
+
   const relativeMatch = value.match(/\b(today|tomorrow|next week|this week)\b/i);
   if (relativeMatch) return cleanForSpeech(relativeMatch[1]);
 
