@@ -1799,7 +1799,7 @@ function isAffirmative(text) {
 
 
 
-/* Updated */ function isNegative_Old(text) {
+function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
   if (["no", "nope", "nah", "skip", "pass"].includes(t)) return true;
@@ -1811,14 +1811,7 @@ function isAffirmative(text) {
     "that s not necessary", "thats not necessary", "that is not necessary",
     "that s not needed", "thats not needed", "that is not needed",
     "that won t be necessary", "that wont be necessary", "that will not be necessary",
-    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that",
-    "no that s all right", "no thats all right", "no that is all right",
-    "no that s okay", "no thats okay", "no that is okay",
-    "no that s fine", "no thats fine", "no that is fine",
-    "no notes", "no i don t have any", "no i dont have any",
-    "i don t have any notes", "i dont have any notes",
-    "nothing to add", "nothing else to add", "no nothing",
-    "i m good no", "im good no"
+    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that"
   ]);
 }
 
@@ -3171,41 +3164,6 @@ function looksLikeAddressCorrection(text) {
 function extractDatePart(text) {
   const value = cleanForSpeech(text || "");
   if (!value) return "";
-
-  // Explicit month/day like "April 22", "April 22nd", "Apr 22", optionally with year.
-  const monthNames = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-  ];
-  const monthAbbrevs = {
-    jan: "January", feb: "February", mar: "March", apr: "April", may: "May", jun: "June",
-    jul: "July", aug: "August", sep: "September", sept: "September", oct: "October", nov: "November", dec: "December"
-  };
-  const monthDayMatch = value.match(
-    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i
-  );
-  if (monthDayMatch) {
-    const rawMonth = monthDayMatch[1].toLowerCase();
-    const month = monthAbbrevs[rawMonth] || toTitleCase(rawMonth);
-    const day = String(Number(monthDayMatch[2]));
-    const year = monthDayMatch[3] ? String(Number(monthDayMatch[3])) : "";
-    return year ? `${month} ${day} ${year}` : `${month} ${day}`;
-  }
-
-  // Numeric formats like 4/22, 04-22, 4/22/2026, 04-22-26.
-  const numericMatch = value.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
-  if (numericMatch) {
-    const mm = Number(numericMatch[1]);
-    const dd = Number(numericMatch[2]);
-    const yyyyRaw = numericMatch[3] ? String(numericMatch[3]) : "";
-    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
-      const month = monthNames[mm - 1];
-      const year = yyyyRaw
-        ? (yyyyRaw.length === 2 ? `20${yyyyRaw}` : `${Number(yyyyRaw)}`)
-        : "";
-      return year ? `${month} ${dd} ${year}` : `${month} ${dd}`;
-    }
-  }
 
   const relativeMatch = value.match(/\b(today|tomorrow|next week|this week)\b/i);
   if (relativeMatch) return cleanForSpeech(relativeMatch[1]);
@@ -6326,8 +6284,7 @@ async function handlePrompt(ws, caller, speech) {
 
     case "ask_notes": {
       const wantsToFinishNow = isEndCallPhrase(text);
-      const declinedNotes = !wantsToFinishNow && isNegative(text);
-      const hadNotes = !wantsToFinishNow && !declinedNotes;
+      const hadNotes = !wantsToFinishNow;
       if (hadNotes) caller.notes = cleanForSpeech(text);
 
 
