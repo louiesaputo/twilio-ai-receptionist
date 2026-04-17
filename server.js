@@ -59,7 +59,7 @@
  - BOOKING_WEBHOOK_URL
  - POST_SUBMIT_FOLLOWUP_ENABLED   (default false)
  - WEBHOOK_TIMEOUT_MS             (default 5000)
- - AVAILABILITY_TIMEOUT_MS        (default 3500)
+ - AVAILABILITY_TIMEOUT_MS        (default 12000)
  - SUBMISSION_TIMEOUT_MS          (default 4000)
  - CLOSE_SESSION_MIN_MS           (default 4500)
  - CLOSE_SESSION_MAX_MS           (default 12000)
@@ -159,7 +159,7 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const POST_SUBMIT_FOLLOWUP_ENABLED = String(process.env.POST_SUBMIT_FOLLOWUP_ENABLED || "false").toLowerCase() === "true";
 const AI_INTERPRETER_ENABLED = String(process.env.AI_INTERPRETER_ENABLED || "false").toLowerCase() === "true";
 const WEBHOOK_TIMEOUT_MS = Number(process.env.WEBHOOK_TIMEOUT_MS || 5000);
-const AVAILABILITY_TIMEOUT_MS = Number(process.env.AVAILABILITY_TIMEOUT_MS || 3500);
+const AVAILABILITY_TIMEOUT_MS = Number(process.env.AVAILABILITY_TIMEOUT_MS || 12000);
 const SUBMISSION_TIMEOUT_MS = Number(process.env.SUBMISSION_TIMEOUT_MS || 4000);
 const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
@@ -1979,6 +1979,44 @@ function clearPendingUpdatedContactName(caller) {
   caller.pendingUpdatedContactFullName = "";
 }
 
+function isDemoFollowupContactStep(step = "") {
+  return new Set([
+    "confirm_demo_followup_info",
+    "ask_demo_followup_contact_name",
+    "ask_demo_followup_phone",
+    "ask_demo_followup_email_optional",
+    "capture_demo_followup_email"
+  ]).has(step);
+}
+
+function afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated = false } = {}) {
+  const resume = caller.resumeStepAfterPhoneUpdate || "";
+  caller.resumeStepAfterPhoneUpdate = "";
+
+  const updateLine = nameAlsoUpdated
+    ? "Got it. I've updated the callback number and contact name."
+    : "Got it. I've updated the callback number.";
+
+  if (resume && resume !== "ask_notes") {
+    caller.lastStep = resume;
+    if (resume === "confirm_demo_followup_info") {
+      sendText(ws, `${updateLine} Should I use the contact information you already gave me?`);
+      return;
+    }
+    if (isDemoFollowupContactStep(resume) || resume === "offer_demo_followup" || resume === "final_question") {
+      const followUp =
+        resume === "final_question"
+          ? buildFinalSubmissionPrompt(caller)
+          : buildResumePromptForCurrentStep(caller) || "How else can I help?";
+      sendText(ws, `${updateLine} ${followUp}`);
+      return;
+    }
+  }
+
+  caller.lastStep = "ask_notes";
+  sendText(ws, `${updateLine} ${buildTechnicianNotesPrompt()}`);
+}
+
 
 
 
@@ -2401,7 +2439,15 @@ function isSkipResponse(text) {
 
 function isEndCallPhrase(text) {
   const t = normalizedText(text);
-  if (/^(yes|yeah|yep|yup)\b.*\b(that ll do it|thatll do it|that will do it|that s all|thats all|that s it|thats it|we re good|were good|i m good|im good|all set)\b/.test(normalizeIntentText(text))) return true;
+  const it = normalizeIntentText(text);
+  if (/^(yes|yeah|yep|yup)\b.*\b(that ll do it|thatll do it|that will do it|that s all|thats all|that s it|thats it|we re good|were good|i m good|im good|all set)\b/.test(it)) return true;
+  if (containsAny(it, [
+    "no thats it", "no that s it", "no thats all", "no that s all",
+    "nothing more to add", "nothing to add", "nothing else to add",
+    "no nothing", "no notes", "no note", "no special instructions",
+    "nothing for the tech", "nothing for the technician", "no instructions",
+    "no thats everything", "no that s everything"
+  ])) return true;
   return containsAny(t, [
     "that's all", "that is all", "nothing else", "i'm good", "im good", "all set",
     "that'll do it", "that will do it", "that's everything", "that is everything",
@@ -3216,7 +3262,145 @@ function extractDatePart(text) {
   const weekdayMatch = value.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
   if (weekdayMatch) return toTitleCase(weekdayMatch[1]);
 
+  if (/\b(?:in\s+)?two\s+weeks\b/i.test(value)) return "in two weeks";
+  if (/\b(?:in\s+)?three\s+weeks\b/i.test(value)) return "in three weeks";
+  if (/\b(?:in\s+)?(?:a|one)\s+week\b/i.test(value)) return "in one week";
+  const inWeeks = value.match(/\b(?:in\s+)?(\d{1,2})\s+weeks?\b/i);
+  if (inWeeks) {
+    const w = Number(inWeeks[1]);
+    if (w >= 1 && w <= 52) return `in ${w} weeks`;
+  }
+  const inDays = value.match(/\b(?:in\s+)?(\d{1,3})\s+days?\b/i);
+  if (inDays) {
+    const d = Number(inDays[1]);
+    if (d >= 1 && d <= 120) return `in ${d} days`;
+  }
+
   return "";
+}
+
+function resolveRequestedDateToSpokenDate(dateText) {
+  const raw = cleanForSpeech(dateText || "");
+  if (!raw) return "";
+
+  // Already in the canonical spoken format we use elsewhere.
+  if (parseSpokenDateText(raw)) return raw;
+
+  const current = currentEasternParts();
+  const todayUtc = new Date(Date.UTC(Number(current.year), Number(current.month) - 1, Number(current.day)));
+
+  const weekdayIndex = {
+    sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6
+  };
+
+  const formatUtcToSpoken = (dt) => {
+    const weekday = dt.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+    const month = dt.toLocaleDateString("en-US", { month: "long", timeZone: "UTC" });
+    const day = dt.getUTCDate();
+    return `${weekday}, ${month} ${day}`;
+  };
+
+  const lowered = raw.toLowerCase();
+  if (lowered === "today") return formatUtcToSpoken(todayUtc);
+  if (lowered === "tomorrow") {
+    const dt = new Date(todayUtc.getTime());
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    return formatUtcToSpoken(dt);
+  }
+
+  const inDaysMatch = lowered.match(/^in\s+(\d{1,3})\s+days?$/);
+  if (inDaysMatch) {
+    const n = Math.min(Number(inDaysMatch[1]) || 0, 120);
+    if (n > 0) {
+      const dt = new Date(todayUtc.getTime());
+      dt.setUTCDate(dt.getUTCDate() + n);
+      return formatUtcToSpoken(dt);
+    }
+  }
+
+  const inWeeksMatch = lowered.match(/^in\s+(\d{1,2})\s+weeks?$/);
+  if (inWeeksMatch) {
+    const w = Math.min(Number(inWeeksMatch[1]) || 0, 52);
+    if (w > 0) {
+      const dt = new Date(todayUtc.getTime());
+      dt.setUTCDate(dt.getUTCDate() + w * 7);
+      return formatUtcToSpoken(dt);
+    }
+  }
+
+  if (
+    lowered === "in one week" ||
+    lowered === "one week" ||
+    lowered === "a week" ||
+    lowered === "in a week"
+  ) {
+    const dt = new Date(todayUtc.getTime());
+    dt.setUTCDate(dt.getUTCDate() + 7);
+    return formatUtcToSpoken(dt);
+  }
+
+  if (lowered === "in two weeks" || lowered === "two weeks") {
+    const dt = new Date(todayUtc.getTime());
+    dt.setUTCDate(dt.getUTCDate() + 14);
+    return formatUtcToSpoken(dt);
+  }
+
+  if (lowered === "in three weeks" || lowered === "three weeks") {
+    const dt = new Date(todayUtc.getTime());
+    dt.setUTCDate(dt.getUTCDate() + 21);
+    return formatUtcToSpoken(dt);
+  }
+
+  if (lowered === "next week" || lowered === "the following week") {
+    const dt = new Date(todayUtc.getTime());
+    dt.setUTCDate(dt.getUTCDate() + 7);
+    return formatUtcToSpoken(dt);
+  }
+
+  const qualifiedWeekday = raw.match(/^(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i);
+  const plainWeekday = raw.match(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i);
+  if (qualifiedWeekday || plainWeekday) {
+    const qualifier = qualifiedWeekday ? qualifiedWeekday[1].toLowerCase() : "";
+    const weekday = (qualifiedWeekday ? qualifiedWeekday[2] : plainWeekday[1]).toLowerCase();
+    const target = weekdayIndex[weekday];
+    const todayIdx = todayUtc.getUTCDay();
+    let delta = (target - todayIdx + 7) % 7;
+
+    // "Tuesday" should mean the next occurrence (not "today" if today is Tuesday).
+    if (!qualifier && delta === 0) delta = 7;
+    // "this Tuesday" can be today if today is Tuesday.
+    if (qualifier === "this") {
+      // keep delta as-is
+    }
+    // "next Tuesday" should always be at least 7 days ahead.
+    if (qualifier === "next") {
+      delta = (delta === 0 ? 7 : delta) + 7;
+    }
+
+    const dt = new Date(todayUtc.getTime());
+    dt.setUTCDate(dt.getUTCDate() + delta);
+    return formatUtcToSpoken(dt);
+  }
+
+  // Month day (optionally with year) like "April 22" or "April 22 2026".
+  const monthDay = raw.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:\s+(\d{4}))?$/i);
+  if (monthDay) {
+    const months = {
+      january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+      july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+    };
+    let year = monthDay[3] ? Number(monthDay[3]) : Number(current.year);
+    const month = months[monthDay[1].toLowerCase()];
+    const day = Number(monthDay[2]);
+    let candidate = new Date(Date.UTC(year, month - 1, day));
+    if (!monthDay[3] && candidate < todayUtc) {
+      year += 1;
+      candidate = new Date(Date.UTC(year, month - 1, day));
+    }
+    return formatUtcToSpoken(candidate);
+  }
+
+  return raw;
 }
 
 function extractSpecificTimeText(text) {
@@ -3275,9 +3459,12 @@ function parseAvailabilityRequest(text, existingDate = "", existingTime = "") {
   const requestedExactTime = extractSpecificTimeText(raw);
   const requestedTimePreference = requestedExactTime || detectTimePreference(raw);
   if (!requestedDate && existingDate && isAlternateAvailabilityRequest(raw)) requestedDate = existingDate;
+  const requestedDateResolved = resolveRequestedDateToSpokenDate(requestedDate || existingDate || "");
+  const rawQuery = buildAvailabilityRawQuery(raw, requestedDateResolved || existingDate, existingTime);
   return {
-    rawQuery: buildAvailabilityRawQuery(raw, existingDate, existingTime),
+    rawQuery,
     requestedDate: requestedDate || existingDate || "",
+    requestedDateResolved,
     requestedTimePreference,
     requestedExactTime
   };
@@ -3556,6 +3743,7 @@ function getOrCreateCaller(key) {
       pendingLateDayDate: "",
       pendingUpdatedContactFirstName: "",
       pendingUpdatedContactFullName: "",
+      resumeStepAfterPhoneUpdate: "",
       pendingLeadResubmission: false,
       repeatPromptIndex: 0,
       promptBuffer: "",
@@ -4271,7 +4459,7 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
     firstName: caller.firstName || "",
     issueSummary: caller.issueSummary || caller.projectType || "",
     address: caller.address || "",
-    requestedDate: requestDetails.requestedDate || caller.requestedDate || "",
+    requestedDate: requestDetails.requestedDateResolved || requestDetails.requestedDate || caller.requestedDate || "",
     requestedTimePreference: requestDetails.requestedTimePreference || caller.requestedTimePreference || "",
     requestedExactTime: requestDetails.requestedExactTime || "",
     requestedAfterTime: requestDetails.requestedAfterTime || requestDetails.requestedExactTime || "",
@@ -4791,6 +4979,8 @@ async function handlePrompt(ws, caller, speech) {
     "ask_notes",
     "offer_demo_followup",
     "confirm_demo_followup_info",
+    "ask_demo_followup_contact_name",
+    "ask_demo_followup_phone",
     "ask_demo_followup_email_optional",
     "capture_demo_followup_email",
     "final_question"
@@ -4798,8 +4988,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
   if (postIntakeSteps.has(caller.lastStep) && isCallbackNumberChangeIntent(text)) {
+    caller.resumeStepAfterPhoneUpdate = caller.lastStep;
     clearPendingUpdatedContactName(caller);
-    const extractedUpdatedName = extractUpdatedContactNameFromSpeech(text);
+    const mayHaveEmbeddedName =
+      isChangeContactPersonIntent(text) ||
+      /\b(name|names|person|contact name|spouse|wife|husband)\b/i.test(text || "");
+    const extractedUpdatedName = mayHaveEmbeddedName ? extractUpdatedContactNameFromSpeech(text) : "";
     if (extractedUpdatedName) {
       if (hasFullName(extractedUpdatedName)) {
         caller.pendingUpdatedContactFullName = extractedUpdatedName;
@@ -5599,8 +5793,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.fullName = caller.pendingUpdatedContactFullName;
         caller.firstName = getFirstName(caller.fullName);
         clearPendingUpdatedContactName(caller);
-        caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+        afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
         return;
       }
 
@@ -5627,10 +5820,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "confirm_contact_person_after_phone_change": {
-      if (isKeepSameContactPerson(text)) {
+      if (
+        isKeepSameContactPerson(text) ||
+        (isAffirmative(text) && !isChangeContactPersonIntent(text) && !extractUpdatedContactNameFromSpeech(text))
+      ) {
         clearPendingUpdatedContactName(caller);
-        caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number. " + buildTechnicianNotesPrompt());
+        afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: false });
         return;
       }
 
@@ -5641,8 +5836,7 @@ async function handlePrompt(ws, caller, speech) {
           caller.fullName = extractedUpdatedName;
           caller.firstName = getFirstName(extractedUpdatedName);
           clearPendingUpdatedContactName(caller);
-          caller.lastStep = "ask_notes";
-          sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+          afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
           return;
         }
         caller.pendingUpdatedContactFirstName = getFirstName(extractedUpdatedName) || extractedUpdatedName;
@@ -5671,8 +5865,7 @@ async function handlePrompt(ws, caller, speech) {
           caller.fullName = parsedName;
           caller.firstName = getFirstName(parsedName);
           clearPendingUpdatedContactName(caller);
-          caller.lastStep = "ask_notes";
-          sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+          afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
           return;
         }
         caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
@@ -5705,8 +5898,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.fullName = parsedName;
         caller.firstName = getFirstName(parsedName);
         clearPendingUpdatedContactName(caller);
-        caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+        afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
         return;
       }
       caller.pendingUpdatedContactFirstName = getFirstName(parsedName) || parsedName;
@@ -5730,8 +5922,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.fullName = `${caller.pendingUpdatedContactFirstName} ${existingLastName}`.trim();
         caller.firstName = getFirstName(caller.fullName);
         clearPendingUpdatedContactName(caller);
-        caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+        afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
         return;
       }
       if (isNegative(text)) {
@@ -5753,8 +5944,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.fullName = `${caller.pendingUpdatedContactFirstName} ${existingLastName}`.trim();
         caller.firstName = getFirstName(caller.fullName);
         clearPendingUpdatedContactName(caller);
-        caller.lastStep = "ask_notes";
-        sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+        afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
         return;
       }
       const cleanedLastNameText = cleanForSpeech(text)
@@ -5768,8 +5958,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.fullName = `${caller.pendingUpdatedContactFirstName} ${parsedLastName}`.trim();
       caller.firstName = getFirstName(caller.fullName);
       caller.pendingUpdatedContactFirstName = "";
-      caller.lastStep = "ask_notes";
-      sendText(ws, "Got it. I've updated the callback number and contact name. " + buildTechnicianNotesPrompt());
+      afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated: true });
       return;
     }
 
