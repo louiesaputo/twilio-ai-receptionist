@@ -3117,7 +3117,8 @@ function isSpecificTime(text) {
   const spokenClock = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(o[' ]?clock|thirty|fifteen|forty[- ]?five)?\b/i.test(t);
   const spokenParts = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(in\s+the\s+morning|in\s+the\s+afternoon|in\s+the\s+evening)\b/i.test(t);
   const halfPast = /\bhalf\s+past\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i.test(t);
-  return numericTime || namedTime || spokenClock || spokenParts || halfPast;
+  const atBareHour = /\b(?:at|@)\s+\d{1,2}\b/.test(t) || /\b(?:at|@)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/.test(t);
+  return numericTime || namedTime || spokenClock || spokenParts || halfPast || atBareHour;
 }
 
 
@@ -3417,6 +3418,30 @@ function extractSpecificTimeText(text) {
 
   const namedMatch = value.match(/\b(noon|midnight)\b/i);
   if (namedMatch) return cleanForSpeech(namedMatch[1]).toLowerCase();
+
+  const hourWords = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
+  };
+  const atWordHour = value.match(/\b(?:at|@)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i);
+  if (atWordHour) {
+    const tailWord = value.slice(atWordHour.index + atWordHour[0].length);
+    if (!/^\s*[ap]\.?\s*m\.?\b/i.test(tailWord)) {
+      const h = hourWords[atWordHour[1].toLowerCase()];
+      if (h >= 1 && h <= 11) return `${h}:00 PM`;
+      if (h === 12) return `12:00 PM`;
+    }
+  }
+
+  const bareAtHour = value.match(/\b(?:at|@)\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (bareAtHour) {
+    const tail = value.slice(bareAtHour.index + bareAtHour[0].length);
+    if (!/^\s*[ap]\.?\s*m\.?\b/i.test(tail)) {
+      const h = Number(bareAtHour[1]);
+      const minute = bareAtHour[2] ? String(Number(bareAtHour[2])).padStart(2, "0") : "00";
+      if (h >= 1 && h <= 11) return `${h}:${minute} PM`;
+      if (h === 12) return `12:${minute} PM`;
+    }
+  }
 
   return "";
 }
@@ -4491,15 +4516,51 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
 
 
   const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK", AVAILABILITY_TIMEOUT_MS);
-  if (!result || !result.body) return null;
+  if (!result || result.body == null || result.body === "") {
+    console.error("[CALENDAR CHECK] Empty response from webhook");
+    return null;
+  }
+  if (result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
+    console.error("[CALENDAR CHECK] Non-success HTTP", result.statusCode, String(result.body).slice(0, 400));
+    return null;
+  }
   try {
     const parsed = JSON.parse(result.body || "{}");
-    const date = cleanForSpeech(parsed.date || parsed.nextAvailableDate || "");
-    const time = cleanForSpeech(parsed.time || parsed.nextAvailableTime || "");
-    if (!date || !time) return null;
+    let date = cleanForSpeech(
+      parsed.date
+        || parsed.nextAvailableDate
+        || parsed.callbackDate
+        || parsed.appointmentDate
+        || parsed.slotDate
+        || parsed.startDate
+        || ""
+    );
+    let time = cleanForSpeech(
+      parsed.time
+        || parsed.nextAvailableTime
+        || parsed.callbackTime
+        || parsed.appointmentTime
+        || parsed.slotTime
+        || parsed.startTime
+        || ""
+    );
+    if ((!date || !time) && Array.isArray(parsed.slots) && parsed.slots.length) {
+      const s = parsed.slots[0] || {};
+      date = date || cleanForSpeech(s.date || s.startDate || s.slotDate || "");
+      time = time || cleanForSpeech(s.time || s.startTime || s.slotTime || "");
+    }
+    if (!date || !time) {
+      console.error(
+        "[CALENDAR CHECK] Missing date or time in JSON. Keys:",
+        Object.keys(parsed).join(","),
+        "snippet:",
+        String(result.body).slice(0, 350)
+      );
+      return null;
+    }
     return { date, time };
   } catch (err) {
-    console.error("[CALENDAR CHECK PARSE ERROR]", err.message);
+    console.error("[CALENDAR CHECK PARSE ERROR]", err.message, String(result.body).slice(0, 200));
     return null;
   }
 }
