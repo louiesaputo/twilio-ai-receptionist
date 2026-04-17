@@ -1329,9 +1329,16 @@ function buildPostNotesTransition(caller, hadNotes) {
 
 
 function buildAddressRequestPrompt(caller) {
-  return caller.leadType === "quote"
-    ? "What is the project address?"
-    : "Okay, and what about the service address? Can I have that, please?";
+  if (caller.leadType === "quote") {
+    return "What is the project address?";
+  }
+  const variants = [
+    "Got it—and what's the service address?",
+    "Great, thanks. What's the service address?",
+    "Perfect. Can I get the service address?"
+  ];
+  const idx = nextPromptIndex(caller, "addressRequestPromptIndex");
+  return variants[idx % variants.length];
 }
 
 
@@ -1352,8 +1359,116 @@ function appendAdditionalIssue(caller, issueText) {
 
 
 
-function buildTechnicianNotesPrompt() {
-  return "Before I wrap this up, are there any special instructions or notes you want me to include for the technician?";
+const ALEX_TONE_RANK = {
+  neutral: 0,
+  warm: 1,
+  playful: 2,
+  urgent_stressed: 3,
+  frustrated: 4,
+  overwhelmed: 4,
+  upset: 5
+};
+
+function toneRank(tone) {
+  return ALEX_TONE_RANK[tone] ?? 0;
+}
+
+function inferEmotionalToneFromSpeech(raw) {
+  const t = normalizeIntentText(raw || "");
+  if (!t) return "neutral";
+
+  if (containsAny(t, [
+    "furious", "lawsuit", "unacceptable", "ridiculous", "this is insane", "so angry",
+    "screw this", "worst service", "outrageous", "disgusted", "this is a joke", "never using"
+  ])) {
+    return "upset";
+  }
+  if (containsAny(t, [
+    "pissed", "sick of this", "had enough", "not happy", "very upset", "extremely frustrated",
+    "this is ridiculous", "so frustrated", "damn it", "dammit", "angry", "fed up"
+  ])) {
+    return "frustrated";
+  }
+  if (containsAny(t, [
+    "overwhelmed", "freaking out", "losing it", "losing my mind", "frazzled", "so stressed",
+    "cant take it", "can't take it", "exhausted", "crying", "panic", "spinning", "too much at once"
+  ])) {
+    return "overwhelmed";
+  }
+  if (containsAny(t, [
+    "right now", "asap", "as soon as possible", "immediately", "urgent", "hurry", "quickly",
+    "need someone now", "dont have time", "don't have time", "need this fixed today", "need help now"
+  ])) {
+    return "urgent_stressed";
+  }
+  if (containsAny(t, ["haha", "ha ha", "lol", "l o l", "just kidding", "kidding", "joking", "too funny"])) {
+    return "playful";
+  }
+  if (containsAny(t, ["thank you so", "really appreciate", "you have been great", "you've been great", "so kind"])) {
+    return "warm";
+  }
+  return "neutral";
+}
+
+function updateCallerEmotionalTone(caller, userText) {
+  if (!caller) return;
+  const next = inferEmotionalToneFromSpeech(userText);
+  if (next === "neutral") return;
+  const cur = caller.alexEmotionalTone || "neutral";
+  if (toneRank(next) >= toneRank(cur)) {
+    caller.alexEmotionalTone = next;
+  }
+}
+
+function applyAlexConversationalToneLayer(caller, text, options = {}) {
+  let out = String(text || "");
+  if (!out.trim()) return out;
+  const tone = caller.alexEmotionalTone || "neutral";
+  const skipPrefix = options.tonePrefix === false;
+
+  if (!skipPrefix && (caller.alexEmpathyPrefixCount || 0) < 2 && out.length >= 32) {
+    if (!/^(I hear|I understand|It sounds like|I'?ll move quickly|Thanks for sharing|I appreciate the humor)/i.test(out.trim())) {
+      const prefixes = {
+        upset: "I hear the frustration, and I'm going to help you get this sorted. ",
+        frustrated: "I understand this has been frustrating. ",
+        overwhelmed: "It sounds like a lot is happening at once—we'll take this one step at a time. ",
+        urgent_stressed: "I'll move quickly on this for you. ",
+        warm: "Thanks for sharing that. "
+      };
+      const pre = prefixes[tone];
+      if (pre) {
+        caller.alexEmpathyPrefixCount = (caller.alexEmpathyPrefixCount || 0) + 1;
+        out = pre + out;
+      }
+    }
+  }
+
+  if (tone === "playful" && (caller.alexPlayfulLeadIns || 0) < 1 && out.length >= 40) {
+    if (!/^I appreciate the humor/i.test(out.trim())) {
+      caller.alexPlayfulLeadIns = (caller.alexPlayfulLeadIns || 0) + 1;
+      out = "I appreciate the humor—" + out;
+    }
+  }
+
+  return out;
+}
+
+function buildTechnicianNotesPrompt(caller) {
+  const c = caller || {};
+  const tone = c.alexEmotionalTone || "neutral";
+  if (tone === "overwhelmed" || tone === "upset") {
+    return "Whenever you're ready, is there anything you'd like the technician to know before they arrive? If not, that's completely okay.";
+  }
+  if (tone === "urgent_stressed" || tone === "frustrated") {
+    return "Before we wrap, any short notes for the technician—access codes, pets, parking, anything like that?";
+  }
+  const variants = [
+    "Before I wrap this up, are there any special instructions or notes you want me to include for the technician?",
+    "When you have a moment, is there anything specific the technician should know before they head out?",
+    "Last quick thing for the tech—any special instructions or access notes I should include?"
+  ];
+  const idx = nextPromptIndex(c, "techNotesVariantIndex");
+  return variants[idx % variants.length];
 }
 
 function buildMissingNameAfterIssuePrompt(caller) {
@@ -1748,7 +1863,7 @@ function isAffirmative(text) {
 
 
   const directYes = new Set([
-    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "absolutely", "definitely", "correct",
+    "yes", "yeah", "yea", "yep", "yup", "sure", "for sure", "ok", "okay", "absolutely", "definitely", "correct",
     "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay",
     "that is fine", "thats fine", "all right", "alright", "it is", "it is correct", "its correct",
     "that is correct", "thats correct", "that is right", "thats right"
@@ -2022,7 +2137,7 @@ function afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated = false } = {
   }
 
   caller.lastStep = "ask_notes";
-  sendText(ws, `${updateLine} ${buildTechnicianNotesPrompt()}`);
+  sendText(ws, `${updateLine} ${buildTechnicianNotesPrompt(caller)}`);
 }
 
 
@@ -2284,7 +2399,7 @@ function buildResumePromptForCurrentStep(caller) {
     case "late_day_preference_choice":
       return buildLateDayFallbackPrompt(caller);
     case "ask_notes":
-      return buildTechnicianNotesPrompt();
+      return buildTechnicianNotesPrompt(caller);
     case "offer_demo_followup":
       return "Would you like me to have one of our team members call you to discuss how this could help your company?";
     case "confirm_demo_followup_info":
@@ -2314,20 +2429,34 @@ function buildResumePromptForCurrentStep(caller) {
   }
 }
 
-function buildServiceIntakeLeadIn() {
-  return "I'm here to help, so let's get a few details from you.";
+function buildServiceIntakeLeadIn(caller) {
+  const c = caller || {};
+  const tone = c.alexEmotionalTone || "neutral";
+  if (tone === "overwhelmed" || tone === "upset") {
+    return "I'm here with you—I'll keep this simple. I just need a few details to make sure we get this right.";
+  }
+  if (tone === "urgent_stressed" || tone === "frustrated") {
+    return "I'm going to keep this quick—I just need a few details so the team can jump on this.";
+  }
+  const variants = [
+    "I'm here to help—let me grab a few quick details so we're set.",
+    "I'm here to help, so let's get a few details from you.",
+    "Thanks for bearing with me—I'll just need a few details next."
+  ];
+  const idx = nextPromptIndex(c, "serviceLeadInPromptIndex");
+  return variants[idx % variants.length];
 }
 
 function buildStandardIntakePrompt(caller) {
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
       return isBrowserCaller(caller)
-        ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} ${buildBrowserCallbackPrompt()}`
-        : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+        ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} ${buildBrowserCallbackPrompt()}`
+        : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
     }
-    return `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Before I go any further, can I get your last name as well?`;
+    return `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} Before I go any further, can I get your last name as well?`;
   }
-  return `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`;
+  return `${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} Can I start by getting your full name, please?`;
 }
 
 function buildUrgentFlaggedLine() {
@@ -3813,6 +3942,13 @@ function getOrCreateCaller(key) {
       scheduleChoicePromptIndex: 0,
       callbackOfferIndex: 0,
       lateDayPromptIndex: 0,
+      alexEmotionalTone: "neutral",
+      alexEmpathyPrefixCount: 0,
+      alexAssistantTurnCount: 0,
+      alexPlayfulLeadIns: 0,
+      serviceLeadInPromptIndex: 0,
+      techNotesVariantIndex: 0,
+      addressRequestPromptIndex: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -3944,7 +4080,12 @@ function sendText(ws, text, options = {}) {
   if (caller && options.remember !== false) {
     caller.pendingPromptText = cleanForSpeech(text || "");
   }
-  const pacedText = options.raw === true ? String(text || "") : lightlyPaceText(text);
+  let message = String(text || "");
+  if (caller && options.raw !== true && options.tone !== false) {
+    caller.alexAssistantTurnCount = (caller.alexAssistantTurnCount || 0) + 1;
+    message = applyAlexConversationalToneLayer(caller, message, options);
+  }
+  const pacedText = options.raw === true ? message : lightlyPaceText(message);
 
 
   const now = Date.now();
@@ -4936,7 +5077,8 @@ function buildAIContext(caller) {
     issue_summary: caller.issueSummary || "",
     first_name: caller.firstName || "",
     full_name: caller.fullName || "",
-    company_name: caller.companyName || ""
+    company_name: caller.companyName || "",
+    alex_emotional_tone: caller.alexEmotionalTone || "neutral"
   };
 }
 
@@ -5027,7 +5169,7 @@ function sendAfterAddressConfirmed(ws, caller) {
   }
   if (caller.emergencyAlert) {
     caller.lastStep = "ask_notes";
-    sendText(ws, buildTechnicianNotesPrompt());
+    sendText(ws, buildTechnicianNotesPrompt(caller));
     return;
   }
   caller.lastStep = "schedule_or_callback";
@@ -5061,6 +5203,8 @@ async function handlePrompt(ws, caller, speech) {
     sendText(ws, "I'm sorry, I didn't catch that. Could you say that again?");
     return;
   }
+
+  updateCallerEmotionalTone(caller, text);
 
   if (isShortCourtesyResponse(text)) {
     const resumePrompt = buildResumePromptForCurrentStep(caller);
@@ -5427,7 +5571,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
             ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
-            : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn()} Can I get your last name as well?`
+            : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
       }
@@ -5482,9 +5626,9 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${buildServiceIntakeLeadIn()} ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
-          : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn()} Can I get your last name as well?`
-        : `${buildServiceIntakeLeadIn()} Can I start by getting your full name, please?`);
+          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${buildServiceIntakeLeadIn(caller)} ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+          : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
+        : `${buildServiceIntakeLeadIn(caller)} Can I start by getting your full name, please?`);
       return;
     }
 
@@ -5719,7 +5863,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isAffirmative(text) || containsAny(normalized, ["note that", "as close to 5", "as close to five", "as late as possible", "late in the day", "that works", "that is fine", "thats fine"])) {
         finalizeLateDayPreference(caller);
         caller.lastStep = "ask_notes";
-        sendText(ws, `Got it. I'll note that you'd prefer a callback as close to 5:00 as possible. ${buildTechnicianNotesPrompt()}`);
+        sendText(ws, `Got it. I'll note that you'd prefer a callback as close to 5:00 as possible. ${buildTechnicianNotesPrompt(caller)}`);
         return;
       }
 
@@ -6322,7 +6466,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!availability) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt(caller));
           return;
         }
         if (offeredAvailabilityNeedsLateDayFallback(availability)) {
@@ -6348,7 +6492,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!availability) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt(caller));
           return;
         }
         if (offeredAvailabilityNeedsLateDayFallback(availability)) {
@@ -6367,7 +6511,7 @@ async function handlePrompt(ws, caller, speech) {
       if (wantsOfficeCallback(text)) {
         caller.status = "callback_requested";
         caller.lastStep = "ask_notes";
-        sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt());
+        sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt(caller));
         return;
       }
 
@@ -6402,7 +6546,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!availability) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback request, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt(caller));
           return;
         }
         if (offeredAvailabilityNeedsLateDayFallback(availability)) {
@@ -6448,7 +6592,7 @@ async function handlePrompt(ws, caller, speech) {
           caller.status = "callback_requested";
           caller.appointmentTime = detectTimePreference(text) || cleanForSpeech(text);
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt(caller));
           return;
         }
         if (offeredAvailabilityNeedsLateDayFallback(availability)) {
@@ -6467,7 +6611,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.status = "scheduled_pending_confirmation";
       caller.calendarSlotConfirmed = false;
       caller.lastStep = "ask_notes";
-      sendText(ws, `Okay, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. ${buildTechnicianNotesPrompt()}`);
+      sendText(ws, `Okay, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. ${buildTechnicianNotesPrompt(caller)}`);
       return;
     }
 
@@ -6503,7 +6647,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.status = "scheduled";
         caller.calendarSlotConfirmed = true;
         caller.lastStep = "ask_notes";
-        sendText(ws, buildTechnicianNotesPrompt());
+        sendText(ws, buildTechnicianNotesPrompt(caller));
         return;
       }
 
@@ -6518,7 +6662,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!availability) {
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt());
+          sendText(ws, "I'm sorry, I wasn't able to pull the calendar right now. I'll note your callback preference, and someone from the office will reach out to confirm the exact callback time. " + buildTechnicianNotesPrompt(caller));
           return;
         }
         if (offeredAvailabilityNeedsLateDayFallback(availability)) {
@@ -6551,7 +6695,7 @@ async function handlePrompt(ws, caller, speech) {
             caller.status = "scheduled";
             caller.calendarSlotConfirmed = true;
             caller.lastStep = "ask_notes";
-            sendText(ws, buildTechnicianNotesPrompt());
+            sendText(ws, buildTechnicianNotesPrompt(caller));
             return;
           }
 
@@ -6570,7 +6714,7 @@ async function handlePrompt(ws, caller, speech) {
           if (schedulingDecision.intent === "request_office_callback") {
             caller.status = "callback_requested";
             caller.lastStep = "ask_notes";
-            sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt());
+            sendText(ws, "Alright. Someone from the office will call you to arrange the next available time. " + buildTechnicianNotesPrompt(caller));
             return;
           }
 
@@ -6587,7 +6731,7 @@ async function handlePrompt(ws, caller, speech) {
               sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
               caller.status = "callback_requested";
               caller.lastStep = "ask_notes";
-              sendText(ws, buildTechnicianNotesPrompt());
+              sendText(ws, buildTechnicianNotesPrompt(caller));
               return;
             }
             if (offeredAvailabilityNeedsLateDayFallback(alternateResult.availability)) {
@@ -6625,7 +6769,7 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, "I wasn't able to pull a different opening right now. Someone from the office will reach out to confirm the exact callback time.");
           caller.status = "callback_requested";
           caller.lastStep = "ask_notes";
-          sendText(ws, buildTechnicianNotesPrompt());
+          sendText(ws, buildTechnicianNotesPrompt(caller));
           return;
         }
         if (offeredAvailabilityNeedsLateDayFallback(alternateResult.availability)) {
@@ -6649,7 +6793,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.status = "scheduled";
         caller.calendarSlotConfirmed = true;
         caller.lastStep = "ask_notes";
-        sendText(ws, buildTechnicianNotesPrompt());
+        sendText(ws, buildTechnicianNotesPrompt(caller));
         return;
       }
 
