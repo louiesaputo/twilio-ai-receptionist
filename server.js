@@ -3849,14 +3849,16 @@ function scheduleGreetingContinuationGrace(ws, caller, greetingText) {
       try {
         await processBufferedPrompt(ws, currentCaller);
       } catch (err) {
-        console.error("[PROMPT FINALIZE ERROR]", err.message);
+        console.error("[PROMPT FINALIZE ERROR]", err && err.message);
+        sendText(ws, "I'm sorry, something went wrong. Could you say that again?");
       }
       return;
     }
     try {
       await handlePrompt(ws, currentCaller, pendingGreeting);
     } catch (err) {
-      console.error("[PROMPT FINALIZE ERROR]", err.message);
+      console.error("[GREETING CONTINUATION ERROR]", err && err.message);
+      sendText(ws, "I'm sorry, something went wrong. Could you say that again?");
     }
   }, Math.max(200, GREETING_CONTINUATION_GRACE_MS));
 }
@@ -3899,13 +3901,17 @@ function sendText(ws, text, options = {}) {
 
   setTimeout(() => {
     if (!ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify({
-      type: "text",
-      token: pacedText,
-      last: true,
-      interruptible: options.interruptible !== false,
-      preemptible: options.preemptible === true
-    }));
+    try {
+      ws.send(JSON.stringify({
+        type: "text",
+        token: pacedText,
+        last: true,
+        interruptible: options.interruptible !== false,
+        preemptible: options.preemptible === true
+      }));
+    } catch (err) {
+      console.error("[WS SEND ERROR]", err && err.message);
+    }
   }, Math.max(0, sendAt - now));
 }
 
@@ -3942,6 +3948,10 @@ async function processBufferedPrompt(ws, caller, fallbackText = "") {
   caller.processingPrompt = true;
   try {
     await handlePrompt(ws, caller, completePrompt);
+    return true;
+  } catch (err) {
+    console.error("[HANDLE PROMPT ERROR]", err && err.message, err && err.stack);
+    sendText(ws, "I'm sorry, something went wrong on my side. Could you say that once more?");
     return true;
   } finally {
     caller.processingPrompt = false;
@@ -6986,8 +6996,18 @@ app.post("/connect-action", (req, res) => {
 
 
 
+function isConversationRelayUpgradePath(rawUrl = "") {
+  const pathOnly = String(rawUrl || "").split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
+  return pathOnly === "/conversation-relay";
+}
+
+
+
+
+
 server.on("upgrade", (request, socket, head) => {
-  if (request.url !== "/conversation-relay") {
+  if (!isConversationRelayUpgradePath(request.url)) {
+    console.warn("[WS UPGRADE REJECTED]", request.url);
     socket.destroy();
     return;
   }
@@ -7109,6 +7129,10 @@ wss.on("connection", (ws, request) => {
 
 
       if (type === "dtmf") {
+        return;
+      }
+
+      if (type === "info") {
         return;
       }
 
