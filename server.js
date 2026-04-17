@@ -1356,6 +1356,14 @@ function buildTechnicianNotesPrompt() {
   return "Before I wrap this up, are there any special instructions or notes you want me to include for the technician?";
 }
 
+function buildMissingNameAfterIssuePrompt(caller) {
+  const issue = cleanForSpeech(caller.issueSummary || "");
+  if (issue) {
+    return `I'm sorry you're dealing with ${issue}. I didn't catch your name. Do you mind repeating your full name?`;
+  }
+  return "I'm sorry, I didn't catch your name. Do you mind repeating your full name?";
+}
+
 
 
 
@@ -3118,7 +3126,9 @@ function isSpecificTime(text) {
   const spokenParts = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(in\s+the\s+morning|in\s+the\s+afternoon|in\s+the\s+evening)\b/i.test(t);
   const halfPast = /\bhalf\s+past\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i.test(t);
   const atBareHour = /\b(?:at|@)\s+\d{1,2}\b/.test(t) || /\b(?:at|@)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/.test(t);
-  return numericTime || namedTime || spokenClock || spokenParts || halfPast || atBareHour;
+  const aroundBareHour = /\b(?:around|about|like|near)\s+\d{1,2}\b/.test(t)
+    || /\b(?:around|about|like|near)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/.test(t);
+  return numericTime || namedTime || spokenClock || spokenParts || halfPast || atBareHour || aroundBareHour;
 }
 
 
@@ -3440,6 +3450,27 @@ function extractSpecificTimeText(text) {
       const minute = bareAtHour[2] ? String(Number(bareAtHour[2])).padStart(2, "0") : "00";
       if (h >= 1 && h <= 11) return `${h}:${minute} PM`;
       if (h === 12) return `12:${minute} PM`;
+    }
+  }
+
+  const aroundDigit = value.match(/\b(?:around|about|like|near|maybe)\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (aroundDigit) {
+    const tailA = value.slice(aroundDigit.index + aroundDigit[0].length);
+    if (!/^\s*[ap]\.?\s*m\.?\b/i.test(tailA)) {
+      const h = Number(aroundDigit[1]);
+      const minute = aroundDigit[2] ? String(Number(aroundDigit[2])).padStart(2, "0") : "00";
+      if (h >= 1 && h <= 11) return `${h}:${minute} PM`;
+      if (h === 12) return `12:${minute} PM`;
+    }
+  }
+
+  const aroundWord = value.match(/\b(?:around|about|like|near)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i);
+  if (aroundWord) {
+    const tailW = value.slice(aroundWord.index + aroundWord[0].length);
+    if (!/^\s*[ap]\.?\s*m\.?\b/i.test(tailW)) {
+      const h = hourWords[aroundWord[1].toLowerCase()];
+      if (h >= 1 && h <= 11) return `${h}:00 PM`;
+      if (h === 12) return `12:00 PM`;
     }
   }
 
@@ -4486,6 +4517,48 @@ function closeAfterDemoFollowup(ws, caller) {
 
 
 
+function parseAvailabilityWebhookBody(body) {
+  try {
+    const parsed = JSON.parse(body || "{}");
+    let date = cleanForSpeech(
+      parsed.date
+        || parsed.nextAvailableDate
+        || parsed.callbackDate
+        || parsed.appointmentDate
+        || parsed.slotDate
+        || parsed.startDate
+        || ""
+    );
+    let time = cleanForSpeech(
+      parsed.time
+        || parsed.nextAvailableTime
+        || parsed.callbackTime
+        || parsed.appointmentTime
+        || parsed.slotTime
+        || parsed.startTime
+        || ""
+    );
+    if ((!date || !time) && Array.isArray(parsed.slots) && parsed.slots.length) {
+      const s = parsed.slots[0] || {};
+      date = date || cleanForSpeech(s.date || s.startDate || s.slotDate || "");
+      time = time || cleanForSpeech(s.time || s.startTime || s.slotTime || "");
+    }
+    if (!date || !time) {
+      console.error(
+        "[CALENDAR CHECK] Missing date or time in JSON. Keys:",
+        Object.keys(parsed).join(","),
+        "snippet:",
+        String(body).slice(0, 350)
+      );
+      return null;
+    }
+    return { date, time };
+  } catch (err) {
+    console.error("[CALENDAR CHECK PARSE ERROR]", err.message, String(body).slice(0, 200));
+    return null;
+  }
+}
+
 async function checkCalendarAvailability(caller, requestDetails = {}) {
   const payloadObject = {
     action: "check_availability",
@@ -4515,54 +4588,34 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
 
 
 
-  const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK", AVAILABILITY_TIMEOUT_MS);
-  if (!result || result.body == null || result.body === "") {
-    console.error("[CALENDAR CHECK] Empty response from webhook");
-    return null;
-  }
-  if (result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
-    console.error("[CALENDAR CHECK] Non-success HTTP", result.statusCode, String(result.body).slice(0, 400));
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(result.body || "{}");
-    let date = cleanForSpeech(
-      parsed.date
-        || parsed.nextAvailableDate
-        || parsed.callbackDate
-        || parsed.appointmentDate
-        || parsed.slotDate
-        || parsed.startDate
-        || ""
-    );
-    let time = cleanForSpeech(
-      parsed.time
-        || parsed.nextAvailableTime
-        || parsed.callbackTime
-        || parsed.appointmentTime
-        || parsed.slotTime
-        || parsed.startTime
-        || ""
-    );
-    if ((!date || !time) && Array.isArray(parsed.slots) && parsed.slots.length) {
-      const s = parsed.slots[0] || {};
-      date = date || cleanForSpeech(s.date || s.startDate || s.slotDate || "");
-      time = time || cleanForSpeech(s.time || s.startTime || s.slotTime || "");
+  const retryableHttp = (code) => [500, 502, 503, 504, 408].includes(Number(code) || 0);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt === 2) await sleep(750);
+    const result = await postJsonToWebhook(AVAILABILITY_WEBHOOK_URL, payloadObject, "CALENDAR CHECK", AVAILABILITY_TIMEOUT_MS);
+    if (!result || result.body == null || result.body === "") {
+      console.error("[CALENDAR CHECK] Empty response from webhook", { attempt });
+      if (attempt < 2) continue;
+      console.error("[CALENDAR CHECK] Payload sent:", JSON.stringify(payloadObject).slice(0, 900));
+      return null;
     }
-    if (!date || !time) {
+    const code = Number(result.statusCode) || 0;
+    if (code < 200 || code >= 300) {
+      console.error("[CALENDAR CHECK] Non-success HTTP", code, String(result.body).slice(0, 400), { attempt });
+      if (attempt < 2 && retryableHttp(code)) continue;
       console.error(
-        "[CALENDAR CHECK] Missing date or time in JSON. Keys:",
-        Object.keys(parsed).join(","),
-        "snippet:",
-        String(result.body).slice(0, 350)
+        "[CALENDAR CHECK] Make scenario error — open the scenario execution log in Make.com. Payload:",
+        JSON.stringify(payloadObject).slice(0, 900)
       );
       return null;
     }
-    return { date, time };
-  } catch (err) {
-    console.error("[CALENDAR CHECK PARSE ERROR]", err.message, String(result.body).slice(0, 200));
+    const slot = parseAvailabilityWebhookBody(result.body);
+    if (slot) return slot;
+    console.error("[CALENDAR CHECK] HTTP 200 but missing date/time fields:", String(result.body).slice(0, 400));
     return null;
   }
+  return null;
 }
 
 
@@ -5301,6 +5354,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+        if (!caller.fullName) {
+          caller.pendingNameNextStep = "leak_emergency_choice";
+          caller.lastStep = "ask_name";
+          sendText(ws, buildMissingNameAfterIssuePrompt(caller));
+          return;
+        }
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
@@ -5399,6 +5458,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+        if (!caller.fullName) {
+          caller.pendingNameNextStep = "leak_emergency_choice";
+          caller.lastStep = "ask_name";
+          sendText(ws, buildMissingNameAfterIssuePrompt(caller));
+          return;
+        }
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
@@ -5471,6 +5536,12 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+        if (!caller.fullName) {
+          caller.pendingNameNextStep = "leak_emergency_choice";
+          caller.lastStep = "ask_name";
+          sendText(ws, buildMissingNameAfterIssuePrompt(caller));
+          return;
+        }
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
@@ -5674,16 +5745,29 @@ async function handlePrompt(ws, caller, speech) {
       caller.nameSpellingConfirmed = false;
       const companyName = extractCompanyNameFromSpeech(text);
       if (companyName) caller.companyName = companyName;
-      const nextStep = hasFullName(parsedName) ? getPhoneCollectionStep(caller) : "ask_last_name";
+      const resumeStep = caller.pendingNameNextStep || "";
+      const nextStep = hasFullName(parsedName)
+        ? (resumeStep || getPhoneCollectionStep(caller))
+        : "ask_last_name";
       const spellingPrompt = maybeQueueFirstNameSpelling(caller, nextStep);
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
       }
       if (!hasFullName(parsedName)) {
+        caller.pendingNameNextStep = resumeStep || "";
         caller.lastStep = "ask_last_name";
         sendText(ws, `Thank you, ${caller.firstName}. Can I get your last name as well?`);
         return;
+      }
+      caller.pendingNameNextStep = "";
+      if (resumeStep) {
+        caller.lastStep = resumeStep;
+        const resumePrompt = buildResumePromptForCurrentStep(caller);
+        if (resumePrompt) {
+          sendText(ws, resumePrompt);
+          return;
+        }
       }
       caller.lastStep = getPhoneCollectionStep(caller);
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
@@ -5723,6 +5807,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_last_name": {
+      const resumeStep = caller.pendingNameNextStep || "";
       let possibleFullName = parseFullNameFromSpeech(`${caller.firstName} ${text}`);
       if (!possibleFullName || !hasFullName(possibleFullName)) {
         const parsedLastName = parseLastNameResponse(text);
@@ -5736,10 +5821,19 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.fullName = possibleFullName;
       caller.firstName = getFirstName(possibleFullName);
-      const spellingPrompt = maybeQueueFirstNameSpelling(caller, getPhoneCollectionStep(caller));
+      const spellingPrompt = maybeQueueFirstNameSpelling(caller, resumeStep || getPhoneCollectionStep(caller));
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
+      }
+      caller.pendingNameNextStep = "";
+      if (resumeStep) {
+        caller.lastStep = resumeStep;
+        const resumePrompt = buildResumePromptForCurrentStep(caller);
+        if (resumePrompt) {
+          sendText(ws, resumePrompt);
+          return;
+        }
       }
       caller.lastStep = getPhoneCollectionStep(caller);
       sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
