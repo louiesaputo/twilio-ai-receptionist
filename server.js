@@ -6911,8 +6911,12 @@ function verifyTwilioRequest(req) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) return true;
   try {
     const signature = req.headers["x-twilio-signature"];
-    const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
-    return twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, req.body || {});
+    const proto = (req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim();
+    const host = req.get("host") || "";
+    const pathAndQuery = String(req.originalUrl || req.url || "").split("#")[0];
+    const url = `${proto}://${host}${pathAndQuery}`;
+    const params = req.method === "GET" ? { ...(req.query || {}) } : (req.body || {});
+    return twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, params);
   } catch (err) {
     console.error("[TWILIO REQUEST VALIDATION ERROR]", err.message);
     return false;
@@ -6991,8 +6995,12 @@ app.get("/", (req, res) => {
 
 
 
-app.post("/incoming-call", (req, res) => {
+function handleIncomingCall(req, res) {
   if (!verifyTwilioRequest(req)) {
+    console.warn("[INCOMING CALL REJECTED]", req.method, req.originalUrl || req.url, {
+      queryKeys: Object.keys(req.query || {}),
+      bodyKeys: Object.keys(req.body || {})
+    });
     return res.status(403).send("Forbidden");
   }
 
@@ -7037,7 +7045,10 @@ app.post("/incoming-call", (req, res) => {
 
 
   res.type("text/xml").send(twiml.toString());
-});
+}
+
+app.post("/incoming-call", handleIncomingCall);
+app.get("/incoming-call", handleIncomingCall);
 
 
 
@@ -7058,8 +7069,20 @@ app.post("/connect-action", (req, res) => {
 
 
 function isConversationRelayUpgradePath(rawUrl = "") {
-  const pathOnly = String(rawUrl || "").split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
-  return pathOnly === "/conversation-relay";
+  try {
+    let s = String(rawUrl || "").trim();
+    if (!s) return false;
+    if (/^https?:\/\//i.test(s) || /^wss?:\/\//i.test(s)) {
+      const u = new URL(s);
+      let p = (u.pathname || "/").replace(/\/+/g, "/").replace(/\/+$/, "") || "/";
+      return p.toLowerCase() === "/conversation-relay";
+    }
+    let pathOnly = s.split("?")[0].split("#")[0];
+    pathOnly = pathOnly.replace(/\/+/g, "/").replace(/\/+$/, "") || "/";
+    return pathOnly.toLowerCase() === "/conversation-relay";
+  } catch (err) {
+    return false;
+  }
 }
 
 
