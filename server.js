@@ -63,7 +63,7 @@
  - SUBMISSION_TIMEOUT_MS          (default 4000)
  - CLOSE_SESSION_MIN_MS           (default 4500)
  - CLOSE_SESSION_MAX_MS           (default 12000)
- - RESPONSE_THINK_DELAY_MS       (default 220)
+ - RESPONSE_THINK_DELAY_MS       (default 140; raise if replies feel rushed)
 *************************************************/
 
 
@@ -170,7 +170,7 @@ const FREEFORM_PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.FREEFORM_PROMPT_F
 const MID_THOUGHT_EXTRA_MS = Number(process.env.MID_THOUGHT_EXTRA_MS || 180);
 const GREETING_CONTINUATION_GRACE_MS = Number(process.env.GREETING_CONTINUATION_GRACE_MS || 550);
 const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
-const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 220);
+const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 140);
 
 console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
 
@@ -1385,8 +1385,9 @@ function inferEmotionalToneFromSpeech(raw) {
   }
   if (containsAny(t, [
     "pissed", "sick of this", "had enough", "not happy", "very upset", "extremely frustrated",
-    "this is ridiculous", "so frustrated", "damn it", "dammit", "angry", "fed up"
-  ])) {
+    "this is ridiculous", "so frustrated", "damn it", "dammit", "angry", "fed up",
+    "damn leak", "damn pipe", "damn thing", "hell of a leak", "hell of a mess", "this sucks"
+  ]) || (/\b(damn|hell|crap)\b/.test(t) && containsAny(t, ["leak", "leaking", "drip", "dripping", "pipe", "burst", "water", "flood", "flooding"]))) {
     return "frustrated";
   }
   if (containsAny(t, [
@@ -1397,7 +1398,9 @@ function inferEmotionalToneFromSpeech(raw) {
   }
   if (containsAny(t, [
     "right now", "asap", "as soon as possible", "immediately", "urgent", "hurry", "quickly",
-    "need someone now", "dont have time", "don't have time", "need this fixed today", "need help now"
+    "need someone now", "dont have time", "don't have time", "need this fixed today", "need help now",
+    "need to get this fixed", "need to get this thing fixed", "get this thing fixed", "get this fixed",
+    "gotta get this fixed", "got to get this fixed", "need it fixed"
   ])) {
     return "urgent_stressed";
   }
@@ -1425,28 +1428,31 @@ function applyAlexConversationalToneLayer(caller, text, options = {}) {
   if (!out.trim()) return out;
   const tone = caller.alexEmotionalTone || "neutral";
   const skipPrefix = options.tonePrefix === false;
+  const trimmed = out.trim();
+  const alreadyEmpathic =
+    /^I'?m sorry\b/i.test(trimmed) ||
+    /\bI know that\b/i.test(trimmed) ||
+    /^(I hear|I understand|It sounds like|Thanks for sharing|I appreciate the humor)/i.test(trimmed);
 
-  if (!skipPrefix && (caller.alexEmpathyPrefixCount || 0) < 2 && out.length >= 32) {
-    if (!/^(I hear|I understand|It sounds like|I'?ll move quickly|Thanks for sharing|I appreciate the humor)/i.test(out.trim())) {
-      const prefixes = {
-        upset: "I hear the frustration, and I'm going to help you get this sorted. ",
-        frustrated: "I understand this has been frustrating. ",
-        overwhelmed: "It sounds like a lot is happening at once—we'll take this one step at a time. ",
-        urgent_stressed: "I'll move quickly on this for you. ",
-        warm: "Thanks for sharing that. "
-      };
-      const pre = prefixes[tone];
-      if (pre) {
-        caller.alexEmpathyPrefixCount = (caller.alexEmpathyPrefixCount || 0) + 1;
-        out = pre + out;
-      }
+  if (!skipPrefix && !alreadyEmpathic && (caller.alexEmpathyPrefixCount || 0) < 1 && out.length >= 56) {
+    const prefixes = {
+      upset: "I'm on it—",
+      frustrated: "I get it—",
+      overwhelmed: "Let's take this one step at a time—",
+      urgent_stressed: "On it—",
+      warm: "Thanks—"
+    };
+    const pre = prefixes[tone];
+    if (pre) {
+      caller.alexEmpathyPrefixCount = (caller.alexEmpathyPrefixCount || 0) + 1;
+      out = pre + out;
     }
   }
 
-  if (tone === "playful" && (caller.alexPlayfulLeadIns || 0) < 1 && out.length >= 40) {
-    if (!/^I appreciate the humor/i.test(out.trim())) {
+  if (tone === "playful" && (caller.alexPlayfulLeadIns || 0) < 1 && out.length >= 48) {
+    if (!/^Love it/i.test(trimmed)) {
       caller.alexPlayfulLeadIns = (caller.alexPlayfulLeadIns || 0) + 1;
-      out = "I appreciate the humor—" + out;
+      out = "Love it—" + out;
     }
   }
 
@@ -2438,13 +2444,7 @@ function buildServiceIntakeLeadIn(caller) {
   if (tone === "urgent_stressed" || tone === "frustrated") {
     return "I'm going to keep this quick—I just need a few details so the team can jump on this.";
   }
-  const variants = [
-    "I'm here to help—let me grab a few quick details so we're set.",
-    "I'm here to help, so let's get a few details from you.",
-    "Thanks for bearing with me—I'll just need a few details next."
-  ];
-  const idx = nextPromptIndex(c, "serviceLeadInPromptIndex");
-  return variants[idx % variants.length];
+  return "I'm here to help, so let's get a few details from you.";
 }
 
 function buildStandardIntakePrompt(caller) {
@@ -3946,7 +3946,6 @@ function getOrCreateCaller(key) {
       alexEmpathyPrefixCount: 0,
       alexAssistantTurnCount: 0,
       alexPlayfulLeadIns: 0,
-      serviceLeadInPromptIndex: 0,
       techNotesVariantIndex: 0,
       addressRequestPromptIndex: 0,
       createdAt: new Date().toISOString(),
