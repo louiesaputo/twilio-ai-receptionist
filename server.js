@@ -862,6 +862,16 @@ function stripIssueLeadIn(text) {
     .trim();
 }
 
+/** Strips a trailing name introduction bundled into issue text (same utterance, no pause). */
+function stripTrailingNameIntroductionFromIssueText(text) {
+  const safe = cleanForSpeech(text || "");
+  if (!safe) return "";
+  return safe
+    .replace(/\s+(?:my name is|this is|i am|i'm)\s+[a-z][a-z'\s-]{0,120}$/i, "")
+    .replace(/\s+call me\s+[a-z][a-z'\s-]{0,120}$/i, "")
+    .trim();
+}
+
 
 
 
@@ -892,7 +902,7 @@ function stripGreetingPrefix(text) {
 
 
 function normalizeGenericServiceIssue(text) {
-  const stripped = cleanForSpeech(stripIssueLeadIn(text || ""));
+  const stripped = cleanForSpeech(stripIssueLeadIn(stripTrailingNameIntroductionFromIssueText(text || "")));
   const item = detectServiceItem(stripped);
   if (!item) return stripped;
   if (hasSpecificProblemDetail(stripped)) return stripped;
@@ -1059,6 +1069,26 @@ function extractOpeningNameAndIssue(text) {
 
 
   const normalized = stripGreetingPrefix(original);
+
+  const tryCleanupOpeningIssue = (value) => stripIssueLeadIn(cleanForSpeech(value || ""));
+  const tailIdentityMatch = normalized.match(/\s+(?:my name is|this is|i am|i'm)\s+([a-z][a-z'\s-]{0,120})$/i);
+  if (tailIdentityMatch && typeof tailIdentityMatch.index === "number") {
+    const issueStem = normalized.slice(0, tailIdentityMatch.index).trim().replace(/[,.]+$/g, "");
+    const extractedName = normalizeNameCandidate(tailIdentityMatch[1]);
+    const issueText = tryCleanupOpeningIssue(issueStem);
+    const specificEnough = Boolean(
+      issueText &&
+      (looksLikeIssueText(issueText) || detectServiceItem(issueText) || hasSpecificProblemDetail(issueText))
+    );
+    if (extractedName && specificEnough) {
+      return {
+        name: extractedName,
+        companyName: extractCompanyNameFromSpeech(tailIdentityMatch[1]),
+        issueText
+      };
+    }
+  }
+
   const sentenceParts = normalized
     .split(/(?<=[.!?])\s+/)
     .map((part) => cleanSpeechText(part.replace(/[.!?]+$/g, "")))
@@ -2961,6 +2991,7 @@ function humanizeIssueSummaryForSpeech(summary) {
     .replace(/^i think i have\s+/i, "")
     .replace(/^i have\s+/i, "")
     .replace(/^there(?:'s| is)\s+/i, "")
+    .replace(/\s+(?:my name is|this is|call me|i am|i'm)\s+[a-z][a-z'\s-]+$/i, "")
     .replace(/\bmy\b/gi, "your")
     .replace(/\bour\b/gi, "your")
     .trim();
@@ -3281,7 +3312,12 @@ function classifyIssue(issue) {
   if (text.includes("water heater") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking water heater" };
   if (containsAny(text, ["home filter", "house filter", "water filter", "whole house filter", "whole-house filter", "filtration system", "filter housing"]) && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a leaking home water filter" };
   if (text.includes("roof") && containsAny(text, ["leak", "drip", "dripping"])) return { summary: "a roof leak" };
-  if (text.includes("ceiling") && containsAny(text, ["leak", "drip", "dripping", "pouring", "gushing"])) return { summary: "a ceiling leak" };
+  if (
+    text.includes("ceiling") &&
+    containsAny(text, ["leak", "drip", "dripping", "pouring", "gushing", "coming in", "coming through", "water coming"])
+  ) {
+    return { summary: "a ceiling leak" };
+  }
   if (containsAny(text, ["clog", "clogged", "drain"])) return { summary: "a clogged drain" };
   if (containsAny(text, ["flood", "flooding", "flooded"])) return { summary: "flooding" };
   if (containsAny(text, ["burst pipe"])) return { summary: "a burst pipe" };
