@@ -625,7 +625,9 @@ function extractStrongLocalNameAndIssue(text) {
   const nameAndIssuePatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*(?:,\s*|\s+and\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
-    /^([A-Za-z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i
+    /^([A-Za-z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
+    /^(?:call me)\s+([A-Za-z' -]+?)\s*(?:,\s*|\s+and\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
+    /^(?:call me)\s+([A-Za-z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i
   ];
 
   const tryIssueCleanup = (value) => stripIssueLeadIn(cleanForSpeech(value || ""));
@@ -673,16 +675,81 @@ function extractStrongLocalNameAndIssue(text) {
 
 
 
-function extractIntroFirstName(text) {
+/** Where spoken intro ends and issue begins ("Jim Miller and I have…"). */
+function sliceIntroNameBeforeIssue(rest) {
+  const value = String(rest || "").trim();
+  if (!value) return "";
+
+  const markers = [
+    /\s*,\s*and\s+i\s+/i,
+    /\s+and\s+i\s+have\b/i,
+    /\s+and\s+i\s+need\b/i,
+    /\s+and\s+i'?ve\s+got\b/i,
+    /\s+and\s+i'?m\s+having\b/i,
+    /\s*,\s*i\s+have\b/i,
+    /\s*,\s*i\s+need\b/i,
+    /\s+i\s+have\b/i,
+    /\s+i\s+need\b/i,
+    /\s+i'?ve\s+got\b/i,
+    /\s+i'?m\s+having\b/i,
+    /\s+i\s+am\s+having\b/i,
+    /\s+i\s+was\s+calling\b/i,
+    /\s+i'?m\s+calling\b/i,
+    /\s+calling\s+about\b/i,
+    /\s+calling\s+regarding\b/i,
+    /\s+can\s+someone\b/i,
+    /\s+can\s+somebody\b/i,
+    /\s+can\s+you\b/i,
+    /\s+got\s+a\b/i,
+    /\s+there'?s\s+a\b/i,
+    /\s+with\s+a\b/i,
+    /\s+with\s+my\b/i,
+    /\s+with\s+the\b/i,
+    /\s+about\s+/i,
+    /\s+regarding\s+/i
+  ];
+
+  let earliest = -1;
+  for (const re of markers) {
+    const m = value.match(re);
+    if (m && typeof m.index === "number") {
+      if (earliest === -1 || m.index < earliest) earliest = m.index;
+    }
+  }
+
+  const segment = earliest >= 0 ? value.slice(0, earliest) : value;
+  return segment.replace(/[,.]+$/g, "").trim();
+}
+
+/**
+ * Full normalized name from opening intros — supports "this is Jim Miller and I have…"
+ * (previously only the first word was captured).
+ */
+function extractIntroFullNameCandidate(text) {
   const safe = stripGreetingPrefix(text || "");
   if (!safe) return "";
 
-  const direct = safe.match(/^(?:this is|my name is|i am|i'm)\s+([A-Za-z'-]+)\b/i)
-    || safe.match(/^([A-Za-z'-]+)\s+here\b/i);
-  if (!direct) return "";
+  const prefixMatch =
+    safe.match(/^(?:this is|my name is|i am|i'm)\s+/i)
+    || safe.match(/^call me\s+/i)
+    || safe.match(/^i'?m\s+(?:speaking|calling)\s+with\s+/i);
+  if (prefixMatch) {
+    const rest = safe.slice(prefixMatch[0].length);
+    const nameSeg = sliceIntroNameBeforeIssue(rest);
+    const full = normalizeNameCandidate(nameSeg);
+    if (full) return full;
+  }
 
-  const first = cleanForSpeech(direct[1] || "").replace(/[^A-Za-z'-]/g, "");
-  return first ? toTitleCase(first) : "";
+  const here = safe.match(/^([a-zA-Z' -]+)\s+here\b/i);
+  if (here) {
+    const full = normalizeNameCandidate((here[1] || "").trim());
+    if (full) return full;
+  }
+
+  const single = safe.match(/^(?:this is|my name is|i am|i'm)\s+([A-Za-z'-]+)\b/i);
+  if (single) return normalizeNameCandidate(single[1]) || "";
+
+  return "";
 }
 
 
@@ -1000,7 +1067,9 @@ function extractOpeningNameAndIssue(text) {
   const nameAndIssuePatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*(?:,\s*|\s+and\s+)(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having|i\s+was\s+calling\s+about|i\s+am\s+calling\s+about|i'm\s+calling\s+about)\s+(.+)$/i,
-    /^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(.+)$/i
+    /^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(.+)$/i,
+    /^(?:call me)\s+([a-zA-Z' -]+?)\s*(?:,\s*|\s+and\s+)(.+)$/i,
+    /^(?:call me)\s+([a-zA-Z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having|i\s+was\s+calling\s+about|i\s+am\s+calling\s+about|i'm\s+calling\s+about)\s+(.+)$/i
   ];
 
 
@@ -1261,7 +1330,7 @@ function wantsOptionalEmail(text) {
   if (!t) return false;
   if (t.includes("@")) return true;
   if (isAffirmative(t)) return true;
-
+  if (/\b(yeah|yes|yep|yup|sure)\b.*\bwed\s+better\b/.test(t)) return true;
 
 
 
@@ -1294,7 +1363,10 @@ function wantsOptionalEmail(text) {
     "yeah that ll do", "yeah thatll do", "yeah we better add one", "yeah we better add that",
     "yeah let s add one", "yeah lets add one", "yeah let s add that", "yeah lets add that",
     "yeah let s do that", "yeah lets do that", "yeah let s do it", "yeah lets do it",
-    "yes please", "sure add one", "sure add that", "go ahead"
+    "yes please", "sure add one", "sure add that", "go ahead",
+    "yeah wed better", "yes wed better", "yep wed better", "sure wed better",
+    "we d better add", "we better add", "better include email",
+    "yeah we better", "yes we better", "yeah better add", "should add email"
   ]);
 }
 
@@ -1918,7 +1990,9 @@ function isAffirmative(text) {
     "yeah we better add that", "we better add that", "yeah let s add one", "yeah lets add one",
     "yeah let s add that", "yeah lets add that", "let s add that", "lets add that",
     "okay i ll give it to you", "okay ill give it to you", "yes i ll give it to you", "yes ill give it to you",
-    "okay let me know when you re ready and i ll give it to you", "okay let me know when youre ready and ill give it to you"
+    "okay let me know when you re ready and i ll give it to you", "okay let me know when youre ready and ill give it to you",
+    "yeah wed better", "yes wed better", "yep wed better", "sure wed better", "we d better add",
+    "might as well add", "might as well include", "probably should add"
   ]);
 }
 
@@ -2173,7 +2247,8 @@ function isEmailAddAcceptance(text) {
     "yes add an email", "yeah add an email", "let s add an email", "lets add an email",
     "yes let s add one", "yes lets add one", "yeah let s add one", "yeah lets add one",
     "yes let s add a number", "yes lets add a number", "yeah let s add a number", "yeah lets add a number",
-    "add that", "add one", "do that", "let s do it", "lets do it"
+    "add that", "add one", "do that", "let s do it", "lets do it",
+    "yeah wed better", "yes wed better"
   ]);
 }
 
@@ -2594,6 +2669,39 @@ function isEndCallPhrase(text) {
     "yeah that'll do it", "yeah thatll do it", "yeah that will do it", "yeah that's all", "yeah thats all",
     "yeah that's it", "yeah thats it", "yeah we're good", "yeah we are good"
   ]);
+}
+
+/** True when caller is giving real technician instructions (override shallow “no …”). */
+function looksLikeSubstantiveTechNoteIntent(text) {
+  const it = normalizeIntentText(text);
+  if (!it) return false;
+  if (/\d/.test(text || "")) return true;
+  return containsAny(it, [
+    "gate", "code", "door", "key", "keys", "lock", "dog", "dogs", "pet", "pets", "cat", "alarm",
+    "parking", "driveway", "basement", "side door", "back door", "fence", "garage",
+    "note that", "make sure", "watch out", "careful", "hazard", "fragile",
+    "call me", "text me", "reach me", "extension", "cell", "mobile",
+    "broken", "step", "stairs", "wet floor", "construction", "hoa",
+    "vacant", "rental", "tenant", "lockbox", "combo"
+  ]);
+}
+
+/** Caller is declining extra notes for the tech (not the same as generic isNegative — avoids “no, put gate code…”). */
+function isDecliningTechnicianNotes(text) {
+  const it = normalizeIntentText(text);
+  if (!it) return false;
+  if (isEndCallPhrase(text)) return true;
+  if (containsAny(it, [
+    "i dont think so", "i do not think so", "dont think so", "don t think so",
+    "not really", "nothing really", "probably not", "i guess not",
+    "no notes", "no note", "nothing for the tech", "nothing for the technician",
+    "nothing else", "nothing to add", "nothing more", "no nothing",
+    "no special instructions", "no instructions", "no thats okay", "no that s okay",
+    "were good", "we re good", "were all set", "we re all set", "all set",
+    "thats fine", "that s fine", "im good", "i m good", "nah im good",
+    "no thanks", "no thank you", "not now", "skip that", "rather not"
+  ])) return true;
+  return false;
 }
 
 
@@ -5286,13 +5394,6 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Doing well, thanks for asking. What can I do for you today?");
         return;
       }
-      const rawIntroFirstName = extractIntroFirstName(workingOpeningText);
-      if (rawIntroFirstName && !caller.firstName) {
-        caller.firstName = rawIntroFirstName;
-        caller.fullName = caller.fullName || rawIntroFirstName;
-        caller.nameSpellingConfirmed = false;
-      }
-
       const strongLocalOpeningParse = extractStrongLocalNameAndIssue(workingOpeningText);
       const localOpeningParse = strongLocalOpeningParse || extractOpeningNameAndIssue(workingOpeningText);
       if (localOpeningParse && localOpeningParse.name && localOpeningParse.issueText) {
@@ -5371,8 +5472,8 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (!parsed.name) {
-        const introFirstName = extractIntroFirstName(workingOpeningText);
-        if (introFirstName) parsed.name = introFirstName;
+        const introFull = extractIntroFullNameCandidate(workingOpeningText);
+        if (introFull) parsed.name = introFull;
       }
 
 
@@ -6820,9 +6921,14 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_notes": {
-      const wantsToFinishNow = isEndCallPhrase(text);
-      const hadNotes = !wantsToFinishNow;
-      if (hadNotes) caller.notes = cleanForSpeech(text);
+      const cleanedNotesText = cleanForSpeech(text);
+      const substantiveTechNote = looksLikeSubstantiveTechNoteIntent(text);
+      const decliningTechNotes =
+        !substantiveTechNote &&
+        (isDecliningTechnicianNotes(text) || isEndCallPhrase(text));
+      const hadNotes = Boolean(cleanedNotesText) && !decliningTechNotes;
+      const wantsToFinishNow = decliningTechNotes;
+      if (hadNotes) caller.notes = cleanedNotesText;
 
 
 
