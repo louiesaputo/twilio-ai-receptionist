@@ -161,6 +161,8 @@ const AI_INTERPRETER_ENABLED = String(process.env.AI_INTERPRETER_ENABLED || "fal
 const WEBHOOK_TIMEOUT_MS = Number(process.env.WEBHOOK_TIMEOUT_MS || 5000);
 const AVAILABILITY_TIMEOUT_MS = Number(process.env.AVAILABILITY_TIMEOUT_MS || 12000);
 const SUBMISSION_TIMEOUT_MS = Number(process.env.SUBMISSION_TIMEOUT_MS || 4000);
+/** When true, reject webhook slots earlier than computeMinimumAllowedCallbackSpoken() and retry/override. Default false: use Make’s slot as-is (previous behavior). */
+const ENFORCE_MIN_CALLBACK_LEAD = String(process.env.ENFORCE_MIN_CALLBACK_LEAD || "false").toLowerCase() === "true";
 const CLOSE_SESSION_MIN_MS = Number(process.env.CLOSE_SESSION_MIN_MS || 4500);
 const CLOSE_SESSION_MAX_MS = Number(process.env.CLOSE_SESSION_MAX_MS || 12000);
 const PROMPT_FINALIZE_TIMEOUT_MS = Number(process.env.PROMPT_FINALIZE_TIMEOUT_MS || 900);
@@ -266,6 +268,8 @@ const REPEAT_TIME_PHRASES = [
 const BUSINESS_DAY_START_MINUTES = 8 * 60;
 const BUSINESS_DAY_END_MINUTES = 17 * 60;
 const LATEST_CALLBACK_START_MINUTES = 16 * 60 + 30;
+/** Used only when ENFORCE_MIN_CALLBACK_LEAD=true: open + this many clock hours (8am + 6h => 2pm floor). */
+const MIN_CALLBACK_LEAD_WALL_HOURS = 6;
 
 
 
@@ -805,11 +809,13 @@ function normalizeSpelledFirstName(text, fallback = "") {
 
 
 
-function maybeQueueFirstNameSpelling(caller, nextStep) {
+function maybeQueueFirstNameSpelling(caller, nextStep, preamble) {
   if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
     caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name");
     caller.lastStep = "ask_first_name_spelling";
-    return `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?`;
+    const core = `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?`;
+    const prefix = preamble ? cleanForSpeech(preamble) : "";
+    return prefix ? `${prefix} ${core}` : core;
   }
   return "";
 }
@@ -2654,6 +2660,18 @@ function buildUrgentIntakePrompt(caller) {
   return `${acknowledgement} ${buildUrgentFlaggedLine()} I just need to get some information from you. Can I start by getting your full name, please?`;
 }
 
+function buildStandardPostIssueSpellingPreamble(caller) {
+  const ack = buildIssueAcknowledgement(caller);
+  const lead = buildServiceIntakeLeadIn(caller);
+  if (caller.firstName) return `Thank you, ${caller.firstName}. ${ack} ${lead}`.trim();
+  return `${ack} ${lead}`.trim();
+}
+
+function buildUrgentPostIssueSpellingPreamble(caller) {
+  const withName = caller.firstName ? `${caller.firstName}, ` : "";
+  return `${withName}${buildIssueAcknowledgement(caller)} ${buildUrgentFlaggedLine()} I just need to get some information from you.`.trim();
+}
+
 
 
 
@@ -3050,6 +3068,75 @@ function isAllowedCallbackStartTime(timeText) {
   return minutes >= BUSINESS_DAY_START_MINUTES && minutes <= LATEST_CALLBACK_START_MINUTES;
 }
 
+function formatInstantPartsEastern(ts) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const o = {};
+  for (const p of fmt.formatToParts(new Date(ts))) {
+    if (p.type !== "literal") o[p.type] = p.value;
+  }
+  return { year: o.year, month: o.month, day: o.day, weekday: o.weekday, hour: o.hour, minute: o.minute };
+}
+
+function ymdToSpokenServiceDate(yearStr, monthStr, dayStr) {
+  const y = Number(yearStr);
+  const mo = Number(monthStr);
+  const d = Number(dayStr);
+  const ref = new Date(Date.UTC(y, mo - 1, d, 17, 0, 0));
+  const weekday = ref.toLocaleDateString("en-US", { weekday: "long", timeZone: "America/New_York" });
+  const monthName = ref.toLocaleDateString("en-US", { month: "long", timeZone: "America/New_York" });
+  return `${weekday}, ${monthName} ${d}`;
+}
+
+function formatMinutesAsTime12h(totalMinutes) {
+  let h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  const mer = h >= 12 ? "PM" : "AM";
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m).padStart(2, "0")} ${mer}`;
+}
+
+/** Soonest offer: max(now + 6h, business open + 6h) on a weekday, and not after latest callback start. */
+function computeMinimumAllowedCallbackSpoken() {
+  const minMinutesFromMidnight = BUSINESS_DAY_START_MINUTES + MIN_CALLBACK_LEAD_WALL_HOURS * 60;
+  let t = Date.now() + MIN_CALLBACK_LEAD_WALL_HOURS * 3600000;
+  for (let guard = 0; guard < 500; guard++) {
+    const e = formatInstantPartsEastern(t);
+    if (e.weekday === "Saturday" || e.weekday === "Sunday") {
+      t += 3600000;
+      continue;
+    }
+    const mins = Number(e.hour) * 60 + Number(e.minute);
+    const targetMins = Math.max(mins, minMinutesFromMidnight);
+    if (targetMins > LATEST_CALLBACK_START_MINUTES) {
+      t += 3600000;
+      continue;
+    }
+    return {
+      date: ymdToSpokenServiceDate(e.year, e.month, e.day),
+      time: formatMinutesAsTime12h(targetMins)
+    };
+  }
+  return null;
+}
+
+function compareSpokenCallbackSlots(dateA, timeA, dateB, timeB) {
+  const a = parseCallbackDateAndTimeToLocal(dateA || "", timeA || "");
+  const b = parseCallbackDateAndTimeToLocal(dateB || "", timeB || "");
+  if (!a || !b) return 0;
+  if (a.startLocal < b.startLocal) return -1;
+  if (a.startLocal > b.startLocal) return 1;
+  return 0;
+}
+
 function isLateDayPreferenceRequest(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -3275,7 +3362,14 @@ function isHardEmergency(text) {
 
 function isLeakLikeIssue(text) {
   const t = normalizedText(text);
-  return containsAny(t, ["leak", "leaking", "drip", "dripping"]);
+  if (containsAny(t, ["leak", "leaking", "drip", "dripping"])) return true;
+  if (containsAny(t, ["water coming", "coming in through", "coming through", "water in your", "water in my", "water through"])) {
+    if (containsAny(t, ["ceiling", "roof", "attic", "wall", "basement", "window", "floor"])) return true;
+  }
+  if ((t.includes("ceiling") || t.includes("roof")) && containsAny(t, ["water", "wet", "rain", "storm", "pouring", "gushing", "coming in", "coming through"])) {
+    return true;
+  }
+  return false;
 }
 
 
@@ -4864,7 +4958,10 @@ function parseAvailabilityWebhookBody(body) {
   }
 }
 
-async function checkCalendarAvailability(caller, requestDetails = {}) {
+async function checkCalendarAvailability(caller, requestDetails = {}, options = {}) {
+  const skipMinLead = options.skipMinLeadEnforcement === true;
+  const minSpoken = !skipMinLead && ENFORCE_MIN_CALLBACK_LEAD ? computeMinimumAllowedCallbackSpoken() : null;
+
   const payloadObject = {
     action: "check_availability",
     phone: caller.phone,
@@ -4883,7 +4980,9 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
     currentOfferedTime: caller.pendingOfferedTime || "",
     availabilityQuery: requestDetails.rawQuery || caller.pendingAvailabilityQuery || "",
     currentDateLocal: currentDateInEastern(),
-    currentDateTimeLocal: currentDateTimeInEastern()
+    currentDateTimeLocal: currentDateTimeInEastern(),
+    earliestCallbackDate: minSpoken ? minSpoken.date : "",
+    earliestCallbackTime: minSpoken ? minSpoken.time : ""
   };
 
 
@@ -4916,7 +5015,28 @@ async function checkCalendarAvailability(caller, requestDetails = {}) {
       return null;
     }
     const slot = parseAvailabilityWebhookBody(result.body);
-    if (slot) return slot;
+    if (slot) {
+      if (!minSpoken || compareSpokenCallbackSlots(slot.date, slot.time, minSpoken.date, minSpoken.time) >= 0) {
+        return slot;
+      }
+      const bump = {
+        ...requestDetails,
+        requestedDate: "",
+        requestedDateResolved: minSpoken.date,
+        requestedAfterTime: minSpoken.time,
+        requestedExactTime: "",
+        mode: requestDetails.mode || "",
+        rawQuery: `${cleanForSpeech(requestDetails.rawQuery || "callback availability")} on or after ${minSpoken.date} at or after ${minSpoken.time}`,
+        avoidDate: slot.date,
+        avoidTime: slot.time
+      };
+      const retried = await checkCalendarAvailability(caller, bump, { skipMinLeadEnforcement: true });
+      if (retried && compareSpokenCallbackSlots(retried.date, retried.time, minSpoken.date, minSpoken.time) >= 0) {
+        return retried;
+      }
+      console.warn("[CALENDAR] Webhook returned slots before minimum lead; using computed earliest offer", { slot, minSpoken, retried });
+      return { date: minSpoken.date, time: minSpoken.time };
+    }
     console.error("[CALENDAR CHECK] HTTP 200 but missing date/time fields:", String(result.body).slice(0, 400));
     return null;
   }
@@ -5635,7 +5755,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
@@ -5661,6 +5781,11 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, buildMissingNameAfterIssuePrompt(caller));
           return;
         }
+        const spLeak = maybeQueueFirstNameSpelling(caller, "leak_emergency_choice", buildIssueAcknowledgement(caller));
+        if (spLeak) {
+          sendText(ws, spLeak);
+          return;
+        }
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
@@ -5679,7 +5804,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, buildEmergencyIntakePrompt(caller));
         return;
       }
-      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildStandardPostIssueSpellingPreamble(caller)) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
@@ -5747,7 +5872,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
@@ -5765,6 +5890,11 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, buildMissingNameAfterIssuePrompt(caller));
           return;
         }
+        const spLeak = maybeQueueFirstNameSpelling(caller, "leak_emergency_choice", buildIssueAcknowledgement(caller));
+        if (spLeak) {
+          sendText(ws, spLeak);
+          return;
+        }
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
@@ -5775,7 +5905,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, buildEmergencyIntakePrompt(caller));
         return;
       }
-      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildStandardPostIssueSpellingPreamble(caller)) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
@@ -5821,7 +5951,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
@@ -5843,6 +5973,11 @@ async function handlePrompt(ws, caller, speech) {
           sendText(ws, buildMissingNameAfterIssuePrompt(caller));
           return;
         }
+        const spLeak = maybeQueueFirstNameSpelling(caller, "leak_emergency_choice", buildIssueAcknowledgement(caller));
+        if (spLeak) {
+          sendText(ws, spLeak);
+          return;
+        }
         caller.lastStep = "leak_emergency_choice";
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
@@ -5857,7 +5992,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, buildEmergencyIntakePrompt(caller));
         return;
       }
-      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+      const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildStandardPostIssueSpellingPreamble(caller)) : "";
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
@@ -6093,6 +6228,11 @@ async function handlePrompt(ws, caller, speech) {
       if (nextStep === "ask_last_name") {
         caller.lastStep = "ask_last_name";
         sendText(ws, "Thank you. Can I get your last name as well?");
+        return;
+      }
+      if (nextStep === "leak_emergency_choice") {
+        caller.lastStep = "leak_emergency_choice";
+        sendText(ws, "Do you want me to mark this as an emergency?");
         return;
       }
       caller.lastStep = getPhoneCollectionStep(caller);
