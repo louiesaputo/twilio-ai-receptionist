@@ -1,6 +1,6 @@
 /*************************************************
  CONVERSATIONRELAY BASELINE V15 PASS 7 SCHEDULING + URGENCY + COMPANY PATCH
- DATE: 2026-04-13 (opener finalization tuning: reduced opener wait while keeping name-only safety)
+ DATE: 2026-05-10 (multi-word intro names, tech-notes decline, optional-email phrasing, intent tuning)
 
 
 
@@ -526,7 +526,7 @@ function normalizeNameCandidate(rawName) {
     "not", "no", "issue", "problem", "service", "schedule", "scheduling", "appointment",
     "someone", "heating", "cooling", "draining", "working", "broken", "leaking",
     "stove", "oven", "range", "cooktop", "dishwasher", "refrigerator", "washer",
-    "dryer", "microwave", "faucet", "sink", "toilet", "main", "leak"
+    "dryer", "microwave", "faucet", "sink", "toilet"
   ]);
 
 
@@ -624,6 +624,8 @@ function extractStrongLocalNameAndIssue(text) {
 
   const nameAndIssuePatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*(?:,\s*|\s+and\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*[,.!?-]*\s*i\s+need\s+someone\s+(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*[,.!?-]*\s*i\s+need\s+somebody\s+(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([A-Za-z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
     /^([A-Za-z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
     /^(?:call me)\s+([A-Za-z' -]+?)\s*(?:,\s*|\s+and\s+)(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having)\s+(.+)$/i,
@@ -686,6 +688,12 @@ function sliceIntroNameBeforeIssue(rest) {
     /\s+and\s+i\s+need\b/i,
     /\s+and\s+i'?ve\s+got\b/i,
     /\s+and\s+i'?m\s+having\b/i,
+    /\s+i\s+need\s+someone\b/i,
+    /\s+i\s+need\s+somebody\b/i,
+    /\s+need\s+someone\b/i,
+    /\s+need\s+somebody\b/i,
+    /\s+i\s+need\s+to\s+come\b/i,
+    /\s+need\s+to\s+come\b/i,
     /\s*,\s*i\s+have\b/i,
     /\s*,\s*i\s+need\b/i,
     /\s+i\s+have\b/i,
@@ -744,6 +752,17 @@ function extractIntroFullNameCandidate(text) {
   if (here) {
     const full = normalizeNameCandidate((here[1] || "").trim());
     if (full) return full;
+  }
+
+  const tailAfterIntro = safe.replace(/^(?:this is|my name is|i am|i'm)\s+/i, "").trim();
+  if (tailAfterIntro) {
+    const looseCut = tailAfterIntro.match(
+      /^([a-z][a-z'\s-]{0,120}?)(?=\s+(?:,\s*)?(?:and\s+)?(?:i\s+have|i\s+need|i'?ve\s+got|need\s+someone|need\s+somebody)\b)/i
+    );
+    if (looseCut && looseCut[1]) {
+      const full = normalizeNameCandidate(looseCut[1].trim().replace(/[,.]+$/g, ""));
+      if (full) return full;
+    }
   }
 
   const single = safe.match(/^(?:this is|my name is|i am|i'm)\s+([A-Za-z'-]+)\b/i);
@@ -1066,6 +1085,8 @@ function extractOpeningNameAndIssue(text) {
 
   const nameAndIssuePatterns = [
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*(?:,\s*|\s+and\s+)(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*[,.!?-]*\s*i\s+need\s+someone\s+(.+)$/i,
+    /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*[,.!?-]*\s*i\s+need\s+somebody\s+(.+)$/i,
     /^(?:this is|my name is|i am|i'm)\s+([a-zA-Z' -]+?)\s*[,.!?-]*\s*(?:i\s+have|i've\s+got|i\s+need|i\s+am\s+having|i'm\s+having|i\s+was\s+calling\s+about|i\s+am\s+calling\s+about|i'm\s+calling\s+about)\s+(.+)$/i,
     /^([a-zA-Z' -]+?)\s+here\s*(?:,\s*|\s+-\s*|\s+)(.+)$/i,
     /^(?:call me)\s+([a-zA-Z' -]+?)\s*(?:,\s*|\s+and\s+)(.+)$/i,
