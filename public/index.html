@@ -3,37 +3,41 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Blue Caller AI | Stop Missing the Call</title>
+  <title>Blue Caller AI | Stop Missing The Call</title>
   <style>
     :root {
-      --bg: #040a1f;
-      --panel: #0a1435;
-      --panel-2: #0d1e4a;
-      --text: #e7eeff;
-      --muted: #9fb4e7;
-      --primary: #2d7dff;
-      --primary-2: #53a0ff;
-      --ok: #4cffb0;
-      --line: rgba(140, 171, 255, 0.22);
-      --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
-      --radius: 18px;
+      --bg-0: #020617;
+      --bg-1: #030a1e;
+      --bg-2: #071432;
+      --panel: rgba(7, 18, 49, 0.82);
+      --panel-soft: rgba(14, 30, 72, 0.62);
+      --text: #e8efff;
+      --muted: #9fb2df;
+      --line: rgba(109, 147, 230, 0.29);
+      --blue: #2f7eff;
+      --blue-2: #54a4ff;
+      --blue-glow: rgba(40, 114, 255, 0.45);
+      --green: #55f3bf;
+      --radius: 16px;
+      --max: 980px;
     }
 
     * {
       box-sizing: border-box;
     }
 
-    html, body {
+    html,
+    body {
       margin: 0;
       padding: 0;
       font-family: Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      color: var(--text);
       background:
-        radial-gradient(circle at 10% -20%, #15306f 0%, transparent 45%),
-        radial-gradient(circle at 90% -15%, #1b468f 0%, transparent 44%),
-        linear-gradient(180deg, #030816 0%, #040a1f 40%, #050b20 100%);
-      line-height: 1.45;
+        radial-gradient(980px 560px at 80% -12%, #17409e66, transparent 62%),
+        radial-gradient(980px 560px at -4% -12%, #15408f4f, transparent 58%),
+        linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 34%, var(--bg-2) 100%);
+      color: var(--text);
       scroll-behavior: smooth;
+      line-height: 1.45;
     }
 
     a {
@@ -41,72 +45,111 @@
       text-decoration: none;
     }
 
-    .wrap {
-      width: min(1040px, calc(100% - 32px));
+    .container {
+      width: min(var(--max), calc(100% - 28px));
       margin: 0 auto;
     }
 
-    .hero {
-      padding: 26px 0 68px;
+    .topbar {
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(112, 151, 234, 0.15);
+      background: rgba(2, 7, 22, 0.5);
+      backdrop-filter: blur(6px);
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
 
-    .top-tag {
+    .topbar-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 7px 12px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: #d6e5ff;
-      font-size: 0.79rem;
-      background: rgba(24, 54, 122, 0.35);
-      letter-spacing: 0.03em;
+      font-weight: 800;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
+      font-size: 0.86rem;
+      color: #cfe0ff;
     }
 
-    .top-tag::before {
-      content: "";
-      width: 8px;
-      height: 8px;
+    .brand-dot {
+      width: 10px;
+      height: 10px;
       border-radius: 999px;
-      background: var(--ok);
-      box-shadow: 0 0 10px rgba(76, 255, 176, 0.75);
+      background: var(--green);
+      box-shadow: 0 0 14px rgba(85, 243, 191, 0.76);
+    }
+
+    .hero {
+      padding: 54px 0 26px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(18, 43, 102, 0.44);
+      color: #dbe6ff;
+      padding: 6px 11px;
+      font-size: 0.73rem;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #7ab8ff;
+      box-shadow: 0 0 10px rgba(92, 164, 255, 0.6);
     }
 
     h1 {
-      margin: 20px 0 16px;
-      font-size: clamp(2rem, 7vw, 3.6rem);
-      line-height: 1.03;
-      letter-spacing: -0.02em;
-      max-width: 840px;
-      text-transform: uppercase;
-    }
-
-    .hero-copy {
       margin: 0;
-      color: var(--muted);
-      font-size: clamp(1rem, 2.2vw, 1.2rem);
-      max-width: 760px;
+      font-size: clamp(2.08rem, 8vw, 4.15rem);
+      letter-spacing: -0.025em;
+      line-height: 0.97;
+      text-transform: uppercase;
+      max-width: 860px;
+      text-wrap: balance;
     }
 
-    .hero-cta-row {
+    .hero-lead {
+      color: var(--muted);
+      margin: 18px 0 0;
+      max-width: 760px;
+      font-size: clamp(1rem, 2vw, 1.12rem);
+    }
+
+    .btn-row {
       display: flex;
+      gap: 10px;
       flex-wrap: wrap;
-      gap: 12px;
       margin-top: 24px;
     }
 
     .btn {
-      padding: 12px 18px;
-      border-radius: 12px;
-      border: 1px solid transparent;
-      font-weight: 700;
-      font-size: 0.95rem;
-      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 46px;
+      gap: 8px;
+      min-height: 44px;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-weight: 700;
+      font-size: 0.92rem;
+      border: 1px solid transparent;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
     }
 
     .btn:hover {
@@ -114,488 +157,584 @@
     }
 
     .btn-primary {
-      background: linear-gradient(180deg, var(--primary-2), var(--primary));
-      box-shadow: 0 10px 20px rgba(29, 96, 218, 0.45);
       color: #fff;
+      background: linear-gradient(180deg, var(--blue-2), var(--blue));
+      box-shadow: 0 10px 20px var(--blue-glow);
     }
 
     .btn-secondary {
-      background: rgba(42, 77, 153, 0.26);
+      color: #dce7ff;
+      background: rgba(39, 73, 150, 0.28);
       border-color: var(--line);
-      color: #dfe9ff;
     }
 
-    .stats {
-      margin-top: 30px;
+    .metrics {
+      margin-top: 22px;
       display: grid;
       gap: 10px;
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .stat {
+    .metric {
       border: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(22, 42, 94, 0.55), rgba(9, 19, 52, 0.68));
-      border-radius: 14px;
-      padding: 14px 12px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(20, 44, 97, 0.55), rgba(7, 15, 43, 0.85));
+      padding: 11px;
       text-align: center;
     }
 
-    .stat strong {
+    .metric strong {
       display: block;
-      font-size: 1.2rem;
-      color: #fff;
+      font-size: 1.08rem;
+      letter-spacing: -0.01em;
     }
 
-    .stat span {
-      font-size: 0.82rem;
+    .metric span {
       color: var(--muted);
+      font-size: 0.82rem;
     }
 
     section {
-      padding: 40px 0;
+      padding: 24px 0;
     }
 
     .panel {
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: linear-gradient(180deg, rgba(12, 26, 67, 0.8), rgba(6, 13, 34, 0.95));
-      box-shadow: var(--shadow);
-      padding: 24px;
+      background: linear-gradient(180deg, var(--panel-soft), var(--panel));
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
+      padding: 20px;
     }
 
-    .section-label {
+    .section-tag {
       margin: 0;
-      color: #9cc3ff;
-      font-size: 0.78rem;
+      color: #95b5ff;
+      text-transform: uppercase;
       letter-spacing: 0.1em;
-      text-transform: uppercase;
+      font-size: 0.73rem;
     }
 
-    .reveal-title {
-      margin: 12px 0;
-      font-size: clamp(1.45rem, 4vw, 2.2rem);
-      line-height: 1.15;
+    .glide-title {
+      margin: 10px 0 10px;
+      font-size: clamp(1.35rem, 4vw, 2.2rem);
+      line-height: 1.1;
+      text-transform: uppercase;
       letter-spacing: -0.01em;
-      text-transform: uppercase;
       opacity: 0;
-      transform: translateX(-72px);
-      transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.17, 0.84, 0.44, 1);
+      transform: translateX(-82px);
+      transition: transform 0.72s cubic-bezier(0.19, 0.85, 0.36, 1), opacity 0.72s ease;
       will-change: transform, opacity;
+      text-wrap: balance;
     }
 
-    .reveal-title.in-view {
+    .glide-title.in-view {
       opacity: 1;
       transform: translateX(0);
     }
 
-    .subtle {
+    .section-text {
       margin: 0;
       color: var(--muted);
-      font-size: 1rem;
+      max-width: 840px;
+      font-size: 0.98rem;
     }
 
-    .grid-3 {
+    .cards {
+      margin-top: 14px;
       display: grid;
+      gap: 10px;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 18px;
     }
 
     .card {
       border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 16px;
-      background: linear-gradient(180deg, rgba(21, 42, 92, 0.45), rgba(10, 20, 52, 0.35));
+      border-radius: 13px;
+      background: rgba(11, 24, 60, 0.63);
+      padding: 14px;
     }
 
     .card h3 {
-      margin: 0 0 8px;
-      font-size: 1.04rem;
+      margin: 0 0 6px;
+      font-size: 0.96rem;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
+      letter-spacing: 0.04em;
     }
 
     .card p {
       margin: 0;
       color: var(--muted);
-      font-size: 0.95rem;
-    }
-
-    .steps {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: grid;
-      gap: 12px;
-      margin-top: 16px;
-    }
-
-    .steps li {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 14px;
-      background: rgba(12, 24, 62, 0.56);
-      display: grid;
-      grid-template-columns: 34px 1fr;
-      gap: 12px;
-      align-items: start;
-    }
-
-    .steps b {
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      display: grid;
-      place-items: center;
-      background: linear-gradient(180deg, #3f8fff, #1e63df);
-      font-size: 0.95rem;
-      margin-top: 2px;
-    }
-
-    .steps h4 {
-      margin: 0 0 5px;
-      text-transform: uppercase;
-      font-size: 0.94rem;
-      letter-spacing: 0.03em;
-    }
-
-    .steps p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.94rem;
-    }
-
-    .pricing {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 18px;
-    }
-
-    .price-card {
-      position: relative;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 16px;
-      background: linear-gradient(180deg, rgba(21, 45, 102, 0.53), rgba(7, 14, 37, 0.9));
-      display: flex;
-      flex-direction: column;
-      min-height: 370px;
-    }
-
-    .price-card.featured {
-      border-color: rgba(93, 155, 255, 0.65);
-      box-shadow: 0 0 0 1px rgba(93, 155, 255, 0.2) inset, 0 14px 34px rgba(20, 81, 189, 0.33);
-      transform: translateY(-3px);
-    }
-
-    .badge {
-      position: absolute;
-      top: -10px;
-      right: 12px;
-      background: #2c82ff;
-      color: #fff;
-      border-radius: 999px;
-      padding: 5px 10px;
-      font-size: 0.72rem;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-
-    .plan {
-      margin: 0;
-      color: #c8dcff;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      font-size: 0.78rem;
-    }
-
-    .price {
-      margin: 8px 0 2px;
-      font-size: 2rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-    }
-
-    .price small {
-      font-size: 0.95rem;
-      color: var(--muted);
-      font-weight: 600;
-    }
-
-    .price-note {
-      margin: 0 0 12px;
-      color: var(--muted);
       font-size: 0.9rem;
-      min-height: 38px;
     }
 
-    .feature-list {
+    .timeline {
       list-style: none;
-      padding: 0;
-      margin: 0 0 14px;
-      display: grid;
-      gap: 8px;
-      color: #d5e4ff;
-      font-size: 0.91rem;
-    }
-
-    .feature-list li {
-      display: grid;
-      grid-template-columns: 16px 1fr;
-      gap: 8px;
-      align-items: start;
-    }
-
-    .feature-list li::before {
-      content: "✓";
-      color: var(--ok);
-      font-weight: 800;
-      margin-top: -1px;
-    }
-
-    .price-card .btn {
-      margin-top: auto;
-    }
-
-    .faq-list {
       margin: 14px 0 0;
+      padding: 0;
       display: grid;
       gap: 10px;
     }
 
-    .faq {
+    .timeline li {
       border: 1px solid var(--line);
-      background: rgba(9, 18, 49, 0.7);
-      border-radius: 12px;
-      padding: 12px 14px;
+      border-radius: 13px;
+      background: rgba(10, 21, 53, 0.72);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 11px;
+      align-items: start;
     }
 
-    .faq h4 {
-      margin: 0 0 5px;
-      font-size: 0.95rem;
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-    }
-
-    .faq p {
-      margin: 0;
-      color: var(--muted);
+    .timeline b {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, #4f9dff, #2067df);
+      box-shadow: 0 8px 16px rgba(32, 103, 223, 0.4);
       font-size: 0.93rem;
     }
 
-    .final-cta {
-      text-align: center;
-      margin-top: 6px;
-      padding: 24px;
-      border: 1px solid rgba(110, 163, 255, 0.34);
-      border-radius: 16px;
-      background: linear-gradient(180deg, rgba(22, 58, 130, 0.48), rgba(8, 17, 44, 0.94));
+    .timeline h4 {
+      margin: 0 0 4px;
+      font-size: 0.92rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
 
-    .final-cta p {
-      margin: 10px auto 0;
-      max-width: 650px;
+    .timeline p {
+      margin: 0;
       color: var(--muted);
+      font-size: 0.9rem;
     }
 
-    .final-cta .hero-cta-row {
-      justify-content: center;
+    .offers {
+      margin-top: 14px;
+      display: grid;
+      gap: 10px;
     }
 
-    .sticky-cta {
+    .offer {
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(12, 25, 63, 0.68);
+      padding: 12px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .offer-icon {
+      min-width: 24px;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      margin-top: 2px;
+      display: grid;
+      place-items: center;
+      color: #0e1f51;
+      background: linear-gradient(180deg, #80baff, #4f8ff2);
+      font-size: 0.86rem;
+      font-weight: 900;
+    }
+
+    .offer h4 {
+      margin: 0 0 4px;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .offer p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .pricing-grid {
+      margin-top: 14px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .tier {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(17, 37, 84, 0.82), rgba(7, 14, 37, 0.95));
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      min-height: 355px;
+      position: relative;
+    }
+
+    .tier.featured {
+      border-color: rgba(120, 173, 255, 0.72);
+      box-shadow: 0 0 0 1px rgba(120, 173, 255, 0.19) inset, 0 14px 34px rgba(29, 85, 179, 0.4);
+    }
+
+    .chip {
+      position: absolute;
+      top: -10px;
+      right: 12px;
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: #2d80ff;
+      font-size: 0.67rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+    }
+
+    .tier h3 {
+      margin: 0;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #bcd4ff;
+    }
+
+    .amount {
+      margin: 7px 0 2px;
+      font-size: 2rem;
+      letter-spacing: -0.03em;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .amount small {
+      font-size: 0.9rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .tier-note {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      min-height: 39px;
+    }
+
+    .checks {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 7px;
+      font-size: 0.86rem;
+      color: #d7e5ff;
+    }
+
+    .checks li {
+      display: grid;
+      grid-template-columns: 15px 1fr;
+      gap: 7px;
+      align-items: start;
+    }
+
+    .checks li::before {
+      content: "✓";
+      color: var(--green);
+      font-weight: 900;
+    }
+
+    .tier .btn {
+      margin-top: auto;
+      width: 100%;
+    }
+
+    .faq-list {
+      display: grid;
+      gap: 9px;
+      margin-top: 12px;
+    }
+
+    .faq-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(9, 20, 53, 0.68);
+      padding: 11px 12px;
+    }
+
+    .faq-item h4 {
+      margin: 0 0 4px;
+      font-size: 0.88rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .faq-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.89rem;
+    }
+
+    .closer {
+      margin-top: 2px;
+      border: 1px solid rgba(120, 167, 255, 0.42);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(20, 53, 118, 0.6), rgba(7, 16, 45, 0.95));
+      padding: 22px;
+      text-align: center;
+    }
+
+    .closer p {
+      margin: 10px auto 0;
+      color: var(--muted);
+      max-width: 670px;
+      font-size: 0.95rem;
+    }
+
+    .proof {
+      margin-top: 8px;
+      color: #b9cdfb;
+      font-size: 0.8rem;
+      letter-spacing: 0.02em;
+    }
+
+    .mobile-cta {
       position: fixed;
       left: 0;
       right: 0;
       bottom: 0;
-      padding: 10px 14px;
-      background: rgba(2, 7, 23, 0.82);
-      border-top: 1px solid rgba(113, 159, 240, 0.3);
-      backdrop-filter: blur(6px);
       display: none;
-      z-index: 50;
+      padding: 9px 12px;
+      background: rgba(2, 8, 24, 0.86);
+      border-top: 1px solid rgba(116, 157, 240, 0.3);
+      z-index: 30;
+      backdrop-filter: blur(6px);
     }
 
-    .sticky-cta .btn {
+    .mobile-cta .btn {
       width: 100%;
     }
 
-    .micro-proof {
-      margin-top: 8px;
-      color: #b8cdff;
-      font-size: 0.83rem;
-      letter-spacing: 0.01em;
-    }
-
     footer {
-      padding: 28px 0 80px;
       text-align: center;
-      color: #7f95cb;
-      font-size: 0.82rem;
+      color: #7f95cc;
+      font-size: 0.8rem;
+      padding: 26px 0 84px;
     }
 
-    @media (max-width: 920px) {
-      .grid-3,
-      .pricing {
+    @media (max-width: 980px) {
+      .cards {
         grid-template-columns: 1fr;
       }
 
-      .price-card.featured {
-        transform: none;
+      .pricing-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 
     @media (max-width: 700px) {
       .hero {
-        padding-bottom: 42px;
+        padding-top: 44px;
       }
 
-      .stats {
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .pricing-grid {
         grid-template-columns: 1fr;
       }
 
       .panel {
-        padding: 20px;
+        padding: 16px;
       }
 
-      .sticky-cta {
+      .mobile-cta {
         display: block;
       }
 
       footer {
-        padding-bottom: 120px;
+        padding-bottom: 108px;
       }
     }
   </style>
 </head>
 <body>
+  <header class="topbar">
+    <div class="container topbar-row">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        Blue Caller AI
+      </div>
+      <a class="btn btn-secondary" href="#pricing">View Plans</a>
+    </div>
+  </header>
+
   <main>
-    <header class="hero">
-      <div class="wrap">
-        <span class="top-tag">Built for home service businesses</span>
-        <h1>Stop Missing the Call. Start Booking More Jobs.</h1>
-        <p class="hero-copy">
-          Turn your phone into a 24/7 sales rep that answers instantly, qualifies leads,
-          and books appointments while your team stays focused on the work.
+    <section class="hero">
+      <div class="container">
+        <span class="eyebrow">For Home Service Businesses</span>
+        <h1>Stop Missing The Call</h1>
+        <p class="hero-lead">
+          Your AI receptionist answers instantly, qualifies leads, and books jobs while you stay focused in the field.
         </p>
-        <div class="hero-cta-row">
-          <a class="btn btn-primary" href="#pricing">Get Started Today</a>
-          <a class="btn btn-secondary" href="#how">See How It Works</a>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="#pricing">Book More Jobs</a>
+          <a class="btn btn-secondary" href="#how-it-works">See How It Works</a>
         </div>
-        <div class="stats">
-          <div class="stat">
+        <div class="metrics">
+          <div class="metric">
             <strong>24/7</strong>
-            <span>Always answers</span>
+            <span>Live call coverage</span>
           </div>
-          <div class="stat">
-            <strong>&lt; 10 sec</strong>
-            <span>Lead response time</span>
+          <div class="metric">
+            <strong>&lt;10 sec</strong>
+            <span>Average response</span>
           </div>
-          <div class="stat">
-            <strong>No payroll</strong>
-            <span>Runs without hiring</span>
+          <div class="metric">
+            <strong>0 extra payroll</strong>
+            <span>Scales with your calls</span>
           </div>
         </div>
       </div>
-    </header>
+    </section>
 
     <section>
-      <div class="wrap panel">
-        <p class="section-label">The problem</p>
-        <h2 class="reveal-title">Every missed call is a customer buying from someone else.</h2>
-        <p class="subtle">
-          Most contractors miss calls while driving, on jobs, or after hours. People rarely leave voicemails now.
-          They hang up and call the next company.
+      <div class="container panel">
+        <p class="section-tag">The cost of missed calls</p>
+        <h2 class="glide-title">Most leads call 2-3 companies. The first one to answer usually wins.</h2>
+        <p class="section-text">
+          If you miss a call while driving, on a roof, or after hours, that lead is likely gone. Blue Caller AI answers every time,
+          captures what matters, and moves serious buyers toward a scheduled appointment.
         </p>
-        <div class="grid-3">
+        <div class="cards">
           <article class="card">
-            <h3>Slow response = lost trust</h3>
-            <p>Homeowners choose the fastest response, not the best website.</p>
+            <h3>Slow callbacks kill intent</h3>
+            <p>By the time you call back, they have already booked someone else.</p>
           </article>
           <article class="card">
-            <h3>Admin drag eats profit</h3>
-            <p>Dispatch and callbacks steal time from high-value work.</p>
+            <h3>Office work blocks growth</h3>
+            <p>Time spent on intake and scheduling is time not spent producing revenue.</p>
           </article>
           <article class="card">
-            <h3>After-hours leads vanish</h3>
-            <p>Nights and weekends are often high-intent moments you cannot miss.</p>
+            <h3>After-hours demand is real</h3>
+            <p>Emergency and high-intent jobs happen nights and weekends too.</p>
           </article>
         </div>
       </div>
     </section>
 
-    <section id="how">
-      <div class="wrap panel">
-        <p class="section-label">How it works</p>
-        <h2 class="reveal-title">You keep doing jobs. AI handles the front desk.</h2>
-        <ul class="steps">
+    <section id="how-it-works">
+      <div class="container panel">
+        <p class="section-tag">How it works</p>
+        <h2 class="glide-title">A better front desk without hiring</h2>
+        <ul class="timeline">
           <li>
             <b>1</b>
             <div>
-              <h4>Instant answer and qualification</h4>
-              <p>Greets callers in your brand voice, gathers name, issue, urgency, and location.</p>
+              <h4>Answers instantly with your script</h4>
+              <p>The assistant greets callers professionally and follows your workflow.</p>
             </div>
           </li>
           <li>
             <b>2</b>
             <div>
-              <h4>Books ready-to-buy leads</h4>
-              <p>Offers appointment windows and confirms details while the caller is still on the line.</p>
+              <h4>Qualifies and prioritizes leads</h4>
+              <p>Collects issue details, urgency, location, and callback info in one call.</p>
             </div>
           </li>
           <li>
             <b>3</b>
             <div>
-              <h4>Sends clean job details to your team</h4>
-              <p>Pushes structured lead notes to your workflow so technicians arrive prepared.</p>
+              <h4>Books appointments and updates your team</h4>
+              <p>Confirms slots and sends clean notes so techs arrive prepared.</p>
             </div>
           </li>
         </ul>
       </div>
     </section>
 
+    <section>
+      <div class="container panel">
+        <p class="section-tag">What you get</p>
+        <h2 class="glide-title">Built to convert calls into booked revenue</h2>
+        <div class="offers">
+          <article class="offer">
+            <span class="offer-icon">+</span>
+            <div>
+              <h4>Call handling that sounds human</h4>
+              <p>Natural voice and clear transitions so callers trust the experience.</p>
+            </div>
+          </article>
+          <article class="offer">
+            <span class="offer-icon">+</span>
+            <div>
+              <h4>Service-specific call flows</h4>
+              <p>Different logic for emergency service, quote requests, and follow-ups.</p>
+            </div>
+          </article>
+          <article class="offer">
+            <span class="offer-icon">+</span>
+            <div>
+              <h4>Automated lead delivery</h4>
+              <p>Structured job details sent directly to your workflow tools.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section id="pricing">
-      <div class="wrap panel">
-        <p class="section-label">Simple pricing</p>
-        <h2 class="reveal-title">Pick the plan that matches your call volume.</h2>
-        <p class="subtle">No long-term contracts. Upgrade anytime as your business grows.</p>
-        <div class="pricing">
-          <article class="price-card">
-            <p class="plan">Starter</p>
-            <p class="price">$199 <small>/mo</small></p>
-            <p class="price-note">Great for solo operators or small teams getting started.</p>
-            <ul class="feature-list">
-              <li>24/7 AI call answering</li>
-              <li>Lead qualification and summaries</li>
-              <li>Basic appointment capture</li>
+      <div class="container panel">
+        <p class="section-tag">Pricing</p>
+        <h2 class="glide-title">Start where you are. Scale as calls grow.</h2>
+        <p class="section-text">No long contracts. Keep your number. Upgrade any time.</p>
+        <div class="pricing-grid">
+          <article class="tier">
+            <h3>Starter</h3>
+            <p class="amount">$199 <small>/mo</small></p>
+            <p class="tier-note">For owner-operators getting consistent coverage.</p>
+            <ul class="checks">
+              <li>24/7 AI call answer</li>
+              <li>Lead capture and summaries</li>
+              <li>Basic scheduling intake</li>
               <li>Email notifications</li>
             </ul>
             <a class="btn btn-secondary" href="#close">Choose Starter</a>
           </article>
 
-          <article class="price-card featured">
-            <span class="badge">Most popular</span>
-            <p class="plan">Growth</p>
-            <p class="price">$299 <small>/mo</small></p>
-            <p class="price-note">Best value for teams actively scaling booked jobs.</p>
-            <ul class="feature-list">
+          <article class="tier featured">
+            <span class="chip">Most Popular</span>
+            <h3>Growth</h3>
+            <p class="amount">$299 <small>/mo</small></p>
+            <p class="tier-note">Best fit for teams actively scaling booked jobs.</p>
+            <ul class="checks">
               <li>Everything in Starter</li>
-              <li>Advanced call flows by service type</li>
-              <li>Calendar integration and slot handling</li>
-              <li>Priority setup and optimization</li>
+              <li>Advanced call routing logic</li>
+              <li>Calendar slot handling</li>
+              <li>Priority optimization support</li>
             </ul>
             <a class="btn btn-primary" href="#close">Choose Growth</a>
           </article>
 
-          <article class="price-card">
-            <p class="plan">Scale</p>
-            <p class="price">$499 <small>/mo</small></p>
-            <p class="price-note">For larger teams needing deeper automation and reporting.</p>
-            <ul class="feature-list">
+          <article class="tier">
+            <h3>Pro</h3>
+            <p class="amount">$499 <small>/mo</small></p>
+            <p class="tier-note">For busier teams needing deeper automation.</p>
+            <ul class="checks">
               <li>Everything in Growth</li>
-              <li>Multi-location call logic</li>
-              <li>Custom CRM/webhook workflows</li>
-              <li>Conversion reporting dashboard</li>
+              <li>Multi-service branching</li>
+              <li>Custom webhook workflows</li>
+              <li>Enhanced reporting</li>
+            </ul>
+            <a class="btn btn-secondary" href="#close">Choose Pro</a>
+          </article>
+
+          <article class="tier">
+            <h3>Scale</h3>
+            <p class="amount">$799 <small>/mo</small></p>
+            <p class="tier-note">For multi-location operators and larger call volume.</p>
+            <ul class="checks">
+              <li>Everything in Pro</li>
+              <li>Multi-location call handling</li>
+              <li>Dedicated support lane</li>
+              <li>Quarterly performance tuning</li>
             </ul>
             <a class="btn btn-secondary" href="#close">Choose Scale</a>
           </article>
@@ -604,56 +743,55 @@
     </section>
 
     <section>
-      <div class="wrap panel">
-        <p class="section-label">FAQ</p>
-        <h2 class="reveal-title">Common questions before starting.</h2>
+      <div class="container panel">
+        <p class="section-tag">FAQ</p>
+        <h2 class="glide-title">Quick answers before you start</h2>
         <div class="faq-list">
-          <article class="faq">
-            <h4>Will it sound robotic?</h4>
-            <p>No. The assistant is tuned to sound natural, conversational, and service-focused.</p>
+          <article class="faq-item">
+            <h4>Will this replace my dispatcher?</h4>
+            <p>It can assist or cover overflow and after-hours calls, then hand off high-value details to your team.</p>
           </article>
-          <article class="faq">
-            <h4>Can I keep my current number?</h4>
-            <p>Yes. We can route your existing business number into the AI system.</p>
+          <article class="faq-item">
+            <h4>Can I keep my current business number?</h4>
+            <p>Yes. Your number can route into the AI workflow without changing your public brand.</p>
           </article>
-          <article class="faq">
-            <h4>How fast can this go live?</h4>
-            <p>Most setups can launch quickly once your call flow and scripts are confirmed.</p>
+          <article class="faq-item">
+            <h4>How quickly can I launch?</h4>
+            <p>Most setups launch fast once your service menu and booking rules are confirmed.</p>
           </article>
         </div>
       </div>
     </section>
 
     <section id="close">
-      <div class="wrap">
-        <div class="final-cta">
-          <p class="section-label">Ready to stop losing leads?</p>
-          <h2 class="reveal-title">Turn missed calls into booked revenue.</h2>
+      <div class="container">
+        <div class="closer">
+          <p class="section-tag">Final step</p>
+          <h2 class="glide-title">Turn missed calls into booked jobs this month</h2>
           <p>
-            Start with the Growth plan and get a conversion-focused setup built around your service types.
-            If it does not improve call handling quality, you can cancel anytime.
+            Start with the Growth plan for the best balance of booking power and cost. We tune your flow around your services,
+            urgency rules, and calendar preferences so calls convert instead of slipping away.
           </p>
-          <div class="hero-cta-row">
+          <div class="btn-row" style="justify-content: center;">
             <a class="btn btn-primary" href="#pricing">Start My Setup</a>
-            <a class="btn btn-secondary" href="tel:+18005551212">Talk to Sales</a>
+            <a class="btn btn-secondary" href="tel:+18005551212">Talk To Sales</a>
           </div>
-          <p class="micro-proof">No long contracts | Keep your number | Built for home service teams</p>
+          <p class="proof">No long-term lock-in | Keep your number | Built for service teams</p>
         </div>
       </div>
     </section>
   </main>
 
-  <div class="sticky-cta">
+  <div class="mobile-cta">
     <a class="btn btn-primary" href="#pricing">Start My Setup</a>
   </div>
 
   <footer>
-    <div class="wrap">Blue Caller AI - Built to help you answer first and close faster.</div>
+    <div class="container">Blue Caller AI - Answer first. Book more jobs.</div>
   </footer>
 
   <script>
-    const titleEls = document.querySelectorAll(".reveal-title");
-
+    const glideTitles = document.querySelectorAll(".glide-title");
     const titleObserver = new IntersectionObserver((entries, observer) => {
       entries.forEach((entry) => {
         if (!entry.isIntersecting) return;
@@ -661,12 +799,11 @@
         observer.unobserve(entry.target);
       });
     }, {
-      root: null,
-      threshold: 0.2,
+      threshold: 0.24,
       rootMargin: "0px 0px -8% 0px"
     });
 
-    titleEls.forEach((el) => titleObserver.observe(el));
+    glideTitles.forEach((el) => titleObserver.observe(el));
   </script>
 </body>
 </html>
