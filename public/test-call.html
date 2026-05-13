@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blue Caller AI Test Call</title>
+</head>
+<body>
+  <h2>Blue Caller AI Test Call</h2>
+  <button onclick="makeCall()">Call</button>
+  <button onclick="hangup()">Hang Up</button>
+  <p id="status">Loading...</p>
+
+  <script src="/twilio.min.js"></script>
+  <script>
+    let device;
+    let call;
+
+    async function setup() {
+      try {
+        if (typeof Twilio === "undefined") {
+          document.getElementById("status").innerText = "Setup error: Twilio SDK failed to load";
+          return;
+        }
+
+        const res = await fetch("/twilio-token");
+        const text = await res.text();
+
+        if (!res.ok) {
+          document.getElementById("status").innerText = text;
+          return;
+        }
+
+        const data = JSON.parse(text);
+
+        device = new Twilio.Device(data.token, {
+          logLevel: 1
+        });
+
+        device.on("registered", () => {
+          document.getElementById("status").innerText = "Ready";
+        });
+
+        device.on("error", (err) => {
+          document.getElementById("status").innerText = "Device error: " + err.message;
+          console.error(err);
+        });
+
+        await device.register();
+      } catch (err) {
+        document.getElementById("status").innerText = "Setup error: " + err.message;
+        console.error(err);
+      }
+    }
+
+    async function makeCall() {
+      try {
+        if (!device) {
+          document.getElementById("status").innerText = "Call error: device not ready";
+          return;
+        }
+
+        call = await device.connect();
+        document.getElementById("status").innerText = "Calling...";
+      } catch (err) {
+        document.getElementById("status").innerText = "Call error: " + err.message;
+        console.error(err);
+      }
+    }
+
+    function hangup() {
+      if (call) {
+        call.disconnect();
+      }
+      document.getElementById("status").innerText = "Hung up";
+    }
+
+    setup();
+  </script>
+</body>
+</html>
