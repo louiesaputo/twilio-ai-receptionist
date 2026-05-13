@@ -811,7 +811,7 @@ function normalizeSpelledFirstName(text, fallback = "") {
 
 function maybeQueueFirstNameSpelling(caller, nextStep, preamble) {
   if (caller.firstName && !caller.nameSpellingConfirmed && firstNameNeedsSpelling(caller.firstName)) {
-    caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name");
+    caller.pendingNameNextStep = nextStep || (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name");
     caller.lastStep = "ask_first_name_spelling";
     const core = `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?`;
     const prefix = preamble ? cleanForSpeech(preamble) : "";
@@ -1859,6 +1859,34 @@ function getPhoneCollectionStep(caller) {
   return isBrowserCaller(caller) ? "get_new_phone" : "confirm_phone";
 }
 
+function callerHasReachablePhoneDigits(caller) {
+  const d = extractPhoneDigits(String(caller.callbackNumber || caller.phone || ""));
+  if (!d) return false;
+  if (d.length === 11 && d.startsWith("1")) return true;
+  return d.length === 10;
+}
+
+function resolvePhoneIntakeStep(caller) {
+  if (callerHasReachablePhoneDigits(caller)) return "confirm_phone";
+  return getPhoneCollectionStep(caller);
+}
+
+function buildPhoneIntakePromptFragment(caller) {
+  if (callerHasReachablePhoneDigits(caller)) {
+    return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+  }
+  return isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.phone)} a good number to reach you?`;
+}
+
+function tryHarvestPhoneFromUtterance(caller, rawText) {
+  const digits = extractPhoneDigits(rawText || "");
+  if (!digits) return false;
+  const phone10 = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (phone10.length !== 10) return false;
+  caller.callbackNumber = normalizePhoneForStorage(phone10);
+  return true;
+}
+
 
 
 
@@ -2490,8 +2518,15 @@ function buildResumePromptForCurrentStep(caller) {
     case "ask_issue":
     case "ask_issue_again":
       return "How can I help you today?";
-    case "ask_name":
-      return "Can I start by getting your full name, please?";
+    case "ask_name": {
+      const variants = [
+        "Can I start by getting your full name, please?",
+        "To start, can I get your full name?",
+        "Who should I list as the contact—full first and last name?"
+      ];
+      const i = nextPromptIndex(caller, "askNameResumePromptIndex");
+      return variants[i % variants.length];
+    }
     case "ask_first_name_spelling":
       return caller.firstName ? `I know ${caller.firstName} can be spelled a few different ways. How do you spell it?` : "How do you spell your first name?";
     case "ask_last_name":
@@ -2576,15 +2611,19 @@ function buildServiceIntakeLeadIn(caller) {
   if (tone === "urgent_stressed" || tone === "frustrated") {
     return "I'm going to keep this quick—I just need a few details so the team can jump on this.";
   }
-  return "I'm here to help, so let's get a few details from you.";
+  const neutrals = [
+    "I'm here to help, so let's pick up a few details.",
+    "Let me grab a few quick details so we're set up cleanly.",
+    "I'll take down a few basics and we can line up the next step."
+  ];
+  const i = nextPromptIndex(caller, "serviceLeadInPromptIndex");
+  return neutrals[i % neutrals.length];
 }
 
 function buildStandardIntakePrompt(caller) {
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
-      return isBrowserCaller(caller)
-        ? `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} ${buildBrowserCallbackPrompt()}`
-        : `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+      return `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} ${buildPhoneIntakePromptFragment(caller)}`;
     }
     return `Thank you, ${caller.firstName}. ${buildIssueAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} Before I go any further, can I get your last name as well?`;
   }
@@ -2650,9 +2689,7 @@ function buildUrgentIntakePrompt(caller) {
 
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
-      return isBrowserCaller(caller)
-        ? `${leadIn} ${buildBrowserCallbackPrompt()}`
-        : `${leadIn} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+      return `${leadIn} ${buildPhoneIntakePromptFragment(caller)}`;
     }
     return `${leadIn} Before I go any further, can I get your last name as well?`;
   }
@@ -2826,7 +2863,7 @@ function isDemoIntent(text) {
 function isQuoteIntent(text) {
   const t = normalizedText(text);
   if (containsAny(t, ["quote", "estimate", "proposal", "bid"])) return true;
-  if (containsAny(t, ["remodel", "remodeling", "renovation", "renovating"])) return true;
+  if (containsAny(t, ["remodel", "remodeling", "renovation", "renovating", "reno", "renos"])) return true;
   if (containsAny(t, ["install", "installation", "replace", "replacement", "new"]) && containsAny(t, [
     "appliance", "refrigerator", "fridge", "dishwasher", "stove", "oven", "range", "cooktop",
     "washer", "dryer", "microwave", "garbage disposal", "water heater", "toilet", "faucet"
@@ -2850,6 +2887,167 @@ function classifyProjectType(text) {
   if (containsAny(t, ["bathroom", "bath"]) && containsAny(t, ["remodel", "quote", "estimate"])) return "a bathroom remodel";
   if (t.includes("kitchen") && containsAny(t, ["remodel", "quote", "estimate"])) return "a kitchen remodel";
   return raw || "this project";
+}
+
+function detectNamedApplianceBrand(text) {
+  const t = normalizedText(text || "");
+  if (!t) return "";
+  const brandPatterns = [
+    [/\bsub[-\s]?zero\b/, "Sub-Zero"],
+    [/\bwolf\b/, "Wolf"],
+    [/thermador/, "Thermador"],
+    [/gaggenau/, "Gaggenau"],
+    [/miele/, "Miele"],
+    [/speed[-\s]?queen|speedqueen/, "Speed Queen"],
+    [/frigidaire/, "Frigidaire"],
+    [/bosch/, "Bosch"],
+    [/viking/, "Viking"],
+    [/\bjenn[-\s]?air\b|jennair/, "JennAir"],
+    [/monogram/, "Monogram"],
+    [/kitchenaid|kitchen\s+aid/, "KitchenAid"],
+    [/dacor/, "Dacor"],
+    [/bertazzoni/, "Bertazzoni"],
+    [/fisher\s*(?:&|and)?\s*paykel/, "Fisher and Paykel"],
+    [/la\s+cornue/, "La Cornue"],
+    [/electrolux/, "Electrolux"],
+    [/whirlpool/, "Whirlpool"],
+    [/maytag/, "Maytag"],
+    [/samsung/, "Samsung"],
+    [/\blg\b/, "LG"],
+    [/amana/, "Amana"]
+  ];
+  for (const [re, label] of brandPatterns) {
+    if (re.test(t)) return label;
+  }
+  return "";
+}
+
+function isServiceCapabilityQuestion(text) {
+  const raw = cleanForSpeech(text || "");
+  const t = normalizedText(raw);
+  const namedBrand = detectNamedApplianceBrand(text);
+  if (!t || (t.length < 8 && !(namedBrand && t.length >= 5))) return false;
+  if (isHardEmergency(text)) return false;
+  if (isDemoIntent(text)) return false;
+
+  const soundsLikeActiveProblem =
+    containsAny(t, [
+      "burst pipe", "flooding", "flooded", "gushing", "sewage backup", "sewer backup", "no heat", "no ac",
+      "no a c", "no cooling", "no hot water", "spark", "smoke", "fire"
+    ]) || (isLeakLikeIssue(text) && containsAny(t, ["leak", "leaking", "drip", "dripping"]));
+  if (soundsLikeActiveProblem) return false;
+  if (hasSpecificProblemDetail(text)) return false;
+
+  if (/^\s*i\s+need\s+/i.test(raw) && !/\b(if|whether)\b/.test(t)) return false;
+  if (/\b(my|our)\s+(toilet|faucet|sink|water heater|drain|drains|pipe|pipes|shower|tub|ceiling|basement)\b/.test(t)) {
+    return false;
+  }
+
+  const genericTrade = containsAny(t, [
+    "plumb", "plumbing", "plumber",
+    "hvac", "furnace", "air conditioning", "air conditioner",
+    "electrical", "electrician", "wiring",
+    "roofing", "roofer",
+    "contractor", "contracting",
+    "reno", "renovation", "renovate", "renovating", "remodel", "remodeling",
+    "new build", "new construction",
+    "appliance", "appliances", "refrigerator", "fridge", "freezer", "dishwasher", "oven", "range", "cooktop", "stove"
+  ]);
+
+  const trades = genericTrade || Boolean(namedBrand);
+
+  const asksScope = containsAny(t, [
+    "do you", "does your", "can you", "could you", "would you", "are you able", "will you",
+    "do you guys", "do y'all", "do yall",
+    "wondering if", "wondering whether", "wanted to know if", "want to know if",
+    "calling to see if", "check if you", "checking if you", "find out if you",
+    "to know if you", "know if you",
+    "take on", "you handle", "you work on",
+    "offer ", "provides ", "provide ",
+    "looking for someone", "looking for a plumber", "looking for an electrician",
+    "looking for a company", "any chance you"
+  ]) || /\bdo\s+y'?all\s+do\b/.test(t);
+
+  if (!trades) return false;
+  if (!asksScope) {
+    if (!t.includes("?")) return false;
+    if (!genericTrade && !namedBrand) return false;
+    const hasScopeKeyword = containsAny(t, [
+      "repair", "repairs", "service", "services", "work", "new build", "construction",
+      "reno", "renovation", "remodel", "install", "installation", "appliance", "equip"
+    ]);
+    if (!hasScopeKeyword && !namedBrand) return false;
+  }
+  return true;
+}
+
+function buildCapabilityIssueSummary(issue) {
+  const t = normalizedText(issue || "");
+  const brand = detectNamedApplianceBrand(issue);
+  if (brand) return `${brand} appliance service inquiry`;
+  if (containsAny(t, ["plumb", "plumbing", "plumber"])) {
+    if (containsAny(t, ["new build", "new construction"])) return "plumbing for new construction";
+    if (containsAny(t, ["renovation", "renovate", "reno", "renos", "remodel", "remodeling"])) {
+      return "plumbing for remodeling or renovation";
+    }
+    if (containsAny(t, ["repair", "repairs"])) return "plumbing repairs";
+    return "plumbing services";
+  }
+  if (containsAny(t, ["hvac", "furnace", "air conditioning", "air conditioner"]) || (t.includes("heating") && t.includes("cooling"))) {
+    return "HVAC services";
+  }
+  if (containsAny(t, ["electrical", "electrician", "wiring"])) return "electrical services";
+  if (containsAny(t, ["roof", "roofing", "roofer"])) return "roofing services";
+  if (containsAny(t, ["contractor", "contracting", "new build", "new construction", "renovation", "remodel"])) {
+    return "contracting or construction services";
+  }
+  return "your service question";
+}
+
+function buildCapabilityAcknowledgement(caller) {
+  const t = normalizedText(caller.issue || "");
+  const brand = detectNamedApplianceBrand(caller.issue || "");
+  if (brand) {
+    return `Yes, we service ${brand} appliances, including repairs and installation.`;
+  }
+  if (containsAny(t, ["plumb", "plumbing", "plumber"])) {
+    const repair = containsAny(t, ["repair", "repairs"]);
+    const newBuild = containsAny(t, ["new build", "new construction"]);
+    const reno = containsAny(t, ["renovation", "renovate", "reno", "renos", "remodel", "remodeling"]);
+    if (newBuild && reno && repair) return "Yes, we handle plumbing for new construction, renovations, and repairs.";
+    if (newBuild && reno) return "Yes, we handle plumbing for new construction and for renovation work.";
+    if (newBuild && repair) return "Yes, we handle plumbing for new construction and for repairs.";
+    if (reno && repair) return "Yes, we handle plumbing repairs and plumbing for renovation work.";
+    if (newBuild) return "Yes, we handle plumbing for new construction projects.";
+    if (reno) return "Yes, we handle plumbing for remodeling and renovation work.";
+    if (repair) return "Yes, we handle plumbing repairs.";
+    return "Yes, we handle plumbing work, including repairs, new construction, and renovation projects.";
+  }
+  if (containsAny(t, ["hvac", "furnace", "air conditioning", "air conditioner"]) || (t.includes("heating") && t.includes("cooling"))) {
+    return "Yes, we handle HVAC work.";
+  }
+  if (containsAny(t, ["electrical", "electrician", "wiring"])) {
+    return "Yes, we handle electrical work.";
+  }
+  if (containsAny(t, ["roof", "roofing", "roofer"])) {
+    return "Yes, we handle roofing work.";
+  }
+  if (containsAny(t, ["contractor", "contracting", "new build", "new construction", "renovation", "remodel"])) {
+    return "Yes, we take on that type of work.";
+  }
+  return "Yes, we should be able to help with that.";
+}
+
+function buildQuoteIntakeOpener(caller) {
+  if (!caller.issueIsCapabilityQuestion) return "Absolutely.";
+  return `${buildCapabilityAcknowledgement(caller)} I can help get a quote request set up.`;
+}
+
+function buildQuoteFollowupAckLine(caller) {
+  if (caller.issueIsCapabilityQuestion) {
+    return `${buildCapabilityAcknowledgement(caller)} I have ${caller.issueSummary} noted for the team.`;
+  }
+  return `Absolutely. I have ${caller.issueSummary}.`;
 }
 
 
@@ -3023,6 +3221,7 @@ function humanizeIssueSummaryForSpeech(summary) {
 
 
 function buildIssueAcknowledgement(caller) {
+  if (caller.issueIsCapabilityQuestion) return buildCapabilityAcknowledgement(caller);
   const summary = humanizeIssueSummaryForSpeech(caller.issueSummary || caller.issue || "that issue");
   if (!summary) return "I'm sorry you're dealing with that.";
   if (isMainLineEmergencyCandidate(caller.issue || "") || normalizedText(summary).includes("broken main")) {
@@ -4097,7 +4296,9 @@ function buildSchedulingChoicePrompt(caller) {
   const variants = [
     "Do you have a date in mind, or can I schedule the first available?",
     "Would you like to give me a date, or can I schedule the first available?",
-    "Do you have a specific date in mind, or can I schedule the first available?"
+    "Do you have a specific date in mind, or can I schedule the first available?",
+    "If you already know a day that works, we can start there—or I can look for the first open slot.",
+    "Some folks have a day picked out already, and some just want the soonest opening—either one works."
   ];
 
 
@@ -4154,6 +4355,7 @@ function getOrCreateCaller(key) {
       address: "",
       issue: "",
       issueSummary: "",
+      issueIsCapabilityQuestion: false,
       urgency: "normal",
       emergencyAlert: false,
       leadType: "service",
@@ -5168,9 +5370,7 @@ function buildEmergencyIntakePrompt(caller) {
 
   if (caller.fullName) {
     if (hasFullName(caller.fullName)) {
-      return isBrowserCaller(caller)
-        ? `${leadIn} ${buildBrowserCallbackPrompt()}`
-        : `${leadIn} Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
+      return `${leadIn} ${buildPhoneIntakePromptFragment(caller)}`;
     }
     return `${leadIn} Before I go any further, can I get your last name as well?`;
   }
@@ -5212,7 +5412,10 @@ function isScheduleOfferAcceptance(text) {
 
 
 function afterIssueCaptured(caller) {
-  caller.issueSummary = classifyIssue(caller.issue).summary;
+  caller.issueIsCapabilityQuestion = false;
+  if (caller.issue && isServiceCapabilityQuestion(caller.issue)) {
+    caller.issueIsCapabilityQuestion = true;
+  }
 
 
 
@@ -5238,30 +5441,23 @@ function afterIssueCaptured(caller) {
   if (isQuoteIntent(caller.issue)) {
     caller.leadType = "quote";
     caller.projectType = classifyProjectType(caller.issue);
-    caller.issueSummary = caller.projectType;
+    caller.issueSummary = caller.issueIsCapabilityQuestion
+      ? buildCapabilityIssueSummary(caller.issue)
+      : caller.projectType;
     caller.status = "quote_request";
     return;
   }
-
-
-
-
-
-
-
 
   if (isHardEmergency(caller.issue)) {
     markEmergency(caller);
     return;
   }
 
-
-
-
-
-
-
-
+  if (caller.issueIsCapabilityQuestion) {
+    caller.issueSummary = buildCapabilityIssueSummary(caller.issue);
+  } else {
+    caller.issueSummary = classifyIssue(caller.issue).summary;
+  }
   markStandardService(caller);
 }
 
@@ -5274,7 +5470,13 @@ function afterIssueCaptured(caller) {
 
 function buildNextPrompt(caller) {
   if (caller.lastStep === "ask_name") {
-    return "Can I start by getting your full name, please?";
+    const variants = [
+      "Can I start by getting your full name, please?",
+      "To start, can I get your full name?",
+      "Who should I list as the contact—full first and last name?"
+    ];
+    const i = nextPromptIndex(caller, "askNameNextPromptIndex");
+    return variants[i % variants.length];
   }
 
 
@@ -5473,12 +5675,168 @@ function confirmAndAdvancePhone(ws, caller) {
   sendText(ws, buildAddressRequestPrompt(caller));
 }
 
+const FLEX_CONTACT_INTAKE_STEPS = new Set([
+  "ask_name",
+  "ask_last_name",
+  "confirm_phone"
+]);
 
+function stripLikelyPhoneFragmentsForNameParsing(raw) {
+  let s = cleanForSpeech(raw || "");
+  if (!s) return "";
+  s = s.replace(/\b1[-.\s]?(?:\(\s*)?(\d{3})(?:\s*\))?\s*[-.\s]?(\d{3})[-.\s]?(\d{4})\b/g, " ");
+  s = s.replace(/\b(?:\(\s*)?(\d{3})(?:\s*\))?\s*[-.\s]?(\d{3})[-.\s]?(\d{4})\b/g, " ");
+  return s.replace(/\s+/g, " ").replace(/^(?:and|also|uh|um)\s+/i, "").trim();
+}
 
+function extractTenDigitUsPhoneFromUtterance(text) {
+  const digits = extractPhoneDigits(text || "");
+  if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  if (digits.length === 10) return digits;
+  return "";
+}
 
+function tryParseFlexibleBundledFullName(text) {
+  const stripped = stripLikelyPhoneFragmentsForNameParsing(text);
+  if (!stripped) return "";
+  let candidate = extractIntroFullNameCandidate(stripped);
+  if (candidate && hasFullName(candidate)) return candidate;
+  const parts = stripped.split(/\s*(?:,|(?:\s+and\s+))\s*/i).map((p) => cleanForSpeech(p)).filter(Boolean);
+  for (const part of parts) {
+    const seg = stripLikelyPhoneFragmentsForNameParsing(part);
+    const n = parseFullNameFromSpeech(seg);
+    if (n && hasFullName(n)) return n;
+  }
+  const whole = parseFullNameFromSpeech(stripped);
+  if (whole && hasFullName(whole)) return whole;
+  return "";
+}
 
+function flexContactHarvestPreamble(kind) {
+  const pools = {
+    both: [
+      "Okay, I caught both of those.",
+      "Got it—I have both noted.",
+      "Perfect, thanks—that tracks."
+    ],
+    phone_only: [
+      "I heard a callback number, so I will hang on to that.",
+      "Got the number.",
+      "Thanks—I saved that number."
+    ],
+    name_at_phone: [
+      "Thanks, I have your name.",
+      "Got your name down."
+    ]
+  };
+  const list = pools[kind] || pools.both;
+  return list[Math.floor(Math.random() * list.length)];
+}
 
+function applyFlexibleContactHarvest(ws, caller, text) {
+  if (!FLEX_CONTACT_INTAKE_STEPS.has(caller.lastStep)) return false;
 
+  if (caller.lastStep === "confirm_phone") {
+    const it = normalizeIntentText(text);
+    if (isAffirmative(text) || isNegative(text) || isPhoneCorrection(text)) return false;
+    if (it === "yes" || it === "yeah" || it === "yep" || it === "correct" || it === "right" || it === "that s right" || it === "thats right") {
+      return false;
+    }
+  }
+
+  const phone10 = extractTenDigitUsPhoneFromUtterance(text);
+  const hasPhoneChunk = Boolean(phone10);
+
+  let nameGuess = tryParseFlexibleBundledFullName(text);
+  if (!nameGuess && caller.lastStep === "ask_last_name" && caller.firstName) {
+    const remainder = stripLikelyPhoneFragmentsForNameParsing(text);
+    const glued = parseFullNameFromSpeech(`${caller.firstName} ${remainder}`.trim());
+    if (glued && hasFullName(glued)) nameGuess = glued;
+    else {
+      const last = parseLastNameResponse(remainder);
+      if (last) {
+        const combo = `${caller.firstName} ${last}`.trim();
+        if (hasFullName(combo)) nameGuess = combo;
+      }
+    }
+  }
+
+  let changed = false;
+  let phoneAdded = false;
+  let nameAdded = false;
+
+  if ((caller.lastStep === "ask_name" || caller.lastStep === "ask_last_name") && hasPhoneChunk) {
+    const next = normalizePhoneForStorage(phone10);
+    if (next && next !== String(caller.callbackNumber || "")) {
+      caller.callbackNumber = next;
+      phoneAdded = true;
+      changed = true;
+    }
+  }
+
+  if (caller.lastStep === "ask_name") {
+    if (nameGuess && hasFullName(nameGuess) && nameGuess !== (caller.fullName || "")) {
+      caller.fullName = nameGuess;
+      caller.firstName = getFirstName(nameGuess);
+      caller.nameSpellingConfirmed = false;
+      nameAdded = true;
+      changed = true;
+    }
+  } else if (caller.lastStep === "ask_last_name") {
+    if (nameGuess && hasFullName(nameGuess) && nameGuess !== (caller.fullName || "")) {
+      caller.fullName = nameGuess;
+      caller.firstName = getFirstName(nameGuess);
+      caller.nameSpellingConfirmed = false;
+      nameAdded = true;
+      changed = true;
+    }
+  } else if (caller.lastStep === "confirm_phone" && nameGuess && hasFullName(nameGuess) && !hasFullName(caller.fullName || "")) {
+    caller.fullName = nameGuess;
+    caller.firstName = getFirstName(nameGuess);
+    caller.nameSpellingConfirmed = false;
+    nameAdded = true;
+    changed = true;
+  }
+
+  if (!changed) return false;
+
+  let flexPreamble = "";
+  if (phoneAdded && nameAdded) flexPreamble = flexContactHarvestPreamble("both");
+  else if (phoneAdded) flexPreamble = flexContactHarvestPreamble("phone_only");
+  else if (nameAdded && caller.lastStep === "confirm_phone") flexPreamble = flexContactHarvestPreamble("name_at_phone");
+
+  if (!hasFullName(caller.fullName || "")) {
+    if (caller.lastStep === "ask_name" || !caller.firstName) {
+      caller.lastStep = "ask_name";
+      sendText(ws, phoneAdded && !nameAdded
+        ? `${flexPreamble} Who am I speaking with—your full name?`
+        : `${flexPreamble} What name should I put on the service request?`);
+      return true;
+    }
+    caller.lastStep = "ask_last_name";
+    if (phoneAdded && !nameAdded) {
+      sendText(ws, `${flexPreamble} And your last name?`);
+    } else {
+      sendText(ws, `${flexPreamble} Can I get your last name as well?`);
+    }
+    return true;
+  }
+
+  const nextStep = resolvePhoneIntakeStep(caller);
+  const spelling = maybeQueueFirstNameSpelling(caller, nextStep, flexPreamble);
+  if (spelling) {
+    sendText(ws, spelling);
+    return true;
+  }
+  caller.pendingNameNextStep = "";
+  caller.lastStep = nextStep;
+  const phoneLine = flexPreamble
+    ? `${flexPreamble} ${buildPhoneIntakePromptFragment(caller)}`
+    : buildPhoneIntakePromptFragment(caller);
+  sendText(ws, phoneLine);
+  return true;
+}
 
 async function handlePrompt(ws, caller, speech) {
   const text = cleanSpeechText(speech || "");
@@ -5558,8 +5916,9 @@ async function handlePrompt(ws, caller, speech) {
     return;
   }
 
-
-
+  if (applyFlexibleContactHarvest(ws, caller, text)) {
+    return;
+  }
 
   switch (caller.lastStep) {
     case "ask_issue": {
@@ -5676,6 +6035,7 @@ async function handlePrompt(ws, caller, speech) {
       if (isGenericEmergencyIssue(parsed.issueText)) {
         caller.issue = "";
         caller.issueSummary = "";
+        caller.issueIsCapabilityQuestion = false;
         caller.lastStep = "ask_issue_again";
         sendText(ws, caller.fullName
           ? `I'm sorry you're dealing with that, ${caller.firstName}. What exactly is going on so I can note the emergency correctly?`
@@ -5684,6 +6044,8 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.issue = normalizeGenericServiceIssue(parsed.issueText);
       afterIssueCaptured(caller);
+      tryHarvestPhoneFromUtterance(caller, workingOpeningText);
+      tryHarvestPhoneFromUtterance(caller, text);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
         caller.pendingIssueItem = missingProblemItem.label;
@@ -5701,17 +6063,15 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (caller.leadType === "demo") {
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
         }
-        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? buildBrowserCallbackPrompt()
-              : `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+            ? `Absolutely. ${buildPhoneIntakePromptFragment(caller)}`
             : `Absolutely. Before I go any further, can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
         return;
@@ -5725,19 +6085,17 @@ async function handlePrompt(ws, caller, speech) {
 
 
       if (caller.leadType === "quote") {
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
           return;
         }
-        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        caller.lastStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? isBrowserCaller(caller)
-              ? buildBrowserCallbackPrompt()
-              : `Absolutely. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
-            : `Absolutely. Before I go any further, can I get your last name as well?`
-          : "Absolutely. Can I start by getting your full name, please?");
+            ? `${buildQuoteIntakeOpener(caller)} ${buildPhoneIntakePromptFragment(caller)}`
+            : `${buildQuoteIntakeOpener(caller)} Before I go any further, can I get your last name as well?`
+          : `${buildQuoteIntakeOpener(caller)} Can I start by getting your full name, please?`);
         return;
       }
       if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
@@ -5754,7 +6112,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
         markUrgent(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -5798,7 +6156,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
       if (caller.emergencyAlert) {
         caller.lastStep = nextStep;
         sendText(ws, buildEmergencyIntakePrompt(caller));
@@ -5834,6 +6192,8 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.issue = normalizeGenericServiceIssue(workingFollowupText);
       afterIssueCaptured(caller);
+      tryHarvestPhoneFromUtterance(caller, workingFollowupText);
+      tryHarvestPhoneFromUtterance(caller, text);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
         caller.pendingIssueItem = missingProblemItem.label;
@@ -5842,8 +6202,8 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `What seems to be going on with ${missingProblemItem.prompt}?`);
         return;
       }
-      if (caller.leadType === "quote" || caller.leadType === "demo") {
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      if (caller.leadType === "demo") {
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -5852,9 +6212,26 @@ async function handlePrompt(ws, caller, speech) {
         caller.lastStep = nextStep;
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
-            ? `Absolutely. I have ${caller.issueSummary}. ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
+            ? `Absolutely. I have ${caller.issueSummary}. ${buildPhoneIntakePromptFragment(caller)}`
             : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
           : "Absolutely. Can I start by getting your full name, please?");
+        return;
+      }
+      if (caller.leadType === "quote") {
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, caller.fullName
+          ? hasFullName(caller.fullName)
+            ? `${buildQuoteFollowupAckLine(caller)} ${buildPhoneIntakePromptFragment(caller)}`
+            : caller.issueIsCapabilityQuestion
+              ? `Thank you, ${caller.firstName}. ${buildCapabilityAcknowledgement(caller)} ${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
+              : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
+          : `${buildQuoteIntakeOpener(caller)} Can I start by getting your full name, please?`);
         return;
       }
       if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
@@ -5871,7 +6248,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
         markUrgent(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -5899,7 +6276,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
         return;
       }
-      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
       if (caller.emergencyAlert) {
         caller.lastStep = nextStep;
         sendText(ws, buildEmergencyIntakePrompt(caller));
@@ -5913,9 +6290,9 @@ async function handlePrompt(ws, caller, speech) {
       caller.lastStep = nextStep;
       sendText(ws, caller.fullName
         ? hasFullName(caller.fullName)
-          ? `Thank you, ${caller.firstName}. I have ${caller.issueSummary}. ${buildServiceIntakeLeadIn(caller)} ${isBrowserCaller(caller) ? "Can I get your best contact number?" : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`}`
-          : `Thank you, ${caller.firstName}. ${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
-        : `${buildServiceIntakeLeadIn(caller)} Can I start by getting your full name, please?`);
+          ? `Thank you, ${caller.firstName}. ${caller.issueIsCapabilityQuestion ? `${buildCapabilityAcknowledgement(caller)} I have ${caller.issueSummary} noted. ` : `I have ${caller.issueSummary}. `}${buildServiceIntakeLeadIn(caller)} ${buildPhoneIntakePromptFragment(caller)}`
+          : `Thank you, ${caller.firstName}. ${caller.issueIsCapabilityQuestion ? `${buildCapabilityAcknowledgement(caller)} ` : ""}${buildServiceIntakeLeadIn(caller)} Can I get your last name as well?`
+        : `${caller.issueIsCapabilityQuestion ? `${buildCapabilityAcknowledgement(caller)} ` : ""}${buildServiceIntakeLeadIn(caller)} Can I start by getting your full name, please?`);
       return;
     }
 
@@ -5929,6 +6306,7 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_item_issue_detail": {
       caller.issue = combineIssueContextAndDetail(caller.issue || caller.pendingIssueItem, text);
       caller.issueSummary = classifyIssue(caller.issue).summary;
+      caller.issueIsCapabilityQuestion = Boolean(caller.issue) && isServiceCapabilityQuestion(caller.issue);
       caller.pendingIssueItem = "";
       caller.pendingIssuePrompt = "";
       if (isHardEmergency(caller.issue)) {
@@ -5950,7 +6328,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
         markUrgent(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -5986,7 +6364,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+      const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
       if (caller.emergencyAlert) {
         caller.lastStep = nextStep;
         sendText(ws, buildEmergencyIntakePrompt(caller));
@@ -6012,7 +6390,7 @@ async function handlePrompt(ws, caller, speech) {
     case "leak_emergency_choice": {
       if (isNegative(text)) {
         markStandardService(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6022,7 +6400,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
             ? isBrowserCaller(caller)
-              ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. ${buildBrowserCallbackPrompt()}`
+              ? `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. ${buildPhoneIntakePromptFragment(caller)}`
               : `Alright, ${caller.firstName}. I've got this as a standard service request. I just need to gather a few details from you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Alright, ${caller.firstName}. I've got this as a standard service request. Before I go any further, can I get your last name as well?`
           : "Alright. I've got this as a standard service request. I just need to gather a few details from you. Can I start with your full name?");
@@ -6038,7 +6416,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isAffirmative(text)) {
         markEmergency(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6048,7 +6426,7 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, caller.fullName
           ? hasFullName(caller.fullName)
             ? isBrowserCaller(caller)
-              ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. ${buildBrowserCallbackPrompt()}`
+              ? `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. ${buildPhoneIntakePromptFragment(caller)}`
               : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
             : `Alright, ${caller.firstName}. I'm going to mark this as an emergency so our service team can review it right away. Before I go any further, can I get your last name as well?`
           : "Alright. I'm going to mark this as an emergency so our service team can review it right away. Can I start with your full name?");
@@ -6076,7 +6454,7 @@ async function handlePrompt(ws, caller, speech) {
     case "refrigerator_emergency_choice": {
       if (isAffirmative(text) || containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
         markEmergency(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6089,7 +6467,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isNegative(text) || isUrgentSelection(text)) {
         markUrgent(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6108,7 +6486,7 @@ async function handlePrompt(ws, caller, speech) {
     case "appliance_priority_choice": {
       if (containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
         markEmergency(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6121,7 +6499,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isUrgentSelection(text) || isAffirmative(text)) {
         markUrgent(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6134,7 +6512,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (isNegative(text) || containsAny(normalizeIntentText(text), ["normal", "standard", "regular service"])) {
         markStandardService(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name") : "ask_name";
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
           sendText(ws, spellingPrompt);
@@ -6183,7 +6561,7 @@ async function handlePrompt(ws, caller, speech) {
       if (companyName) caller.companyName = companyName;
       const resumeStep = caller.pendingNameNextStep || "";
       const nextStep = hasFullName(parsedName)
-        ? (resumeStep || getPhoneCollectionStep(caller))
+        ? (resumeStep || resolvePhoneIntakeStep(caller))
         : "ask_last_name";
       const spellingPrompt = maybeQueueFirstNameSpelling(caller, nextStep);
       if (spellingPrompt) {
@@ -6205,8 +6583,8 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
       }
-      caller.lastStep = getPhoneCollectionStep(caller);
-      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      caller.lastStep = resolvePhoneIntakeStep(caller);
+      sendText(ws, buildPhoneIntakePromptFragment(caller));
       return;
     }
 
@@ -6223,7 +6601,7 @@ async function handlePrompt(ws, caller, speech) {
       caller.firstName = spelledFirstName || caller.firstName;
       caller.fullName = remainingParts ? `${caller.firstName} ${toTitleCase(remainingParts)}` : caller.firstName;
       caller.nameSpellingConfirmed = true;
-      const nextStep = caller.pendingNameNextStep || (hasFullName(caller.fullName) ? getPhoneCollectionStep(caller) : "ask_last_name");
+      const nextStep = caller.pendingNameNextStep || (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name");
       caller.pendingNameNextStep = "";
       if (nextStep === "ask_last_name") {
         caller.lastStep = "ask_last_name";
@@ -6235,8 +6613,10 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, "Do you want me to mark this as an emergency?");
         return;
       }
-      caller.lastStep = getPhoneCollectionStep(caller);
-      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      caller.lastStep = resolvePhoneIntakeStep(caller);
+      sendText(ws, callerHasReachablePhoneDigits(caller)
+        ? `Thank you. Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`
+        : buildPhoneIntakePromptFragment(caller));
       return;
     }
 
@@ -6262,7 +6642,7 @@ async function handlePrompt(ws, caller, speech) {
       }
       caller.fullName = possibleFullName;
       caller.firstName = getFirstName(possibleFullName);
-      const spellingPrompt = maybeQueueFirstNameSpelling(caller, resumeStep || getPhoneCollectionStep(caller));
+      const spellingPrompt = maybeQueueFirstNameSpelling(caller, resumeStep || resolvePhoneIntakeStep(caller));
       if (spellingPrompt) {
         sendText(ws, spellingPrompt);
         return;
@@ -6276,8 +6656,8 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
       }
-      caller.lastStep = getPhoneCollectionStep(caller);
-      sendText(ws, isBrowserCaller(caller) ? buildBrowserCallbackPrompt() : `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`);
+      caller.lastStep = resolvePhoneIntakeStep(caller);
+      sendText(ws, buildPhoneIntakePromptFragment(caller));
       return;
     }
     case "confirm_phone": {
