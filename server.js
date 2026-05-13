@@ -1887,6 +1887,59 @@ function tryHarvestPhoneFromUtterance(caller, rawText) {
   return true;
 }
 
+function sliceOpeningHeadBeforeIssueClause(raw) {
+  const safe = cleanForSpeech(raw || "");
+  if (!safe) return "";
+  const lower = safe.toLowerCase();
+  const needles = [
+    ", and i need ", ", and i've got ", ", and ive got ", ", and i have ",
+    ", i need ", " and i need ", " and i have ", " and i've got ", " and ive got ",
+    " i need someone ", " i need somebody ", " i need to ",
+    " calling about ", " calling regarding "
+  ];
+  let cut = -1;
+  for (const n of needles) {
+    const idx = lower.indexOf(n);
+    if (idx >= 0 && (cut < 0 || idx < cut)) cut = idx;
+  }
+  if (cut < 0) return safe;
+  return safe.slice(0, cut).trim().replace(/[,.]+$/g, "");
+}
+
+function tryExtractAddressAfterAtClause(head) {
+  const t = cleanForSpeech(head || "");
+  if (!t) return "";
+  const m = t.match(/\b(?:at|@)\s+(\d{1,6}\s+.+)$/i);
+  if (!m) return "";
+  let addr = cleanForSpeech(m[1]).replace(/[,.]+$/g, "");
+  if (!addr || !/\d/.test(addr)) return "";
+  const n = normalizedText(addr);
+  const hasStreetType = containsAny(n, [
+    "street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr",
+    "boulevard", "blvd", "court", "ct", "circle", "cir", "way", "highway", "hwy",
+    "parkway", "pkwy", "route", "place", "pl"
+  ]);
+  const hasInCity = /\s+in\s+[a-z]/i.test(addr);
+  if (!hasStreetType && !hasInCity) return "";
+  addr = addr.replace(/\s+in\s+([a-z][a-z'\-\s]*)$/i, ", $1");
+  return normalizeAddressInput(addr);
+}
+
+function callerHasHarvestableServiceAddress(caller) {
+  const a = cleanForSpeech(caller.address || "");
+  return Boolean(a && a.length >= 10 && /\d/.test(a));
+}
+
+function tryHarvestAddressFromUtterance(caller, rawText) {
+  if (cleanForSpeech(caller.address || "").length >= 12) return false;
+  const head = sliceOpeningHeadBeforeIssueClause(rawText);
+  if (!head) return false;
+  const extracted = tryExtractAddressAfterAtClause(head);
+  if (!extracted) return false;
+  caller.address = extracted;
+  return true;
+}
+
 
 
 
@@ -2209,6 +2262,38 @@ function isChangeContactPersonIntent(text) {
     "make her the contact", "make him the contact",
     "change the name", "update the contact person", "update the contact"
   ]);
+}
+
+/** Caller is declining a contact update ("don't change my contact…") so we should not hijack the turn. */
+function isNegatedMidCallContactUpdateRequest(text) {
+  const t = normalizeIntentText(text || "");
+  if (!t) return false;
+  return (
+    /\b(don t|dont|do not)\s+change\s+(?:my|the|it|that)\s+contact\b/.test(t) ||
+    /\b(don t|dont|do not)\s+update\s+(?:my|the|it|that)\s+contact\b/.test(t) ||
+    /\b(don t|dont|do not)\s+want\s+to\s+(?:change|update)\s+(?:my|the)\s+contact\b/.test(t)
+  );
+}
+
+/**
+ * After main intake, route correction intents back to capture_updated_callback_number (and optional name),
+ * including generic "contact info" wording — not only explicit callback/phone phrases.
+ */
+function isPostIntakeContactUpdateIntent(text) {
+  if (isNegatedMidCallContactUpdateRequest(text)) return false;
+  if (isCallbackNumberChangeIntent(text)) return true;
+  const t = normalizeIntentText(text || "");
+  if (!t) return false;
+  if (containsAny(t, [
+    "change my contact info", "change the contact info", "change contact info",
+    "update my contact info", "update the contact info", "update contact info",
+    "change my contact information", "change the contact information", "change contact information",
+    "update my contact information", "update the contact information", "update contact information",
+    "i want to change my contact", "i need to change my contact",
+    "i want to update my contact", "i need to update my contact",
+    "wrong contact info", "wrong contact information", "incorrect contact info"
+  ])) return true;
+  return isChangeContactPersonIntent(text);
 }
 
 
@@ -5671,6 +5756,11 @@ function sendAfterAddressConfirmed(ws, caller) {
 
 function confirmAndAdvancePhone(ws, caller) {
   caller.callbackConfirmed = true;
+  if (callerHasHarvestableServiceAddress(caller)) {
+    caller.lastStep = "confirm_address";
+    sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
+    return;
+  }
   caller.lastStep = "ask_address";
   sendText(ws, buildAddressRequestPrompt(caller));
 }
@@ -5893,11 +5983,25 @@ async function handlePrompt(ws, caller, speech) {
     "ask_demo_followup_phone",
     "ask_demo_followup_email_optional",
     "capture_demo_followup_email",
-    "final_question"
+    "final_question",
+    "confirm_address",
+    "ask_address",
+    "schedule_or_callback",
+    "ask_appointment_day",
+    "ask_appointment_time",
+    "confirm_first_available",
+    "late_day_preference_choice",
+    "ask_project_timeline",
+    "ask_project_scope",
+    "ask_proposal_deadline",
+    "ask_quote_email_optional",
+    "capture_quote_email",
+    "ask_demo_email_optional",
+    "capture_demo_email"
   ]);
 
 
-  if (postIntakeSteps.has(caller.lastStep) && isCallbackNumberChangeIntent(text)) {
+  if (postIntakeSteps.has(caller.lastStep) && isPostIntakeContactUpdateIntent(text)) {
     caller.resumeStepAfterPhoneUpdate = caller.lastStep;
     clearPendingUpdatedContactName(caller);
     const mayHaveEmbeddedName =
@@ -6046,6 +6150,8 @@ async function handlePrompt(ws, caller, speech) {
       afterIssueCaptured(caller);
       tryHarvestPhoneFromUtterance(caller, workingOpeningText);
       tryHarvestPhoneFromUtterance(caller, text);
+      tryHarvestAddressFromUtterance(caller, workingOpeningText);
+      tryHarvestAddressFromUtterance(caller, text);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
         caller.pendingIssueItem = missingProblemItem.label;
@@ -6194,6 +6300,8 @@ async function handlePrompt(ws, caller, speech) {
       afterIssueCaptured(caller);
       tryHarvestPhoneFromUtterance(caller, workingFollowupText);
       tryHarvestPhoneFromUtterance(caller, text);
+      tryHarvestAddressFromUtterance(caller, workingFollowupText);
+      tryHarvestAddressFromUtterance(caller, text);
       const missingProblemItem = detectMissingProblemItem(caller.issue);
       if (missingProblemItem) {
         caller.pendingIssueItem = missingProblemItem.label;
