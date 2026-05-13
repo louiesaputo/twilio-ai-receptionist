@@ -1113,6 +1113,10 @@
         const token = await fetchTokenFromAnyEndpoint();
 
         webCallDevice = new Twilio.Device(token, { logLevel: 1 });
+        webCallReady = true;
+        setWebCallStatus("Ready. Click Start Web Call to test.");
+        syncWebCallButtons();
+
         webCallDevice.on("registered", () => {
           webCallReady = true;
           setWebCallStatus("Ready. Click Start Web Call to test.");
@@ -1124,8 +1128,18 @@
           syncWebCallButtons();
         });
 
-        await webCallDevice.register();
-        setWebCallStatus("Connecting to web call service...");
+        // Outbound browser calling can work without waiting on registration.
+        // Try to register in the background for better compatibility, but do not block UI readiness.
+        try {
+          const registerPromise = webCallDevice.register();
+          if (registerPromise && typeof registerPromise.then === "function") {
+            registerPromise.catch(() => {});
+            await Promise.race([
+              registerPromise,
+              new Promise((resolve) => setTimeout(resolve, 2500))
+            ]);
+          }
+        } catch (registerErr) {}
       } catch (err) {
         webCallReady = false;
         activeWebCall = null;
