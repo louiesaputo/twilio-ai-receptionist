@@ -494,6 +494,34 @@
       letter-spacing: 0.02em;
     }
 
+    .web-call-panel {
+      display: grid;
+      gap: 12px;
+    }
+
+    .web-call-status {
+      margin: 0;
+      color: #dbe8ff;
+      font-size: 0.92rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: rgba(8, 19, 50, 0.62);
+    }
+
+    .web-call-status.error {
+      border-color: rgba(255, 113, 113, 0.45);
+      color: #ffd0d0;
+      background: rgba(76, 18, 34, 0.45);
+    }
+
+    .web-call-disclaimer {
+      margin: 0;
+      color: #b5c8f2;
+      font-size: 0.86rem;
+      line-height: 1.5;
+    }
+
     .mobile-cta {
       position: fixed;
       left: 0;
@@ -562,7 +590,7 @@
         <span class="brand-dot"></span>
         Blue Caller AI
       </div>
-      <a class="btn btn-secondary" href="#pricing">View Plans</a>
+      <a class="btn btn-secondary" href="#web-call-demo">Try Web Call</a>
     </div>
   </header>
 
@@ -592,6 +620,24 @@
             <span>Scales with your calls</span>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section id="web-call-demo">
+      <div class="container panel web-call-panel">
+        <p class="section-tag">Instant browser demo</p>
+        <h2 class="glide-title">Try the AI call right from this page</h2>
+        <p class="section-text">
+          Click start to test the live web call experience without dialing the demo number.
+        </p>
+        <div class="btn-row">
+          <button id="start-web-call" class="btn btn-primary" type="button" disabled>Start Web Call</button>
+          <button id="end-web-call" class="btn btn-secondary" type="button" disabled>End Call</button>
+        </div>
+        <p id="web-call-status" class="web-call-status">Loading web call client...</p>
+        <p class="web-call-disclaimer">
+          Disclaimer: Computer microphones do not work as well as phone microphones, so you may experience issues with the call.
+        </p>
       </div>
     </section>
 
@@ -790,6 +836,7 @@
     <div class="container">Blue Caller AI - Answer first. Book more jobs.</div>
   </footer>
 
+  <script src="/twilio.min.js"></script>
   <script>
     const glideTitles = document.querySelectorAll(".glide-title");
     const titleObserver = new IntersectionObserver((entries, observer) => {
@@ -804,6 +851,100 @@
     });
 
     glideTitles.forEach((el) => titleObserver.observe(el));
+
+    const webCallStatusEl = document.getElementById("web-call-status");
+    const startWebCallBtn = document.getElementById("start-web-call");
+    const endWebCallBtn = document.getElementById("end-web-call");
+    let webCallDevice = null;
+    let activeWebCall = null;
+    let webCallReady = false;
+
+    function setWebCallStatus(text, isError = false) {
+      webCallStatusEl.textContent = text;
+      webCallStatusEl.classList.toggle("error", isError);
+    }
+
+    function syncWebCallButtons() {
+      startWebCallBtn.disabled = !webCallReady || Boolean(activeWebCall);
+      endWebCallBtn.disabled = !activeWebCall;
+    }
+
+    function bindActiveWebCall(call) {
+      activeWebCall = call;
+      syncWebCallButtons();
+      if (!call) return;
+
+      call.on("disconnect", () => {
+        activeWebCall = null;
+        setWebCallStatus("Call ended. You can start another web call anytime.");
+        syncWebCallButtons();
+      });
+    }
+
+    async function setupWebCallClient() {
+      try {
+        if (typeof Twilio === "undefined" || !Twilio.Device) {
+          throw new Error("Twilio browser client could not load.");
+        }
+
+        const tokenResponse = await fetch("/twilio-token", { cache: "no-store" });
+        const rawBody = await tokenResponse.text();
+        if (!tokenResponse.ok) {
+          throw new Error(rawBody || "Unable to fetch call token.");
+        }
+
+        let tokenPayload = {};
+        try {
+          tokenPayload = JSON.parse(rawBody || "{}");
+        } catch (err) {
+          throw new Error("Token response was not valid JSON.");
+        }
+
+        if (!tokenPayload.token) {
+          throw new Error("Token response missing token.");
+        }
+
+        webCallDevice = new Twilio.Device(tokenPayload.token, { logLevel: 1 });
+        webCallDevice.on("registered", () => {
+          webCallReady = true;
+          setWebCallStatus("Ready. Click Start Web Call to test.");
+          syncWebCallButtons();
+        });
+        webCallDevice.on("error", (err) => {
+          activeWebCall = null;
+          setWebCallStatus(`Web call error: ${err.message}`, true);
+          syncWebCallButtons();
+        });
+
+        await webCallDevice.register();
+        setWebCallStatus("Connecting to web call service...");
+      } catch (err) {
+        webCallReady = false;
+        activeWebCall = null;
+        setWebCallStatus(`Web call unavailable right now: ${err.message}`, true);
+        syncWebCallButtons();
+      }
+    }
+
+    startWebCallBtn.addEventListener("click", async () => {
+      if (!webCallDevice || !webCallReady || activeWebCall) return;
+      try {
+        setWebCallStatus("Starting your test call...");
+        const call = await webCallDevice.connect();
+        bindActiveWebCall(call);
+        setWebCallStatus("Call live. Speak naturally and test the flow.");
+      } catch (err) {
+        setWebCallStatus(`Could not start call: ${err.message}`, true);
+        syncWebCallButtons();
+      }
+    });
+
+    endWebCallBtn.addEventListener("click", () => {
+      if (!activeWebCall) return;
+      activeWebCall.disconnect();
+    });
+
+    setupWebCallClient();
   </script>
 </body>
 </html>
