@@ -997,7 +997,7 @@
     <div class="container">Blue Caller AI - Answer first. Book more jobs.</div>
   </footer>
 
-  <script src="/twilio.min.js"></script>
+  <script src="twilio.min.js"></script>
   <script>
     const glideTitles = document.querySelectorAll(".glide-title");
     const titleObserver = new IntersectionObserver((entries, observer) => {
@@ -1042,30 +1042,58 @@
       });
     }
 
+    function getTokenEndpointCandidates() {
+      if (typeof window.WEB_CALL_TOKEN_URL === "string" && window.WEB_CALL_TOKEN_URL.trim()) {
+        return [window.WEB_CALL_TOKEN_URL.trim()];
+      }
+
+      const sameOriginTokenUrl = `${window.location.origin}/twilio-token`;
+      if (window.location.hostname.endsWith("github.io")) {
+        return [sameOriginTokenUrl, "https://bluecallerautomation.com/twilio-token"];
+      }
+      return [sameOriginTokenUrl];
+    }
+
+    async function fetchTokenFromAnyEndpoint() {
+      const endpoints = getTokenEndpointCandidates();
+      let lastError = null;
+
+      for (const endpoint of endpoints) {
+        try {
+          const tokenResponse = await fetch(endpoint, { cache: "no-store" });
+          const rawBody = await tokenResponse.text();
+          if (!tokenResponse.ok) {
+            throw new Error(`Token endpoint returned ${tokenResponse.status}`);
+          }
+
+          let tokenPayload = {};
+          try {
+            tokenPayload = JSON.parse(rawBody || "{}");
+          } catch (err) {
+            throw new Error("Token response was not valid JSON.");
+          }
+
+          if (!tokenPayload.token) {
+            throw new Error("Token response missing token.");
+          }
+          return tokenPayload.token;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      throw lastError || new Error("Unable to fetch call token.");
+    }
+
     async function setupWebCallClient() {
       try {
         if (typeof Twilio === "undefined" || !Twilio.Device) {
           throw new Error("Twilio browser client could not load.");
         }
 
-        const tokenResponse = await fetch("/twilio-token", { cache: "no-store" });
-        const rawBody = await tokenResponse.text();
-        if (!tokenResponse.ok) {
-          throw new Error(rawBody || "Unable to fetch call token.");
-        }
+        const token = await fetchTokenFromAnyEndpoint();
 
-        let tokenPayload = {};
-        try {
-          tokenPayload = JSON.parse(rawBody || "{}");
-        } catch (err) {
-          throw new Error("Token response was not valid JSON.");
-        }
-
-        if (!tokenPayload.token) {
-          throw new Error("Token response missing token.");
-        }
-
-        webCallDevice = new Twilio.Device(tokenPayload.token, { logLevel: 1 });
+        webCallDevice = new Twilio.Device(token, { logLevel: 1 });
         webCallDevice.on("registered", () => {
           webCallReady = true;
           setWebCallStatus("Ready. Click Start Web Call to test.");
@@ -1082,7 +1110,14 @@
       } catch (err) {
         webCallReady = false;
         activeWebCall = null;
-        setWebCallStatus(`Web call unavailable right now: ${err.message}`, true);
+        if (window.location.hostname.endsWith("github.io")) {
+          setWebCallStatus(
+            "Web call unavailable in GitHub preview: this page needs a live backend token endpoint (/twilio-token).",
+            true
+          );
+        } else {
+          setWebCallStatus(`Web call unavailable right now: ${err.message}`, true);
+        }
         syncWebCallButtons();
       }
     }
