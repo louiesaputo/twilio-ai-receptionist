@@ -1,0 +1,54 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="94" y1="39" x2="1119" y2="619" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#173E92"/>
+      <stop offset="1" stop-color="#071A46"/>
+    </linearGradient>
+    <radialGradient id="glowLeft" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(270 120) rotate(36.8) scale(390 275)">
+      <stop stop-color="#6EB3FF" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#6EB3FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowRight" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(920 530) rotate(-137.4) scale(480 290)">
+      <stop stop-color="#2B79FF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2B79FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="phone" x1="770" y1="153" x2="1071" y2="508" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4F9FFF"/>
+      <stop offset="1" stop-color="#1753BE"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="675" rx="34" fill="url(#bg)"/>
+  <rect width="1200" height="675" rx="34" fill="url(#glowLeft)"/>
+  <rect width="1200" height="675" rx="34" fill="url(#glowRight)"/>
+  <rect x="1.5" y="1.5" width="1197" height="672" rx="32.5" stroke="#8AB9FF" stroke-opacity="0.35" stroke-width="3"/>
+
+  <rect x="70" y="86" width="620" height="52" rx="26" fill="#0D245D" stroke="#7CB1FF" stroke-opacity="0.45"/>
+  <circle cx="102" cy="112" r="9" fill="#57F1C0"/>
+  <text x="127" y="121" fill="#D9E9FF" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">BLUE CALLER AUTOMATION</text>
+
+  <text x="80" y="221" fill="#EAF2FF" font-family="Inter, Arial, sans-serif" font-size="76" font-weight="800" letter-spacing="-1.5">STOP MISSING</text>
+  <text x="80" y="293" fill="#EAF2FF" font-family="Inter, Arial, sans-serif" font-size="76" font-weight="800" letter-spacing="-1.5">THE CALL</text>
+  <text x="80" y="355" fill="#BBD4FF" font-family="Inter, Arial, sans-serif" font-size="31" font-weight="500">Live AI reception that books jobs faster</text>
+
+  <rect x="80" y="404" width="290" height="70" rx="16" fill="#4B9CFF"/>
+  <text x="122" y="450" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="31" font-weight="700">TRY WEB CALL</text>
+
+  <rect x="390" y="404" width="260" height="70" rx="16" fill="#142F6F" stroke="#6DA7FF" stroke-opacity="0.65"/>
+  <text x="444" y="450" fill="#DCEAFF" font-family="Inter, Arial, sans-serif" font-size="31" font-weight="700">VIEW PLANS</text>
+
+  <rect x="770" y="140" width="338" height="502" rx="40" fill="url(#phone)"/>
+  <rect x="784" y="154" width="310" height="474" rx="32" fill="#071A43"/>
+  <circle cx="939" cy="185" r="8" fill="#7CB4FF"/>
+
+  <rect x="819" y="220" width="242" height="118" rx="18" fill="#0D2D76" stroke="#6FAAFF" stroke-opacity="0.52"/>
+  <text x="843" y="264" fill="#EAF2FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">24/7 Call Coverage</text>
+  <text x="843" y="302" fill="#BCD5FF" font-family="Inter, Arial, sans-serif" font-size="20">Never miss another inbound lead</text>
+
+  <rect x="819" y="360" width="242" height="210" rx="18" fill="#0A245F" stroke="#6FAAFF" stroke-opacity="0.52"/>
+  <text x="843" y="402" fill="#EAF2FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">Web Call Demo</text>
+  <rect x="843" y="426" width="195" height="52" rx="13" fill="#4B9CFF"/>
+  <text x="885" y="459" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="21" font-weight="700">Start Call</text>
+  <text x="843" y="515" fill="#BCD5FF" font-family="Inter, Arial, sans-serif" font-size="19">Try it in-browser and hear</text>
+  <text x="843" y="542" fill="#BCD5FF" font-family="Inter, Arial, sans-serif" font-size="19">how your AI front desk sounds</text>
+</svg>
