@@ -2384,6 +2384,11 @@ function afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated = false } = {
       sendText(ws, `${updateLine} ${followUp}`);
       return;
     }
+    const resumePrompt = buildResumePromptForCurrentStep(caller);
+    if (resumePrompt) {
+      sendText(ws, `${updateLine} ${resumePrompt}`);
+      return;
+    }
   }
 
   caller.lastStep = "ask_notes";
@@ -8299,6 +8304,14 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  });
+}
+
+module.exports = {
+  __test: {
+    afterCallbackDetailsUpdated
+  }
+};
