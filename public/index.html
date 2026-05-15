@@ -87,16 +87,16 @@
     }
 
     .hero-photo {
-      padding-top: 14px;
+      padding-top: 0;
     }
 
     .hero-photo-frame {
       position: relative;
-      border: 1px solid rgba(124, 167, 243, 0.32);
-      border-radius: 20px;
+      border-top: 1px solid rgba(124, 167, 243, 0.32);
+      border-bottom: 1px solid rgba(124, 167, 243, 0.32);
       overflow: hidden;
       box-shadow: 0 22px 44px rgba(0, 0, 0, 0.38);
-      min-height: 260px;
+      min-height: 360px;
       background: #07173f;
     }
 
@@ -105,46 +105,8 @@
       height: 100%;
       display: block;
       object-fit: cover;
-      min-height: 260px;
-    }
-
-    .hero-photo-badges {
-      position: absolute;
-      right: 26px;
-      top: 26px;
-      display: grid;
-      gap: 8px;
-      z-index: 2;
-      pointer-events: none;
-    }
-
-    .hero-money-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(145, 233, 174, 0.7);
-      background: rgba(33, 112, 63, 0.42);
-      color: #e8ffe7;
-      font-size: 0.74rem;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      font-weight: 700;
-      box-shadow: 0 10px 24px rgba(16, 57, 31, 0.38);
-    }
-
-    .hero-money-chip::before {
-      content: "$";
-      width: 17px;
-      height: 17px;
-      border-radius: 50%;
-      display: grid;
-      place-items: center;
-      background: #73d48e;
-      color: #154928;
-      font-size: 0.74rem;
-      font-weight: 900;
+      object-position: 46% 46%;
+      min-height: 360px;
     }
 
     .hero-photo-overlay {
@@ -152,16 +114,21 @@
       inset: 0;
       pointer-events: none;
       background:
-        linear-gradient(90deg, rgba(3, 14, 39, 0.84) 0%, rgba(3, 14, 39, 0.5) 44%, rgba(3, 14, 39, 0.14) 72%),
-        linear-gradient(180deg, rgba(8, 21, 58, 0.12) 0%, rgba(8, 21, 58, 0.75) 100%);
+        linear-gradient(90deg, rgba(3, 14, 39, 0.72) 0%, rgba(3, 14, 39, 0.4) 44%, rgba(3, 14, 39, 0.12) 72%),
+        linear-gradient(180deg, rgba(8, 21, 58, 0.06) 0%, rgba(8, 21, 58, 0.74) 100%);
       display: flex;
       align-items: center;
     }
 
+    .hero-photo-content {
+      width: min(var(--max), calc(100% - 28px));
+      margin: 0 auto;
+    }
+
     .hero-photo-text {
       pointer-events: auto;
-      width: min(560px, 100% - 30px);
-      margin-left: 20px;
+      width: min(600px, 100%);
+      margin-left: 0;
       color: #eef4ff;
     }
 
@@ -187,6 +154,32 @@
       margin: 10px 0 0;
       color: #bfd3fb;
       font-size: clamp(0.93rem, 1.9vw, 1.02rem);
+    }
+
+    .hero-photo-scene-note {
+      margin: 10px 0 0;
+      color: #d4e3ff;
+      font-size: 0.86rem;
+      letter-spacing: 0.01em;
+    }
+
+    .hero-story-chips {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .hero-story-chip {
+      border: 1px solid rgba(137, 177, 247, 0.44);
+      background: rgba(8, 28, 70, 0.58);
+      color: #d9e7ff;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
     }
 
     .hero {
@@ -756,12 +749,13 @@
     @media (max-width: 700px) {
       .hero-photo-frame,
       .hero-photo-frame img {
-        min-height: 330px;
+        min-height: 400px;
+        object-position: 56% center;
       }
 
-      .hero-photo-badges {
-        right: 14px;
-        top: 14px;
+      .hero-photo-overlay {
+        background:
+          linear-gradient(180deg, rgba(3, 14, 39, 0.26) 0%, rgba(3, 14, 39, 0.78) 72%);
       }
 
       .hero {
@@ -773,8 +767,16 @@
       }
 
       .hero-photo-text {
-        margin: 0 14px 14px;
-        width: calc(100% - 28px);
+        margin: 0;
+        width: 100%;
+        background: rgba(6, 18, 49, 0.58);
+        border: 1px solid rgba(127, 170, 245, 0.32);
+        border-radius: 12px;
+        padding: 10px 11px;
+      }
+
+      .hero-story-chip {
+        font-size: 0.67rem;
       }
 
       .hero-shell {
@@ -816,28 +818,31 @@
 
   <main>
     <section class="hero-photo">
-      <div class="container">
-        <div class="hero-photo-frame">
-          <img
-            src="https://source.unsplash.com/DzYT1tfcDq4/1600x760"
-            alt="Contractor losing revenue from missed calls with AI receptionist support"
-            onerror="this.onerror=null;this.src='trades-ai-reception-banner.svg';"
-          />
-          <div class="hero-photo-badges" aria-hidden="true">
-            <span class="hero-money-chip">Missed lead</span>
-            <span class="hero-money-chip">Lost booking</span>
-            <span class="hero-money-chip">AI recovers calls</span>
-          </div>
-          <div class="hero-photo-overlay">
+      <div class="hero-photo-frame">
+        <img
+          src="https://images.unsplash.com/photo-1726589004565-bedfba94d3a2?auto=format&fit=crop&w=1600&q=80"
+          alt="Contractor losing revenue from missed calls with AI receptionist support"
+          onerror="this.onerror=null;this.src='trades-ai-reception-banner.svg';"
+          loading="eager"
+          decoding="async"
+        />
+        <div class="hero-photo-overlay">
+          <div class="hero-photo-content">
             <div class="hero-photo-text">
               <p class="hero-photo-kicker">Trades + AI Receptionist</p>
-              <p class="hero-photo-headline">Every missed call leaks money. Let AI answer first.</p>
-              <p class="hero-photo-sub">Built for contractors who are busy in the field and still need every lead handled instantly.</p>
+              <p class="hero-photo-headline">While you're on the roof, your phone stays on your hip and calls keep coming.</p>
+              <p class="hero-photo-sub">Blue Caller Automation answers those calls immediately so lead money does not leak to competitors.</p>
+              <div class="hero-story-chips" aria-hidden="true">
+                <span class="hero-story-chip">On the job</span>
+                <span class="hero-story-chip">Can't answer live</span>
+                <span class="hero-story-chip">Missed calls lose revenue</span>
+              </div>
+              <p class="hero-photo-scene-note">Real-world scenario: contractor working hands-on while inbound leads call right now.</p>
             </div>
           </div>
         </div>
       </div>
-    </section>
+      </section>
 
     <section class="hero">
       <div class="container hero-shell">
