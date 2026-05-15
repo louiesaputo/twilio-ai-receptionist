@@ -132,6 +132,49 @@
       color: #eef4ff;
     }
 
+    .hero-photo-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid rgba(147, 188, 255, 0.45);
+      background: rgba(8, 24, 65, 0.6);
+      border-radius: 999px;
+      padding: 7px 12px 7px 8px;
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+      margin-bottom: 10px;
+    }
+
+    .hero-photo-brand-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at 30% 30%, #8ad2ff, #2f7eff);
+      box-shadow: 0 0 0 2px rgba(176, 209, 255, 0.26);
+      color: #eef6ff;
+    }
+
+    .hero-photo-brand-text {
+      display: grid;
+      gap: 1px;
+      line-height: 1.05;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .hero-photo-brand-text strong {
+      font-size: 0.78rem;
+      font-weight: 800;
+      color: #eef5ff;
+    }
+
+    .hero-photo-brand-text span {
+      font-size: 0.65rem;
+      color: #a8c7ff;
+      font-weight: 700;
+    }
+
     .hero-photo-kicker {
       margin: 0;
       font-size: 0.73rem;
@@ -775,6 +818,23 @@
         padding: 10px 11px;
       }
 
+      .hero-photo-brand {
+        padding: 6px 10px 6px 7px;
+      }
+
+      .hero-photo-brand-icon {
+        width: 24px;
+        height: 24px;
+      }
+
+      .hero-photo-brand-text strong {
+        font-size: 0.71rem;
+      }
+
+      .hero-photo-brand-text span {
+        font-size: 0.6rem;
+      }
+
       .hero-story-chip {
         font-size: 0.67rem;
       }
@@ -829,6 +889,17 @@
         <div class="hero-photo-overlay">
           <div class="hero-photo-content">
             <div class="hero-photo-text">
+              <div class="hero-photo-brand" aria-label="Blue Caller Automation">
+                <span class="hero-photo-brand-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M7.3 3.8A1 1 0 0 0 6 4.75C6 12.67 11.72 18.4 19.64 18.4A1 1 0 0 0 20.6 17.1L19.5 13.68A1 1 0 0 0 18.44 13L15.9 13.42A1 1 0 0 1 14.96 13.1C13.76 12.07 12.67 10.98 11.64 9.79A1 1 0 0 1 11.32 8.84L11.73 6.3A1 1 0 0 0 11.06 5.25L7.3 3.8Z" fill="currentColor"/>
+                  </svg>
+                </span>
+                <span class="hero-photo-brand-text">
+                  <strong>Blue Caller</strong>
+                  <span>Automation</span>
+                </span>
+              </div>
               <p class="hero-photo-kicker">Trades + AI Receptionist</p>
               <p class="hero-photo-headline">While you're on the roof, your phone stays on your hip and calls keep coming.</p>
               <p class="hero-photo-sub">Blue Caller Automation answers those calls immediately so lead money does not leak to competitors.</p>
