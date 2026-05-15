@@ -1590,6 +1590,22 @@ function applyAlexConversationalToneLayer(caller, text, options = {}) {
 
 function buildTechnicianNotesPrompt(caller) {
   const c = caller || {};
+  if (c.leadType === "quote") {
+    const tone = c.alexEmotionalTone || "neutral";
+    if (tone === "overwhelmed" || tone === "upset") {
+      return "Whenever you're ready—any other details we should pass to the estimator, like access notes or a second contact? If not, that's okay.";
+    }
+    if (tone === "urgent_stressed" || tone === "frustrated") {
+      return "One last thing for the quote packet—access, parking, HOA, or timing notes the office should know about?";
+    }
+    const variants = [
+      "Is there anything else you'd like me to include with this quote request?",
+      "Anything for the estimator—access, parking, multiple decision-makers, or timing notes—I should add?",
+      "Last optional bit: any notes for the team putting the quote together?"
+    ];
+    const idx = nextPromptIndex(c, "quoteNotesVariantIndex");
+    return variants[idx % variants.length];
+  }
   const tone = c.alexEmotionalTone || "neutral";
   if (tone === "overwhelmed" || tone === "upset") {
     return "Whenever you're ready, is there anything you'd like the technician to know before they arrive? If not, that's completely okay.";
@@ -4448,6 +4464,7 @@ function getOrCreateCaller(key) {
       timeline: "",
       proposalDeadline: "",
       demoEmail: "",
+      projectScopeNotes: "",
       notes: "",
       status: "new_lead",
       appointmentDate: "",
@@ -4493,6 +4510,7 @@ function getOrCreateCaller(key) {
       alexAssistantTurnCount: 0,
       alexPlayfulLeadIns: 0,
       techNotesVariantIndex: 0,
+      quoteNotesVariantIndex: 0,
       addressRequestPromptIndex: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -4811,9 +4829,11 @@ function buildMakePayload(caller) {
   if (leadType === "quote") {
     const quoteNotes = [];
     if (caller.timeline) quoteNotes.push(`Project timeline or start date: ${caller.timeline}`);
+    const scope = caller.projectScopeNotes || "";
+    if (scope) quoteNotes.push(`Project scope: ${scope}`);
     if (caller.proposalDeadline) quoteNotes.push(`Quote or proposal deadline: ${caller.proposalDeadline}`);
     if (caller.demoEmail) quoteNotes.push(`Email address: ${caller.demoEmail}`);
-    if (notes) quoteNotes.push(`Project scope notes: ${notes}`);
+    if (notes) quoteNotes.push(`Additional notes: ${notes}`);
     notes = quoteNotes.join(" | ");
   }
 
@@ -7143,7 +7163,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_project_scope": {
-      caller.notes = normalizeProjectScopeNotes(text);
+      caller.projectScopeNotes = normalizeProjectScopeNotes(text);
       caller.lastStep = "ask_proposal_deadline";
       sendText(ws, "Is there a deadline you're working with for the estimate or proposal?");
       return;
@@ -7171,7 +7191,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_quote_email_optional": {
-      if (wantsOptionalEmail(text)) {
+      if (isEmailAddAcceptance(text)) {
         caller.lastStep = "capture_quote_email";
         sendText(ws, "Alright, go ahead and spell that out for me.");
         return;
@@ -7180,7 +7200,7 @@ async function handlePrompt(ws, caller, speech) {
         caller.demoEmail = cleanForSpeech(text);
       }
       caller.lastStep = "ask_notes";
-      sendText(ws, "Is there anything else you'd like me to include with this quote request?");
+      sendText(ws, buildTechnicianNotesPrompt(caller));
       return;
     }
 
@@ -7194,7 +7214,7 @@ async function handlePrompt(ws, caller, speech) {
     case "capture_quote_email": {
       caller.demoEmail = cleanForSpeech(text);
       caller.lastStep = "ask_notes";
-      sendText(ws, "Is there anything else you'd like me to include with this quote request?");
+      sendText(ws, buildTechnicianNotesPrompt(caller));
       return;
     }
 
@@ -7612,7 +7632,6 @@ async function handlePrompt(ws, caller, speech) {
         !substantiveTechNote &&
         (isDecliningTechnicianNotes(text) || isEndCallPhrase(text));
       const hadNotes = Boolean(cleanedNotesText) && !decliningTechNotes;
-      const wantsToFinishNow = decliningTechNotes;
       if (hadNotes) caller.notes = cleanedNotesText;
 
 
@@ -7636,23 +7655,8 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-
-      if (wantsToFinishNow) {
-        caller.lastStep = "final_question";
-        sendText(ws, `${buildPostNotesTransition(caller, hadNotes)} ${buildFinalSubmissionPrompt(caller)}`);
-        return;
-      }
-
-
-
-
-
-
-
-
-      caller.lastStep = "offer_demo_followup";
-      const transition = buildPostNotesTransition(caller, hadNotes);
-      sendText(ws, `${transition} How did you enjoy the demo? Would you like me to have one of our team members call you to discuss how this could help your company?`);
+      caller.lastStep = "final_question";
+      sendText(ws, `${buildPostNotesTransition(caller, hadNotes)} ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
 
