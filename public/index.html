@@ -87,16 +87,16 @@
     }
 
     .hero-photo {
-      padding-top: 14px;
+      padding-top: 0;
     }
 
     .hero-photo-frame {
       position: relative;
-      border: 1px solid rgba(124, 167, 243, 0.32);
-      border-radius: 20px;
+      border-top: 1px solid rgba(124, 167, 243, 0.32);
+      border-bottom: 1px solid rgba(124, 167, 243, 0.32);
       overflow: hidden;
       box-shadow: 0 22px 44px rgba(0, 0, 0, 0.38);
-      min-height: 260px;
+      min-height: 360px;
       background: #07173f;
     }
 
@@ -106,7 +106,7 @@
       display: block;
       object-fit: cover;
       object-position: 46% 46%;
-      min-height: 260px;
+      min-height: 360px;
     }
 
     .hero-photo-overlay {
@@ -120,10 +120,15 @@
       align-items: center;
     }
 
+    .hero-photo-content {
+      width: min(var(--max), calc(100% - 28px));
+      margin: 0 auto;
+    }
+
     .hero-photo-text {
       pointer-events: auto;
-      width: min(560px, 100% - 30px);
-      margin-left: 20px;
+      width: min(600px, 100%);
+      margin-left: 0;
       color: #eef4ff;
     }
 
@@ -744,7 +749,7 @@
     @media (max-width: 700px) {
       .hero-photo-frame,
       .hero-photo-frame img {
-        min-height: 330px;
+        min-height: 400px;
         object-position: 56% center;
       }
 
@@ -762,8 +767,8 @@
       }
 
       .hero-photo-text {
-        margin: 0 14px 14px;
-        width: calc(100% - 28px);
+        margin: 0;
+        width: 100%;
         background: rgba(6, 18, 49, 0.58);
         border: 1px solid rgba(127, 170, 245, 0.32);
         border-radius: 12px;
@@ -813,16 +818,16 @@
 
   <main>
     <section class="hero-photo">
-      <div class="container">
-        <div class="hero-photo-frame">
-          <img
-            src="https://images.unsplash.com/photo-1726589004565-bedfba94d3a2?auto=format&fit=crop&w=1600&q=80"
-            alt="Contractor losing revenue from missed calls with AI receptionist support"
-            onerror="this.onerror=null;this.src='trades-ai-reception-banner.svg';"
-            loading="eager"
-            decoding="async"
-          />
-          <div class="hero-photo-overlay">
+      <div class="hero-photo-frame">
+        <img
+          src="https://images.unsplash.com/photo-1726589004565-bedfba94d3a2?auto=format&fit=crop&w=1600&q=80"
+          alt="Contractor losing revenue from missed calls with AI receptionist support"
+          onerror="this.onerror=null;this.src='trades-ai-reception-banner.svg';"
+          loading="eager"
+          decoding="async"
+        />
+        <div class="hero-photo-overlay">
+          <div class="hero-photo-content">
             <div class="hero-photo-text">
               <p class="hero-photo-kicker">Trades + AI Receptionist</p>
               <p class="hero-photo-headline">While you're on the roof, your phone stays on your hip and calls keep coming.</p>
@@ -837,7 +842,7 @@
           </div>
         </div>
       </div>
-    </section>
+      </section>
 
     <section class="hero">
       <div class="container hero-shell">
