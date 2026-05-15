@@ -1,0 +1,82 @@
+<svg width="1600" height="760" viewBox="0 0 1600 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="80" x2="1490" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#173F97"/>
+      <stop offset="1" stop-color="#06173F"/>
+    </linearGradient>
+    <radialGradient id="leftGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(340 190) rotate(18) scale(560 360)">
+      <stop stop-color="#7EC2FF" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#7EC2FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="rightGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1200 620) rotate(-145) scale(640 340)">
+      <stop stop-color="#2E7EFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2E7EFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#103170"/>
+      <stop offset="1" stop-color="#071A48"/>
+    </linearGradient>
+    <linearGradient id="phone" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#6AB4FF"/>
+      <stop offset="1" stop-color="#1D5CD1"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="760" rx="28" fill="url(#bg)"/>
+  <rect width="1600" height="760" rx="28" fill="url(#leftGlow)"/>
+  <rect width="1600" height="760" rx="28" fill="url(#rightGlow)"/>
+  <rect x="1.5" y="1.5" width="1597" height="757" rx="26.5" stroke="#8EC0FF" stroke-opacity="0.32" stroke-width="3"/>
+
+  <rect x="0" y="530" width="1600" height="230" fill="url(#ground)"/>
+  <path d="M0 570C190 540 310 568 480 598C700 636 760 628 980 588C1200 548 1360 560 1600 590V760H0V570Z" fill="#0A2358" fill-opacity="0.65"/>
+
+  <path d="M1130 120H1510V410H1130V120Z" fill="#0D2B69" fill-opacity="0.45"/>
+  <rect x="1175" y="170" width="292" height="210" rx="20" fill="#0A2155" stroke="#76AEFF" stroke-opacity="0.55" stroke-width="2"/>
+  <text x="1205" y="224" fill="#E6F0FF" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">AI Receptionist</text>
+  <text x="1205" y="264" fill="#BCD5FF" font-family="Inter, Arial, sans-serif" font-size="22">Answers in under 10 seconds</text>
+  <rect x="1206" y="290" width="228" height="44" rx="10" fill="#1D4FA8"/>
+  <rect x="1218" y="304" width="176" height="16" rx="8" fill="#67ADFF"/>
+  <circle cx="1422" cy="312" r="10" fill="#54F2BE"/>
+
+  <g transform="translate(190 170)">
+    <ellipse cx="210" cy="370" rx="148" ry="34" fill="#091D49" fill-opacity="0.6"/>
+    <rect x="178" y="128" width="62" height="204" rx="22" fill="#1E5DC9"/>
+    <path d="M115 152L198 122L228 220L150 248C132 255 114 245 107 227L95 195C89 177 97 158 115 152Z" fill="#2D74E2"/>
+    <path d="M245 150L331 176C349 182 359 201 353 219L338 264C332 282 314 292 296 286L212 258L245 150Z" fill="#337CEB"/>
+    <rect x="152" y="330" width="38" height="130" rx="16" fill="#255FCD"/>
+    <rect x="230" y="330" width="38" height="130" rx="16" fill="#255FCD"/>
+    <circle cx="210" cy="87" r="46" fill="#4A90FA"/>
+    <rect x="179" y="43" width="64" height="22" rx="11" fill="#79B8FF"/>
+  </g>
+
+  <g transform="translate(460 250) rotate(-8)">
+    <rect x="0" y="0" width="210" height="360" rx="34" fill="url(#phone)"/>
+    <rect x="15" y="18" width="180" height="324" rx="24" fill="#071B48"/>
+    <circle cx="106" cy="31" r="6" fill="#7DB6FF"/>
+    <rect x="35" y="72" width="140" height="40" rx="10" fill="#0E2E74"/>
+    <text x="58" y="100" fill="#DDEBFF" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">MISSED</text>
+    <text x="54" y="126" fill="#DDEBFF" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">CALLS</text>
+  </g>
+
+  <g opacity="0.96">
+    <path d="M715 405L812 347L838 388L741 446L715 405Z" fill="#7FCB8F"/>
+    <rect x="739" y="385" width="82" height="40" rx="8" fill="#95E2A2"/>
+    <text x="762" y="412" fill="#204D2A" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="800">$</text>
+
+    <path d="M820 340L922 292L947 332L845 380L820 340Z" fill="#78C587"/>
+    <rect x="846" y="319" width="84" height="40" rx="8" fill="#93DF9F"/>
+    <text x="869" y="346" fill="#214F2B" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="800">$</text>
+
+    <path d="M930 286L1018 238L1043 279L955 327L930 286Z" fill="#74C283"/>
+    <rect x="954" y="265" width="82" height="40" rx="8" fill="#8CDC9B"/>
+    <text x="977" y="292" fill="#214F2B" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="800">$</text>
+
+    <path d="M1035 238L1118 191L1143 230L1060 277L1035 238Z" fill="#70BD7F"/>
+    <rect x="1060" y="218" width="80" height="38" rx="8" fill="#88D796"/>
+    <text x="1081" y="244" fill="#204C29" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="800">$</text>
+  </g>
+
+  <path d="M706 444C760 384 862 336 974 295C1097 250 1180 230 1238 218" stroke="#8EC5FF" stroke-width="4" stroke-linecap="round" stroke-dasharray="10 12" opacity="0.65"/>
+
+  <text x="74" y="88" fill="#DCEBFF" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="0.08em">BLUE CALLER AUTOMATION</text>
+</svg>
