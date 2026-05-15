@@ -105,6 +105,7 @@
       height: 100%;
       display: block;
       object-fit: cover;
+      object-position: 46% 46%;
       min-height: 260px;
     }
 
@@ -152,8 +153,8 @@
       inset: 0;
       pointer-events: none;
       background:
-        linear-gradient(90deg, rgba(3, 14, 39, 0.84) 0%, rgba(3, 14, 39, 0.5) 44%, rgba(3, 14, 39, 0.14) 72%),
-        linear-gradient(180deg, rgba(8, 21, 58, 0.12) 0%, rgba(8, 21, 58, 0.75) 100%);
+        linear-gradient(90deg, rgba(3, 14, 39, 0.72) 0%, rgba(3, 14, 39, 0.4) 44%, rgba(3, 14, 39, 0.12) 72%),
+        linear-gradient(180deg, rgba(8, 21, 58, 0.06) 0%, rgba(8, 21, 58, 0.74) 100%);
       display: flex;
       align-items: center;
     }
@@ -187,6 +188,13 @@
       margin: 10px 0 0;
       color: #bfd3fb;
       font-size: clamp(0.93rem, 1.9vw, 1.02rem);
+    }
+
+    .hero-photo-scene-note {
+      margin: 10px 0 0;
+      color: #d4e3ff;
+      font-size: 0.86rem;
+      letter-spacing: 0.01em;
     }
 
     .hero {
@@ -757,11 +765,23 @@
       .hero-photo-frame,
       .hero-photo-frame img {
         min-height: 330px;
+        object-position: 58% center;
       }
 
       .hero-photo-badges {
         right: 14px;
         top: 14px;
+        gap: 6px;
+      }
+
+      .hero-money-chip {
+        font-size: 0.68rem;
+        padding: 5px 8px;
+      }
+
+      .hero-photo-overlay {
+        background:
+          linear-gradient(180deg, rgba(3, 14, 39, 0.26) 0%, rgba(3, 14, 39, 0.78) 72%);
       }
 
       .hero {
@@ -775,6 +795,10 @@
       .hero-photo-text {
         margin: 0 14px 14px;
         width: calc(100% - 28px);
+        background: rgba(6, 18, 49, 0.58);
+        border: 1px solid rgba(127, 170, 245, 0.32);
+        border-radius: 12px;
+        padding: 10px 11px;
       }
 
       .hero-shell {
@@ -819,9 +843,11 @@
       <div class="container">
         <div class="hero-photo-frame">
           <img
-            src="https://source.unsplash.com/DzYT1tfcDq4/1600x760"
+            src="https://images.unsplash.com/photo-1758876734777-dcc6981f3671?auto=format&fit=crop&w=1600&q=80"
             alt="Contractor losing revenue from missed calls with AI receptionist support"
             onerror="this.onerror=null;this.src='trades-ai-reception-banner.svg';"
+            loading="eager"
+            decoding="async"
           />
           <div class="hero-photo-badges" aria-hidden="true">
             <span class="hero-money-chip">Missed lead</span>
@@ -833,6 +859,7 @@
               <p class="hero-photo-kicker">Trades + AI Receptionist</p>
               <p class="hero-photo-headline">Every missed call leaks money. Let AI answer first.</p>
               <p class="hero-photo-sub">Built for contractors who are busy in the field and still need every lead handled instantly.</p>
+              <p class="hero-photo-scene-note">Contractor on site + unanswered calls = revenue leaking to competitors.</p>
             </div>
           </div>
         </div>
