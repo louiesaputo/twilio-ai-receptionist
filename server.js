@@ -2376,14 +2376,12 @@ function afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated = false } = {
       sendText(ws, `${updateLine} Should I use the contact information you already gave me?`);
       return;
     }
-    if (isDemoFollowupContactStep(resume) || resume === "offer_demo_followup" || resume === "final_question") {
-      const followUp =
-        resume === "final_question"
-          ? buildFinalSubmissionPrompt(caller)
-          : buildResumePromptForCurrentStep(caller) || "How else can I help?";
-      sendText(ws, `${updateLine} ${followUp}`);
-      return;
-    }
+    const followUp =
+      resume === "final_question"
+        ? buildFinalSubmissionPrompt(caller)
+        : buildResumePromptForCurrentStep(caller) || "How else can I help?";
+    sendText(ws, `${updateLine} ${followUp}`);
+    return;
   }
 
   caller.lastStep = "ask_notes";
@@ -8299,6 +8297,15 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  });
+}
+
+module.exports = {
+  _test: {
+    afterCallbackDetailsUpdated,
+    buildResumePromptForCurrentStep
+  }
+};
