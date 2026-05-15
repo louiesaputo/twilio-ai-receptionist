@@ -108,6 +108,45 @@
       min-height: 260px;
     }
 
+    .hero-photo-badges {
+      position: absolute;
+      right: 26px;
+      top: 26px;
+      display: grid;
+      gap: 8px;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .hero-money-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(145, 233, 174, 0.7);
+      background: rgba(33, 112, 63, 0.42);
+      color: #e8ffe7;
+      font-size: 0.74rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-weight: 700;
+      box-shadow: 0 10px 24px rgba(16, 57, 31, 0.38);
+    }
+
+    .hero-money-chip::before {
+      content: "$";
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #73d48e;
+      color: #154928;
+      font-size: 0.74rem;
+      font-weight: 900;
+    }
+
     .hero-photo-overlay {
       position: absolute;
       inset: 0;
@@ -720,6 +759,11 @@
         min-height: 330px;
       }
 
+      .hero-photo-badges {
+        right: 14px;
+        top: 14px;
+      }
+
       .hero {
         padding-top: 44px;
       }
@@ -774,7 +818,16 @@
     <section class="hero-photo">
       <div class="container">
         <div class="hero-photo-frame">
-          <img src="trades-ai-reception-banner.svg" alt="Contractor losing revenue from missed calls with AI receptionist support" />
+          <img
+            src="https://source.unsplash.com/DzYT1tfcDq4/1600x760"
+            alt="Contractor losing revenue from missed calls with AI receptionist support"
+            onerror="this.onerror=null;this.src='trades-ai-reception-banner.svg';"
+          />
+          <div class="hero-photo-badges" aria-hidden="true">
+            <span class="hero-money-chip">Missed lead</span>
+            <span class="hero-money-chip">Lost booking</span>
+            <span class="hero-money-chip">AI recovers calls</span>
+          </div>
           <div class="hero-photo-overlay">
             <div class="hero-photo-text">
               <p class="hero-photo-kicker">Trades + AI Receptionist</p>
