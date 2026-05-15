@@ -50,40 +50,6 @@
       margin: 0 auto;
     }
 
-    .announcement {
-      border-bottom: 1px solid rgba(123, 163, 246, 0.35);
-      background: linear-gradient(90deg, rgba(30, 86, 200, 0.42), rgba(24, 56, 132, 0.62));
-    }
-
-    .announcement-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      padding: 9px 0;
-      color: #dbe7ff;
-      font-size: 0.84rem;
-    }
-
-    .announcement-row p {
-      margin: 0;
-      font-weight: 600;
-      letter-spacing: 0.01em;
-    }
-
-    .announcement-link {
-      border: 1px solid rgba(165, 198, 255, 0.55);
-      background: rgba(6, 23, 67, 0.46);
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      font-weight: 700;
-      color: #e5efff;
-      white-space: nowrap;
-    }
-
     .topbar {
       padding: 12px 0;
       border-bottom: 1px solid rgba(112, 151, 234, 0.15);
@@ -120,8 +86,72 @@
       box-shadow: 0 0 14px rgba(85, 243, 191, 0.76);
     }
 
+    .hero-photo {
+      padding-top: 14px;
+    }
+
+    .hero-photo-frame {
+      position: relative;
+      border: 1px solid rgba(124, 167, 243, 0.32);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 22px 44px rgba(0, 0, 0, 0.38);
+      min-height: 260px;
+      background: #07173f;
+    }
+
+    .hero-photo-frame img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      min-height: 260px;
+    }
+
+    .hero-photo-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(3, 14, 39, 0.84) 0%, rgba(3, 14, 39, 0.5) 44%, rgba(3, 14, 39, 0.14) 72%),
+        linear-gradient(180deg, rgba(8, 21, 58, 0.12) 0%, rgba(8, 21, 58, 0.75) 100%);
+      display: flex;
+      align-items: center;
+    }
+
+    .hero-photo-text {
+      pointer-events: auto;
+      width: min(560px, 100% - 30px);
+      margin-left: 20px;
+      color: #eef4ff;
+    }
+
+    .hero-photo-kicker {
+      margin: 0;
+      font-size: 0.73rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #a8c7ff;
+      font-weight: 700;
+    }
+
+    .hero-photo-headline {
+      margin: 10px 0 0;
+      font-size: clamp(1.35rem, 3.8vw, 2.45rem);
+      line-height: 1.1;
+      letter-spacing: -0.01em;
+      text-transform: uppercase;
+      text-wrap: balance;
+    }
+
+    .hero-photo-sub {
+      margin: 10px 0 0;
+      color: #bfd3fb;
+      font-size: clamp(0.93rem, 1.9vw, 1.02rem);
+    }
+
     .hero {
-      padding: 54px 0 26px;
+      padding: 24px 0 26px;
     }
 
     .hero-shell {
@@ -288,22 +318,6 @@
       margin: 0;
       color: #b8ccf4;
       font-size: 0.9rem;
-    }
-
-    .hero-banner {
-      margin: 2px 0;
-      border: 1px solid rgba(133, 176, 255, 0.35);
-      border-radius: 12px;
-      overflow: hidden;
-      background: #08173f;
-      box-shadow: 0 14px 26px rgba(6, 12, 32, 0.45);
-    }
-
-    .hero-banner img {
-      width: 100%;
-      display: block;
-      aspect-ratio: 16 / 9;
-      object-fit: cover;
     }
 
     .hero-side ul {
@@ -701,13 +715,22 @@
     }
 
     @media (max-width: 700px) {
-      .announcement-row {
-        flex-direction: column;
-        align-items: flex-start;
+      .hero-photo-frame,
+      .hero-photo-frame img {
+        min-height: 330px;
       }
 
       .hero {
         padding-top: 44px;
+      }
+
+      .hero-photo-overlay {
+        align-items: flex-end;
+      }
+
+      .hero-photo-text {
+        margin: 0 14px 14px;
+        width: calc(100% - 28px);
       }
 
       .hero-shell {
@@ -737,13 +760,6 @@
   </style>
 </head>
 <body>
-  <div class="announcement">
-    <div class="container announcement-row">
-      <p>New: Test the live AI call directly from this page.</p>
-      <a class="announcement-link" href="#web-call-demo">Launch Web Call Demo</a>
-    </div>
-  </div>
-
   <header class="topbar">
     <div class="container topbar-row">
       <div class="brand">
@@ -755,6 +771,21 @@
   </header>
 
   <main>
+    <section class="hero-photo">
+      <div class="container">
+        <div class="hero-photo-frame">
+          <img src="trades-ai-reception-banner.svg" alt="Contractor losing revenue from missed calls with AI receptionist support" />
+          <div class="hero-photo-overlay">
+            <div class="hero-photo-text">
+              <p class="hero-photo-kicker">Trades + AI Receptionist</p>
+              <p class="hero-photo-headline">Every missed call leaks money. Let AI answer first.</p>
+              <p class="hero-photo-sub">Built for contractors who are busy in the field and still need every lead handled instantly.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="hero">
       <div class="container hero-shell">
         <div class="hero-grid">
@@ -789,9 +820,6 @@
             <p class="hero-side-tag">Featured header</p>
             <h3>Your web call demo is now built in</h3>
             <p>Let visitors hear and test the AI instantly before they ever pick up a phone.</p>
-            <figure class="hero-banner">
-              <img src="hero-banner-automation.svg" alt="Blue Caller Automation call demo banner graphic" />
-            </figure>
             <ul>
               <li>One-click browser call demo</li>
               <li>Real intake flow and responses</li>
