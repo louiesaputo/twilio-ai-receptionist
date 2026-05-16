@@ -2276,7 +2276,9 @@ function isChangeContactPersonIntent(text) {
     "change that too", "change the contact person", "change the contact",
     "use my wife", "use my husband", "use her", "use him",
     "make her the contact", "make him the contact",
-    "change the name", "update the contact person", "update the contact"
+    "change the name", "update the contact person", "update the contact",
+    "i d like to change", "id like to change", "i d like to change it", "like to change it",
+    "change it to", "switch it to", "update it to"
   ]);
 }
 
@@ -2331,11 +2333,45 @@ function extractUpdatedContactNameFromSpeech(text) {
     if (namedCandidate) return namedCandidate;
   }
 
-  const stripped = safe
+  const lowerSafe = safe.toLowerCase();
+  const soundsLikeContactRename =
+    /\b(change|update|switch|contact|name|person|callback|phone)\b/.test(lowerSafe);
+
+  const explicitToName = safe.match(
+    /(?:change|switch|update)\s+(?:it|that|my\s+contact|the\s+contact(?:\s+person)?|the\s+name|the\s+contact\s+name)\s+to\s+([A-Za-z' -]+(?:\s+[A-Za-z' -]+){0,3})/i
+  );
+  if (explicitToName) {
+    const candidate = parseFullNameFromSpeech(explicitToName[1].replace(/[.,!?]+$/g, "").trim());
+    if (candidate) return candidate;
+  }
+
+  const gluedToName = safe.match(/\b(?:change|switch|update)\s*it\s*to\s+([A-Za-z' -]+(?:\s+[A-Za-z' -]+){0,3})/i);
+  if (gluedToName) {
+    const candidate = parseFullNameFromSpeech(gluedToName[1].replace(/[.,!?]+$/g, "").trim());
+    if (candidate) return candidate;
+  }
+
+  if (soundsLikeContactRename) {
+    const segments = safe.split(/\s+to\s+/i);
+    if (segments.length >= 2) {
+      const rhs = segments[segments.length - 1].replace(/[.,!?]+$/g, "").trim();
+      if (rhs && !/^(the|a|an)\s+/i.test(rhs)) {
+        const candidate = parseFullNameFromSpeech(rhs);
+        if (candidate) return candidate;
+      }
+    }
+  }
+
+  let stripped = safe
     .replace(/^(no|nope|nah)\s*,?\s*/i, "")
+    .replace(/^(yes|yeah|yep|yup)\s*,?\s*/i, "")
+    .replace(/\bi['']?d\s+like\s+to\s+/i, "")
+    .replace(/\bi\s+would\s+like\s+to\s+/i, "")
     .replace(/^(?:can|could|would)\s+you\s+(?:switch|change|update)\s+(?:it|that|the\s+contact(?:\s+person)?|the\s+name)?\s*(?:to|for)\s+/i, "")
     .replace(/^(please\s+)?(?:switch|change|update)\s+(?:that\s+too|the\s+contact(?:\s+person)?|the\s+name|the\s+contact\s+name)?\s*(?:to|for)\s+/i, "")
-    .replace(/^(?:change|update)\s+(?:it|that)\s+to\s+/i, "")
+    .replace(/^(?:change|update|switch)\s+(?:it|that)\s+to\s+/i, "")
+    .replace(/\b(?:change|update|switch)\s*it\s*to\s+/gi, " ")
+    .replace(/\bchangeto\b/gi, " ")
     .replace(/^(?:use|make)\s+/i, "")
     .replace(/^(?:my\s+wife(?:'s)?|my\s+husband(?:'s)?|my\s+wife|my\s+husband)\s+name\s+is\s+/i, "")
     .replace(/^(?:my\s+wife(?:'s)?|my\s+husband(?:'s)?|my\s+wife|my\s+husband)\s+/i, "")
@@ -2343,7 +2379,14 @@ function extractUpdatedContactNameFromSpeech(text) {
     .replace(/^(?:it's|it is)\s+/i, "")
     .trim();
 
-  const parsed = parseFullNameFromSpeech(stripped);
+  let parsed = parseFullNameFromSpeech(stripped);
+  if (parsed) return parsed;
+
+  stripped = stripped
+    .replace(/\b(?:yes|yeah|yep|like|to|change|it|that|contact|update|switch|please)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  parsed = parseFullNameFromSpeech(stripped);
   if (parsed) return parsed;
 
   const direct = stripped.match(/^([A-Za-z'-]+(?:\s+[A-Za-z'-]+){0,2})\b/);
@@ -2738,6 +2781,14 @@ function buildUrgentFlaggedLine() {
 function isUrgentSelection(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
+  if (
+    /\bnot\s+urgent\b/.test(t) ||
+    /\bno\s+urgency\b/.test(t) ||
+    /\bnothing\s+urgent\b/.test(t) ||
+    containsAny(t, ["non urgent", "nonurgent", "not really urgent"])
+  ) {
+    return false;
+  }
   return containsAny(t, [
     "urgent", "mark it as urgent", "mark this as urgent", "flag it as urgent",
     "flag this as urgent", "as soon as possible", "right away", "asap"
@@ -2753,9 +2804,21 @@ function isUrgentNonEmergencyRequest(text) {
   return containsAny(t, ["urgent", "as soon as possible", "asap", "right away"]) && !containsAny(t, ["not urgent"]);
 }
 
+function normalizedIssueHasFridgeCoolingProblem(t) {
+  if (!containsAny(t, ["refrigerator", "fridge", "freezer"])) return false;
+  return containsAny(t, [
+    "not cooling", "isn't cooling", "isnt cooling", "wasn't cooling", "wasnt cooling",
+    "not cool", "won't cool", "wont cool", "doesn't cool", "doesnt cool",
+    "stopped cooling", "not staying cold", "won't stay cold", "wont stay cold",
+    "not cold enough", "isn't cold", "isnt cold", "nothing feels cold",
+    "too warm", "getting warm", "everything thaw", "stuff thaw", "food thaw",
+    "not freezing", "isn't freezing", "isnt freezing", "stopped freezing"
+  ]);
+}
+
 function isRefrigeratorEmergencyCandidate(issue) {
   const t = normalizedText(issue);
-  return containsAny(t, ["refrigerator", "fridge", "freezer"]) && containsAny(t, ["not cooling", "isn't cooling", "isnt cooling", "too warm", "not freezing", "isn't freezing", "isnt freezing"]);
+  return normalizedIssueHasFridgeCoolingProblem(t);
 }
 
 function isCookingAppliancePriorityCandidate(issue) {
@@ -2769,7 +2832,7 @@ function isCookingAppliancePriorityCandidate(issue) {
 }
 
 function buildRefrigeratorEmergencyPrompt(caller) {
-  return `${buildIssueAcknowledgement(caller)} If your refrigerator isn't cooling, I know that can get urgent quickly. Do you want me to mark this as an emergency?`;
+  return `${buildIssueAcknowledgement(caller)} When you're losing refrigeration like that, spoilage can become a concern pretty fast—I know that's stressful. Would you like me to mark this as an emergency?`;
 }
 
 function buildCookingPriorityPrompt(caller) {
@@ -2796,6 +2859,48 @@ function buildUrgentIntakePrompt(caller) {
   }
 
   return `${acknowledgement} ${buildUrgentFlaggedLine()} I just need to get some information from you. Can I start by getting your full name, please?`;
+}
+
+function buildEmergencyIntakePromptAfterPriorAck(caller) {
+  const withName = caller.firstName ? `${caller.firstName}, ` : "";
+  const core = `${withName}I'm going to get this marked as an emergency so our service team can review it right away. I just need to get some information from you.`;
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) return `${core.trim()} ${buildPhoneIntakePromptFragment(caller)}`;
+    return `${core.trim()} Before I go any further, can I get your last name as well?`;
+  }
+  return `${core.trim()} Can I start by getting your full name, please?`;
+}
+
+function buildUrgentIntakePromptAfterPriorAck(caller) {
+  const withName = caller.firstName ? `${caller.firstName}, ` : "";
+  const core = `${withName}${buildUrgentFlaggedLine()} I just need to get some information from you.`;
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) return `${core.trim()} ${buildPhoneIntakePromptFragment(caller)}`;
+    return `${core.trim()} Before I go any further, can I get your last name as well?`;
+  }
+  return `${core.trim()} Can I start by getting your full name, please?`;
+}
+
+function buildStandardIntakePromptAfterPriorSeverityAck(caller) {
+  const lead = buildServiceIntakeLeadIn(caller);
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) {
+      return `Thank you, ${caller.firstName}. Understood—we won't flag this as an emergency. ${lead} ${buildPhoneIntakePromptFragment(caller)}`;
+    }
+    return `Thank you, ${caller.firstName}. Understood—we won't flag this as an emergency. ${lead} Before I go any further, can I get your last name as well?`;
+  }
+  return `Understood—we won't flag this as an emergency. ${lead} Can I start by getting your full name, please?`;
+}
+
+function buildStandardIntakePromptAfterCookingPriorityAck(caller) {
+  const lead = buildServiceIntakeLeadIn(caller);
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) {
+      return `Thank you, ${caller.firstName}. Got it—we'll treat this as a regular-priority visit. ${lead} ${buildPhoneIntakePromptFragment(caller)}`;
+    }
+    return `Thank you, ${caller.firstName}. Got it—we'll treat this as a regular-priority visit. ${lead} Before I go any further, can I get your last name as well?`;
+  }
+  return `Got it—we'll treat this as a regular-priority visit. ${lead} Can I start by getting your full name, please?`;
 }
 
 function buildStandardPostIssueSpellingPreamble(caller) {
@@ -3268,7 +3373,7 @@ function buildApplianceIssueSummary(issue, item) {
     return `a ${item.label} burner that is not turning on`;
   }
   if (item.label === "oven" && containsAny(t, ["not heating", "isn't heating", "isnt heating"])) return "an oven that is not heating properly";
-  if (item.label === "refrigerator" && containsAny(t, ["not cooling", "isn't cooling", "isnt cooling", "too warm"])) return "a refrigerator that is not cooling";
+  if (item.label === "refrigerator" && normalizedIssueHasFridgeCoolingProblem(t)) return "a refrigerator that is not cooling";
   if (item.label === "dishwasher" && containsAny(t, ["not draining", "won't drain", "wont drain"])) return "a dishwasher that is not draining";
   if (item.label === "washer" && containsAny(t, ["not draining", "won't drain", "wont drain"])) return "a washer that is not draining";
   if (item.label === "dryer" && containsAny(t, ["not heating", "isn't heating", "isnt heating", "not drying"])) return "a dryer that is not heating properly";
@@ -3681,6 +3786,9 @@ function isLeakLikeIssue(text) {
 
 function classifyIssue(issue) {
   const text = normalizedText(issue);
+  if (normalizedIssueHasFridgeCoolingProblem(text)) {
+    return { summary: "a refrigerator that is not cooling" };
+  }
   const serviceItem = detectServiceItem(issue);
   const applianceSummary = buildApplianceIssueSummary(issue, serviceItem);
   if (serviceItem && serviceItem.category === "appliance" && applianceSummary) return { summary: applianceSummary };
@@ -6589,11 +6697,30 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = nextStep;
-        sendText(ws, buildEmergencyIntakePrompt(caller));
+        sendText(ws, buildEmergencyIntakePromptAfterPriorAck(caller));
         return;
       }
 
-      if (isNegative(text) || isUrgentSelection(text)) {
+      const nt = normalizeIntentText(text);
+      const wantsStandardAfterEmergencyQuestion =
+        isNegative(text) ||
+        containsAny(nt, ["standard service", "normal service", "regular service", "not an emergency", "no emergency"]);
+      const wantsUrgentNotEmergency = isUrgentSelection(text);
+
+      if (wantsStandardAfterEmergencyQuestion && !wantsUrgentNotEmergency) {
+        markStandardService(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildStandardIntakePromptAfterPriorSeverityAck(caller));
+        return;
+      }
+
+      if (wantsUrgentNotEmergency) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6602,7 +6729,7 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = nextStep;
-        sendText(ws, buildUrgentIntakePrompt(caller));
+        sendText(ws, buildUrgentIntakePromptAfterPriorAck(caller));
         return;
       }
 
@@ -6621,11 +6748,11 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = nextStep;
-        sendText(ws, buildEmergencyIntakePrompt(caller));
+        sendText(ws, buildEmergencyIntakePromptAfterPriorAck(caller));
         return;
       }
 
-      if (isUrgentSelection(text) || isAffirmative(text)) {
+      if (isUrgentSelection(text)) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6634,7 +6761,23 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = nextStep;
-        sendText(ws, buildUrgentIntakePrompt(caller));
+        sendText(ws, buildUrgentIntakePromptAfterPriorAck(caller));
+        return;
+      }
+
+      if (
+        isAffirmative(text) &&
+        !containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])
+      ) {
+        markUrgent(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildUrgentIntakePromptAfterPriorAck(caller));
         return;
       }
 
@@ -6647,7 +6790,7 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = nextStep;
-        sendText(ws, buildStandardIntakePrompt(caller));
+        sendText(ws, buildStandardIntakePromptAfterCookingPriorityAck(caller));
         return;
       }
 
