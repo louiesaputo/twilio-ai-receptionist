@@ -2311,7 +2311,27 @@ function isPostIntakeContactUpdateIntent(text) {
     "i want to update my contact", "i need to update my contact",
     "wrong contact info", "wrong contact information", "incorrect contact info"
   ])) return true;
-  return isChangeContactPersonIntent(text);
+  return isExplicitPostIntakeContactPersonUpdateIntent(text);
+}
+
+function isExplicitPostIntakeContactPersonUpdateIntent(text) {
+  const t = normalizeIntentText(text || "");
+  if (!t) return false;
+
+  if (containsAny(t, [
+    "change the contact person", "change my contact person",
+    "update the contact person", "update my contact person",
+    "change the contact name", "change my contact name",
+    "update the contact name", "update my contact name",
+    "change the contact", "update the contact",
+    "change the name", "update the name",
+    "make her the contact", "make him the contact",
+    "use my wife", "use my husband", "use her", "use him"
+  ])) {
+    return true;
+  }
+
+  return /\b(change|update|switch)\b.*\b(contact\s+person|contact\s+name|contact|name|wife|husband|spouse)\b/.test(t);
 }
 
 
@@ -8446,6 +8466,17 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  });
+}
+
+module.exports = {
+  _test: {
+    isChangeContactPersonIntent,
+    isPostIntakeContactUpdateIntent,
+    isExplicitPostIntakeContactPersonUpdateIntent,
+    looksLikeAddressCorrection
+  }
+};
