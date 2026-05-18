@@ -2778,6 +2778,29 @@ function buildUrgentFlaggedLine() {
   return "Understood. I'll go ahead and flag this as urgent so the office knows you'd like to hear from someone as soon as possible.";
 }
 
+function isEmergencySelection(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+
+  if (
+    containsAny(t, [
+      "not an emergency", "not emergency", "no emergency", "non emergency", "nonemergency",
+      "standard service", "normal service", "regular service"
+    ]) ||
+    /\b(don t|dont|do not)\s+(?:mark|flag|make|treat)\s+(?:it|this|that)?\s*(?:as\s+)?(?:an\s+)?emergency\b/.test(t) ||
+    /\bnot\s+(?:really\s+)?sure\b.*\bemergency\b/.test(t) ||
+    /\b(don t|dont|do not)\s+know\b.*\bemergency\b/.test(t)
+  ) {
+    return false;
+  }
+
+  return containsAny(t, [
+    "emergency", "mark it as an emergency", "mark this as an emergency",
+    "make it an emergency", "make this an emergency", "this is an emergency",
+    "it is an emergency", "it s an emergency", "its an emergency"
+  ]);
+}
+
 function isUrgentSelection(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
@@ -2798,7 +2821,7 @@ function isUrgentSelection(text) {
 function isUrgentNonEmergencyRequest(text) {
   const t = normalizeIntentText(text);
   if (!t || isHardEmergency(text)) return false;
-  if (containsAny(t, ["not an emergency", "not emergency", "non emergency", "nonemergency"])) {
+  if (containsAny(t, ["not an emergency", "not emergency", "no emergency", "non emergency", "nonemergency"])) {
     return containsAny(t, ["urgent", "right away", "as soon as possible", "asap", "today", "tomorrow", "soon as possible"]);
   }
   return containsAny(t, ["urgent", "as soon as possible", "asap", "right away"]) && !containsAny(t, ["not urgent"]);
@@ -6650,7 +6673,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      if (isAffirmative(text)) {
+      if (isAffirmative(text) || isEmergencySelection(text)) {
         markEmergency(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6688,7 +6711,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "refrigerator_emergency_choice": {
-      if (isAffirmative(text) || containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
+      if (isAffirmative(text) || isEmergencySelection(text)) {
         markEmergency(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6705,7 +6728,7 @@ async function handlePrompt(ws, caller, speech) {
       const wantsStandardAfterEmergencyQuestion =
         isNegative(text) ||
         containsAny(nt, ["standard service", "normal service", "regular service", "not an emergency", "no emergency"]);
-      const wantsUrgentNotEmergency = isUrgentSelection(text);
+      const wantsUrgentNotEmergency = isUrgentSelection(text) || isUrgentNonEmergencyRequest(text);
 
       if (wantsStandardAfterEmergencyQuestion && !wantsUrgentNotEmergency) {
         markStandardService(caller);
@@ -6739,7 +6762,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "appliance_priority_choice": {
-      if (containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
+      if (isEmergencySelection(text)) {
         markEmergency(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6752,7 +6775,7 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      if (isUrgentSelection(text)) {
+      if (isUrgentSelection(text) || isUrgentNonEmergencyRequest(text)) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6767,7 +6790,7 @@ async function handlePrompt(ws, caller, speech) {
 
       if (
         isAffirmative(text) &&
-        !containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])
+        !isEmergencySelection(text)
       ) {
         markUrgent(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
@@ -8446,6 +8469,16 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  });
+}
+
+module.exports = {
+  isAffirmative,
+  isEmergencySelection,
+  isUrgentNonEmergencyRequest,
+  isUrgentSelection,
+  normalizeIntentText
+};
