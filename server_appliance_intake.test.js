@@ -20,8 +20,21 @@ module.exports = {
   process.env.INTAKE_VERTICAL = "appliance";
 
   try {
+    const testRequire = (id) => {
+      if (id === "ws") {
+        return {
+          WebSocketServer: class {
+            constructor() {}
+            on() {}
+            handleUpgrade() {}
+            emit() {}
+          }
+        };
+      }
+      return require(id);
+    };
     const sandbox = {
-      require,
+      require: testRequire,
       console,
       process,
       Buffer,
