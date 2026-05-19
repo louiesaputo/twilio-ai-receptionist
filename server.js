@@ -3183,8 +3183,8 @@ function applianceTypeOrBrandCaptured(caller) {
 }
 
 function isUnknownApplianceDetailResponse(text) {
-  const t = normalizedText(text || "");
-  return containsAny(t, ["not sure", "dont know", "do not know", "unsure", "no idea"]);
+  const t = normalizeIntentText(text || "");
+  return containsAny(t, ["not sure", "dont know", "don t know", "do not know", "unsure", "no idea"]);
 }
 
 function applianceSymptomCapturedForMerged(caller, mergedIssueText) {
