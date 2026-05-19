@@ -64,6 +64,7 @@
  - CLOSE_SESSION_MIN_MS           (default 4500)
  - CLOSE_SESSION_MAX_MS           (default 12000)
  - RESPONSE_THINK_DELAY_MS       (default 140; raise if replies feel rushed)
+ - INTAKE_VERTICAL               (optional: general | appliance — appliance enables conversational appliance-detail intake + softer scheduling acknowledgements)
 *************************************************/
 
 
@@ -173,8 +174,10 @@ const MID_THOUGHT_EXTRA_MS = Number(process.env.MID_THOUGHT_EXTRA_MS || 180);
 const GREETING_CONTINUATION_GRACE_MS = Number(process.env.GREETING_CONTINUATION_GRACE_MS || 550);
 const AI_INTERPRETER_TIMEOUT_MS = Number(process.env.AI_INTERPRETER_TIMEOUT_MS || 1200);
 const RESPONSE_THINK_DELAY_MS = Number(process.env.RESPONSE_THINK_DELAY_MS || 140);
+const INTAKE_VERTICAL = String(process.env.INTAKE_VERTICAL || "general").trim().toLowerCase();
+const IS_APPLIANCE_VERTICAL = INTAKE_VERTICAL === "appliance";
 
-console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED }));
+console.log("[AI OPENER CONFIG]", JSON.stringify({ AI_INTERPRETER_ENABLED, INTAKE_VERTICAL: INTAKE_VERTICAL || "general" }));
 
 
 
@@ -2677,6 +2680,8 @@ function buildResumePromptForCurrentStep(caller) {
       return "Can I get your last name as well?";
     case "ask_item_issue_detail":
       return caller.pendingIssuePrompt ? `What seems to be going on with ${caller.pendingIssuePrompt}?` : "What seems to be going on?";
+    case "appliance_service_intake":
+      return buildNextApplianceDetailQuestion(caller);
     case "leak_emergency_choice":
       return "Do you want me to mark this as an emergency?";
     case "refrigerator_emergency_choice":
@@ -3128,6 +3133,282 @@ function detectNamedApplianceBrand(text) {
   return "";
 }
 
+function isApplianceIssueContext(text) {
+  const t = normalizedText(text || "");
+  if (!t) return false;
+  if (detectNamedApplianceBrand(text)) return true;
+  const item = detectServiceItem(text);
+  if (item && item.category === "appliance") return true;
+  return containsAny(t, [
+    "appliance", "appliances", "refrigerator", "fridge", "freezer", "ice maker", "icemaker",
+    "dishwasher", "oven", "range", "cooktop", "stove", "washer", "washing machine",
+    "dryer", "microwave", "garbage disposal", "disposal", "wine cooler", "wine fridge"
+  ]);
+}
+
+function isApplianceSchedulingOrServiceLead(text) {
+  const raw = cleanForSpeech(text || "");
+  const t = normalizedText(raw);
+  if (!t || !isApplianceIssueContext(raw)) return false;
+  if (isServiceCapabilityQuestion(raw)) return false;
+  const schedulingLike = containsAny(t, [
+    "schedule", "scheduling", "book", "booking", "appointment", "service call", "call out", "come out",
+    "dispatch", "technician", "repair", "fixed", "look at", "check on", "take a look",
+    "need someone", "need somebody", "set up", "setup"
+  ]);
+  const problemLike =
+    hasSpecificProblemDetail(raw) ||
+    containsAny(t, [
+      "not working", "stopped working", "won't", "wont", "isn't", "isnt", "broken", "noise", "noisy",
+      "not cooling", "not heating", "not draining", "leak", "error code", "display",
+      "need service", "needs service", "need repair", "needs repair", "service appointment",
+      "have a problem", "having a problem", "something wrong"
+    ]);
+  return schedulingLike || problemLike;
+}
+
+function shouldSuppressHomeLeakEmergencyForApplianceIssue(text) {
+  if (!IS_APPLIANCE_VERTICAL) return false;
+  const item = detectServiceItem(text || "");
+  return Boolean(item && item.category === "appliance");
+}
+
+function applianceCoverageCaptured(caller) {
+  return Boolean(caller && caller.applianceCoverage && String(caller.applianceCoverage).trim());
+}
+
+function applianceTypeOrBrandCaptured(caller) {
+  if (!caller) return false;
+  return Boolean(caller.applianceBrand || caller.applianceTypeDetail);
+}
+
+function applianceSymptomCapturedForMerged(caller, mergedIssueText) {
+  if (!caller) return false;
+  if (caller.applianceSymptomCaptured) return true;
+  return hasSpecificProblemDetail(mergedIssueText || caller.issue || "");
+}
+
+function applianceDetailSlotsComplete(caller) {
+  const merged = caller.applianceIntakeMergedIssue || caller.issue || "";
+  return (
+    applianceTypeOrBrandCaptured(caller) &&
+    applianceCoverageCaptured(caller) &&
+    applianceSymptomCapturedForMerged(caller, merged)
+  );
+}
+
+function harvestApplianceDetailSlots(caller, text) {
+  if (!caller || !text) return;
+  const raw = cleanForSpeech(text || "");
+  const t = normalizedText(raw);
+  const brand = detectNamedApplianceBrand(raw);
+  if (brand) caller.applianceBrand = brand;
+
+  const item = detectServiceItem(raw);
+  if (item && item.category === "appliance") {
+    caller.applianceTypeDetail = caller.applianceTypeDetail || item.label;
+  }
+
+  if (!caller.applianceTypeDetail && containsAny(t, ["built in", "built-in", "column", "combo", "panel ready"])) {
+    caller.applianceTypeDetail = caller.applianceTypeDetail || "built-in appliance";
+  }
+
+  if (
+    containsAny(t, [
+      "under warranty", "still under warranty", "factory warranty", "manufacturer warranty",
+      "warranty service", "warranty visit", "covered under warranty", "in warranty"
+    ])
+  ) {
+    caller.applianceCoverage = "warranty";
+  }
+  if (containsAny(t, ["extended warranty", "service plan", "home warranty", "protection plan"])) {
+    caller.applianceCoverage = caller.applianceCoverage || "extended_or_plan";
+  }
+  if (
+    containsAny(t, [
+      "billable", "pay out of pocket", "out of pocket", "not covered", "no warranty",
+      "expired warranty", "not under warranty", "private pay"
+    ])
+  ) {
+    caller.applianceCoverage = "billable";
+  }
+  if (containsAny(t, ["not sure", "dont know", "do not know", "unsure", "no idea"])) {
+    caller.applianceCoverage = caller.applianceCoverage || "unknown";
+  }
+
+  if (hasSpecificProblemDetail(raw)) {
+    caller.applianceSymptomCaptured = true;
+  }
+}
+
+function mergeApplianceIntakeIntoIssue(caller) {
+  if (!caller) return;
+  const parts = [];
+  if (caller.applianceBrand) parts.push(caller.applianceBrand);
+  if (caller.applianceTypeDetail) parts.push(`type: ${caller.applianceTypeDetail}`);
+  const cov = caller.applianceCoverage;
+  let covLabel = "";
+  if (cov === "warranty") covLabel = "manufacturer warranty";
+  else if (cov === "extended_or_plan") covLabel = "extended warranty / plan";
+  else if (cov === "billable") covLabel = "billable / out-of-pocket";
+  else if (cov === "unknown") covLabel = "coverage unclear";
+  if (covLabel) parts.push(covLabel);
+
+  const mergedBits = parts.join(" · ").trim();
+  const base = cleanForSpeech(caller.issue || "");
+  if (mergedBits) {
+    caller.issue = base ? `${base} — Appliance intake: ${mergedBits}` : `Appliance intake: ${mergedBits}`;
+  }
+  afterIssueCaptured(caller);
+}
+
+function buildNextApplianceDetailQuestion(caller) {
+  const merged = caller.applianceIntakeMergedIssue || caller.issue || "";
+  harvestApplianceDetailSlots(caller, merged);
+
+  if (!applianceTypeOrBrandCaptured(caller)) {
+    const pool = [
+      "Tell me a bit about the unit—the appliance type, and the brand or model if you know it.",
+      "What kind of appliance are we working with, and what brand or model is it?",
+      "Help me picture it—what appliance is it, and do you happen to know the brand or model?"
+    ];
+    const i = nextPromptIndex(caller, "applianceAskTypeBrandIndex");
+    return pool[i % pool.length];
+  }
+
+  if (!applianceSymptomCapturedForMerged(caller, merged)) {
+    const pool = [
+      "What's going on with it—walk me through what you're noticing, even if it's small stuff.",
+      "When it acts up, what does it do—or not do—that made you call?",
+      "What's the day-to-day symptom—noises, temperatures, error codes, anything like that?"
+    ];
+    const i = nextPromptIndex(caller, "applianceAskSymptomIndex");
+    return pool[i % pool.length];
+  }
+
+  if (!applianceCoverageCaptured(caller)) {
+    const pool = [
+      "Is this still under manufacturer warranty, or are you expecting more of a billable service visit?",
+      "Should I note this as warranty-covered work, or standard billable service?",
+      "Are we thinking warranty route with the manufacturer, or out-of-pocket service?"
+    ];
+    const i = nextPromptIndex(caller, "applianceAskCoverageIndex");
+    return pool[i % pool.length];
+  }
+
+  return "What's going on with it—walk me through what you're noticing, even if it's small stuff.";
+}
+
+function shouldOfferApplianceDetailPass(caller) {
+  if (!IS_APPLIANCE_VERTICAL) return false;
+  if (!caller || caller.leadType !== "service" || caller.emergencyAlert) return false;
+  if (caller.issueIsCapabilityQuestion) return false;
+  return isApplianceSchedulingOrServiceLead(caller.issue || "");
+}
+
+function tryBeginApplianceServiceIntake(ws, caller) {
+  if (!shouldOfferApplianceDetailPass(caller)) return false;
+  harvestApplianceDetailSlots(caller, caller.issue || "");
+  caller.applianceIntakeMergedIssue = cleanForSpeech(caller.issue || "");
+  if (applianceDetailSlotsComplete(caller)) return false;
+
+  caller.lastStep = "appliance_service_intake";
+  const openerPool = [
+    "Sure—let's grab a few appliance details so the technician shows up prepared.",
+    "Absolutely—we can help with that. Let me pull together a little detail on the appliance side.",
+    "Okay—let's get a quick picture of the appliance so nothing gets missed."
+  ];
+  const oi = nextPromptIndex(caller, "applianceIntakeOpenerIndex");
+  const opener = openerPool[oi % openerPool.length];
+  sendText(ws, `${opener} ${buildNextApplianceDetailQuestion(caller)}`);
+  return true;
+}
+
+function finalizeApplianceIntakeTurn(caller, spokenText) {
+  caller.applianceIntakeMergedIssue = combineIssueContextAndDetail(caller.applianceIntakeMergedIssue || caller.issue || "", spokenText || "");
+  harvestApplianceDetailSlots(caller, caller.applianceIntakeMergedIssue);
+  caller.issue = caller.applianceIntakeMergedIssue;
+}
+
+function buildApplianceLeadIssueAcknowledgement(caller) {
+  const brand = detectNamedApplianceBrand(caller.issue || "");
+  if (brand) return `Absolutely—we can help get your ${brand} taken care of.`;
+  return "Absolutely—we can help get this taken care of.";
+}
+
+function proceedToContactCollectionAfterApplianceIntake(ws, caller) {
+  mergeApplianceIntakeIntoIssue(caller);
+  caller.applianceIntakeMergedIssue = "";
+
+  if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
+    caller.lastStep = "refrigerator_emergency_choice";
+    sendText(ws, buildRefrigeratorEmergencyPrompt(caller));
+    return;
+  }
+
+  if (isCookingAppliancePriorityCandidate(caller.issue) && !caller.emergencyAlert) {
+    caller.lastStep = "appliance_priority_choice";
+    sendText(ws, buildCookingPriorityPrompt(caller));
+    return;
+  }
+
+  if (isUrgentNonEmergencyRequest(caller.issue) && !caller.emergencyAlert) {
+    markUrgent(caller);
+    const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
+    const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, buildUrgentPostIssueSpellingPreamble(caller)) : "";
+    if (spellingPrompt) {
+      sendText(ws, spellingPrompt);
+      return;
+    }
+    caller.lastStep = nextStep;
+    sendText(ws, buildUrgentIntakePrompt(caller));
+    return;
+  }
+
+  if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert && !shouldSuppressHomeLeakEmergencyForApplianceIssue(caller.issue)) {
+    if (!caller.fullName) {
+      caller.pendingNameNextStep = "leak_emergency_choice";
+      caller.lastStep = "ask_name";
+      sendText(ws, buildMissingNameAfterIssuePrompt(caller));
+      return;
+    }
+    const spLeak = maybeQueueFirstNameSpelling(caller, "leak_emergency_choice", buildIssueAcknowledgement(caller));
+    if (spLeak) {
+      sendText(ws, spLeak);
+      return;
+    }
+    caller.lastStep = "leak_emergency_choice";
+    sendText(ws, `${buildIssueAcknowledgement(caller)} Do you want me to mark this as an emergency?`);
+    return;
+  }
+
+  const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
+  if (caller.emergencyAlert) {
+    caller.lastStep = nextStep;
+    sendText(ws, buildEmergencyIntakePrompt(caller));
+    return;
+  }
+
+  const preamble = caller.firstName
+    ? `Thank you, ${caller.firstName}. Perfect—I have what we need on the appliance.`
+    : "Perfect—I have what we need on the appliance.";
+  const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep, preamble) : "";
+  if (spellingPrompt) {
+    sendText(ws, spellingPrompt);
+    return;
+  }
+  caller.lastStep = nextStep;
+  if (caller.fullName) {
+    if (hasFullName(caller.fullName)) {
+      sendText(ws, `${preamble} ${buildPhoneIntakePromptFragment(caller)}`);
+      return;
+    }
+    sendText(ws, `${preamble} Before I go any further, can I get your last name as well?`);
+    return;
+  }
+  sendText(ws, `${preamble} Can I start by getting your full name, please?`);
+}
+
 function isServiceCapabilityQuestion(text) {
   const raw = cleanForSpeech(text || "");
   const t = normalizedText(raw);
@@ -3428,6 +3709,13 @@ function humanizeIssueSummaryForSpeech(summary) {
 
 function buildIssueAcknowledgement(caller) {
   if (caller.issueIsCapabilityQuestion) return buildCapabilityAcknowledgement(caller);
+  if (
+    IS_APPLIANCE_VERTICAL &&
+    !caller.issueIsCapabilityQuestion &&
+    isApplianceSchedulingOrServiceLead(caller.issue || "")
+  ) {
+    return buildApplianceLeadIssueAcknowledgement(caller);
+  }
   const summary = humanizeIssueSummaryForSpeech(caller.issueSummary || caller.issue || "that issue");
   if (!summary) return "I'm sorry you're dealing with that.";
   if (isMainLineEmergencyCandidate(caller.issue || "") || normalizedText(summary).includes("broken main")) {
@@ -4620,6 +4908,11 @@ function getOrCreateCaller(key) {
       techNotesVariantIndex: 0,
       quoteNotesVariantIndex: 0,
       addressRequestPromptIndex: 0,
+      applianceBrand: "",
+      applianceTypeDetail: "",
+      applianceCoverage: "",
+      applianceSymptomCaptured: false,
+      applianceIntakeMergedIssue: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -4649,6 +4942,7 @@ function isFreeformSpeechStep(step = "") {
     "ask_issue",
     "ask_issue_again",
     "ask_item_issue_detail",
+    "appliance_service_intake",
     "ask_notes"
   ]).has(step);
 }
@@ -4978,8 +5272,17 @@ function buildMakePayload(caller) {
     urgency: caller.urgency || "normal",
     emergencyAlert: caller.emergencyAlert === true,
     projectType: caller.projectType || "",
-    applianceType: "",
-    applianceWarranty: "",
+    applianceType: [caller.applianceBrand, caller.applianceTypeDetail].filter(Boolean).join(" · ") || "",
+    applianceWarranty:
+      caller.applianceCoverage === "warranty"
+        ? "Manufacturer warranty"
+        : caller.applianceCoverage === "extended_or_plan"
+          ? "Extended warranty / plan"
+          : caller.applianceCoverage === "billable"
+            ? "Billable / out-of-pocket"
+            : caller.applianceCoverage === "unknown"
+              ? "Coverage unknown"
+              : "",
     timeline: caller.timeline || "",
     proposalDeadline: caller.proposalDeadline || "",
     demoEmail: caller.demoEmail || "",
@@ -6289,6 +6592,10 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
+      if (tryBeginApplianceServiceIntake(ws, caller)) {
+        return;
+      }
+
 
 
 
@@ -6366,7 +6673,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert && !shouldSuppressHomeLeakEmergencyForApplianceIssue(caller.issue)) {
         if (!caller.fullName) {
           caller.pendingNameNextStep = "leak_emergency_choice";
           caller.lastStep = "ask_name";
@@ -6438,6 +6745,9 @@ async function handlePrompt(ws, caller, speech) {
         sendText(ws, `What seems to be going on with ${missingProblemItem.prompt}?`);
         return;
       }
+      if (tryBeginApplianceServiceIntake(ws, caller)) {
+        return;
+      }
       if (caller.leadType === "demo") {
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -6496,7 +6806,7 @@ async function handlePrompt(ws, caller, speech) {
       }
 
 
-      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert && !shouldSuppressHomeLeakEmergencyForApplianceIssue(caller.issue)) {
         if (!caller.fullName) {
           caller.pendingNameNextStep = "leak_emergency_choice";
           caller.lastStep = "ask_name";
@@ -6550,6 +6860,9 @@ async function handlePrompt(ws, caller, speech) {
       } else {
         markStandardService(caller);
       }
+      if (tryBeginApplianceServiceIntake(ws, caller)) {
+        return;
+      }
       if (isRefrigeratorEmergencyCandidate(caller.issue) && !caller.emergencyAlert) {
         caller.lastStep = "refrigerator_emergency_choice";
         sendText(ws, buildRefrigeratorEmergencyPrompt(caller));
@@ -6580,7 +6893,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert) {
+      if (isLeakLikeIssue(caller.issue) && !caller.emergencyAlert && !shouldSuppressHomeLeakEmergencyForApplianceIssue(caller.issue)) {
         if (!caller.fullName) {
           caller.pendingNameNextStep = "leak_emergency_choice";
           caller.lastStep = "ask_name";
@@ -6622,6 +6935,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+    case "appliance_service_intake": {
+      finalizeApplianceIntakeTurn(caller, text);
+      tryHarvestPhoneFromUtterance(caller, text);
+      tryHarvestAddressFromUtterance(caller, text);
+      if (applianceDetailSlotsComplete(caller)) {
+        proceedToContactCollectionAfterApplianceIntake(ws, caller);
+        return;
+      }
+      sendText(ws, buildNextApplianceDetailQuestion(caller));
+      return;
+    }
 
     case "leak_emergency_choice": {
       if (isNegative(text)) {
