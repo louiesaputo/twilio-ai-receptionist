@@ -3182,6 +3182,11 @@ function applianceTypeOrBrandCaptured(caller) {
   return Boolean(caller.applianceBrand || caller.applianceTypeDetail);
 }
 
+function isUnknownApplianceDetailResponse(text) {
+  const t = normalizedText(text || "");
+  return containsAny(t, ["not sure", "dont know", "do not know", "unsure", "no idea"]);
+}
+
 function applianceSymptomCapturedForMerged(caller, mergedIssueText) {
   if (!caller) return false;
   if (caller.applianceSymptomCaptured) return true;
@@ -3212,6 +3217,9 @@ function harvestApplianceDetailSlots(caller, text) {
   if (!caller.applianceTypeDetail && containsAny(t, ["built in", "built-in", "column", "combo", "panel ready"])) {
     caller.applianceTypeDetail = caller.applianceTypeDetail || "built-in appliance";
   }
+  if (!applianceTypeOrBrandCaptured(caller) && isUnknownApplianceDetailResponse(raw)) {
+    caller.applianceTypeDetail = "appliance type/brand unknown";
+  }
 
   if (
     containsAny(t, [
@@ -3232,7 +3240,7 @@ function harvestApplianceDetailSlots(caller, text) {
   ) {
     caller.applianceCoverage = "billable";
   }
-  if (containsAny(t, ["not sure", "dont know", "do not know", "unsure", "no idea"])) {
+  if (isUnknownApplianceDetailResponse(raw)) {
     caller.applianceCoverage = caller.applianceCoverage || "unknown";
   }
 
