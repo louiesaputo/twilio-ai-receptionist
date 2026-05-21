@@ -2275,14 +2275,15 @@ function isKeepSameContactPerson(text) {
 function isChangeContactPersonIntent(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
-  return containsAny(t, [
+  if (containsAny(t, [
     "change that too", "change the contact person", "change the contact",
     "use my wife", "use my husband", "use her", "use him",
     "make her the contact", "make him the contact",
-    "change the name", "update the contact person", "update the contact",
-    "i d like to change", "id like to change", "i d like to change it", "like to change it",
-    "change it to", "switch it to", "update it to"
-  ]);
+    "change the name", "update the contact person", "update the contact"
+  ])) {
+    return true;
+  }
+  return /\b(?:change|switch|update)\s+(?:it|that)\s+to\s+(?:my\s+)?(?:wife|husband|spouse|partner|mother|father|son|daughter)\b/.test(t);
 }
 
 /** Caller is declining a contact update ("don't change my contact…") so we should not hijack the turn. */
@@ -2444,6 +2445,11 @@ function afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated = false } = {
           ? buildFinalSubmissionPrompt(caller)
           : buildResumePromptForCurrentStep(caller) || "How else can I help?";
       sendText(ws, `${updateLine} ${followUp}`);
+      return;
+    }
+    const resumePrompt = buildResumePromptForCurrentStep(caller);
+    if (resumePrompt) {
+      sendText(ws, `${updateLine} ${resumePrompt}`);
       return;
     }
   }
@@ -3182,6 +3188,11 @@ function applianceTypeOrBrandCaptured(caller) {
   return Boolean(caller.applianceBrand || caller.applianceTypeDetail);
 }
 
+function isUnknownApplianceDetailResponse(text) {
+  const t = normalizeIntentText(text || "");
+  return containsAny(t, ["not sure", "dont know", "don t know", "do not know", "unsure", "no idea"]);
+}
+
 function applianceSymptomCapturedForMerged(caller, mergedIssueText) {
   if (!caller) return false;
   if (caller.applianceSymptomCaptured) return true;
@@ -3197,10 +3208,21 @@ function applianceDetailSlotsComplete(caller) {
   );
 }
 
+function applianceCoverageOnlyMissing(caller) {
+  const merged = caller && (caller.applianceIntakeMergedIssue || caller.issue || "");
+  return Boolean(
+    caller &&
+    applianceTypeOrBrandCaptured(caller) &&
+    !applianceCoverageCaptured(caller) &&
+    applianceSymptomCapturedForMerged(caller, merged)
+  );
+}
+
 function harvestApplianceDetailSlots(caller, text) {
   if (!caller || !text) return;
   const raw = cleanForSpeech(text || "");
   const t = normalizedText(raw);
+  const it = normalizeIntentText(raw);
   const brand = detectNamedApplianceBrand(raw);
   if (brand) caller.applianceBrand = brand;
 
@@ -3212,12 +3234,16 @@ function harvestApplianceDetailSlots(caller, text) {
   if (!caller.applianceTypeDetail && containsAny(t, ["built in", "built-in", "column", "combo", "panel ready"])) {
     caller.applianceTypeDetail = caller.applianceTypeDetail || "built-in appliance";
   }
+  if (!applianceTypeOrBrandCaptured(caller) && isUnknownApplianceDetailResponse(raw)) {
+    caller.applianceTypeDetail = "appliance type/brand unknown";
+  }
 
   if (
     containsAny(t, [
       "under warranty", "still under warranty", "factory warranty", "manufacturer warranty",
       "warranty service", "warranty visit", "covered under warranty", "in warranty"
-    ])
+    ]) ||
+    containsAny(it, ["manufacturer", "factory", "covered"])
   ) {
     caller.applianceCoverage = "warranty";
   }
@@ -3228,11 +3254,12 @@ function harvestApplianceDetailSlots(caller, text) {
     containsAny(t, [
       "billable", "pay out of pocket", "out of pocket", "not covered", "no warranty",
       "expired warranty", "not under warranty", "private pay"
-    ])
+    ]) ||
+    containsAny(it, ["standard service", "regular service", "private pay", "billable"])
   ) {
     caller.applianceCoverage = "billable";
   }
-  if (containsAny(t, ["not sure", "dont know", "do not know", "unsure", "no idea"])) {
+  if (isUnknownApplianceDetailResponse(raw)) {
     caller.applianceCoverage = caller.applianceCoverage || "unknown";
   }
 
@@ -6937,9 +6964,18 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "appliance_service_intake": {
+      const coverageOnlyMissingBefore = applianceCoverageOnlyMissing(caller);
       finalizeApplianceIntakeTurn(caller, text);
       tryHarvestPhoneFromUtterance(caller, text);
       tryHarvestAddressFromUtterance(caller, text);
+      if (isHardEmergency(caller.issue || "")) {
+        markEmergency(caller);
+        proceedToContactCollectionAfterApplianceIntake(ws, caller);
+        return;
+      }
+      if (coverageOnlyMissingBefore && !applianceCoverageCaptured(caller) && isAffirmative(text)) {
+        caller.applianceCoverage = "unknown";
+      }
       if (applianceDetailSlotsComplete(caller)) {
         proceedToContactCollectionAfterApplianceIntake(ws, caller);
         return;
@@ -8771,6 +8807,21 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  });
+}
+
+module.exports = {
+  app,
+  server,
+  __test: {
+    afterCallbackDetailsUpdated,
+    applianceDetailSlotsComplete,
+    getOrCreateCaller,
+    handlePrompt,
+    harvestApplianceDetailSlots,
+    isPostIntakeContactUpdateIntent
+  }
+};
