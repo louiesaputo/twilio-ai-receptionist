@@ -2285,6 +2285,16 @@ function isChangeContactPersonIntent(text) {
   ]);
 }
 
+function hasExplicitContactPersonUpdateTarget(text) {
+  const t = normalizeIntentText(text || "");
+  if (!t) return false;
+  return containsAny(t, [
+    "contact", "contact person", "contact name", "name", "person",
+    "wife", "wifes", "wife s", "husband", "husbands", "husband s",
+    "spouse", "partner", "use her", "use him", "make her", "make him"
+  ]);
+}
+
 /** Caller is declining a contact update ("don't change my contact…") so we should not hijack the turn. */
 function isNegatedMidCallContactUpdateRequest(text) {
   const t = normalizeIntentText(text || "");
@@ -2314,7 +2324,7 @@ function isPostIntakeContactUpdateIntent(text) {
     "i want to update my contact", "i need to update my contact",
     "wrong contact info", "wrong contact information", "incorrect contact info"
   ])) return true;
-  return isChangeContactPersonIntent(text);
+  return hasExplicitContactPersonUpdateTarget(text) && isChangeContactPersonIntent(text);
 }
 
 
@@ -3170,7 +3180,8 @@ function isApplianceSchedulingOrServiceLead(text) {
 function shouldSuppressHomeLeakEmergencyForApplianceIssue(text) {
   if (!IS_APPLIANCE_VERTICAL) return false;
   const item = detectServiceItem(text || "");
-  return Boolean(item && item.category === "appliance");
+  if (!item || item.category !== "appliance") return false;
+  return !isLeakLikeIssue(text);
 }
 
 function applianceCoverageCaptured(caller) {
@@ -8771,6 +8782,16 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} - ${APP_VERSION}`);
+  });
+}
+
+module.exports = {
+  __test: {
+    hasExplicitContactPersonUpdateTarget,
+    isPostIntakeContactUpdateIntent,
+    shouldSuppressHomeLeakEmergencyForApplianceIssue
+  }
+};
