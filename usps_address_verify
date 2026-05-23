@@ -1,0 +1,369 @@
+/**
+ * Optional USPS Addresses API v3 (OAuth client_credentials + GET /addresses/v3/address).
+ *
+ * USPS_VERIFY_ENABLED unset/false → no network, no latency.
+ *
+ *   USPS_VERIFY_ENABLED=true
+ *   USPS_CLIENT_ID   USPS_CLIENT_SECRET
+ *   USPS_HOST=https://apis.usps.com   (test: https://apis-tem.usps.com)
+ *   USPS_VERIFY_TIMEOUT_MS=750       total budget token+GET (default 750)
+ *   USPS_VERIFY_BLOCKING=true        await USPS before advancing flow (adds lag)
+ */
+
+"use strict";
+
+const { normalizeAddressInput } = require("./address_validation");
+
+const USPS_STATES = new Set([
+  "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FM","FL","GA","GU","HI","ID","IL","IN","IA",
+  "KS","KY","LA","ME","MH","MD","MA","MI","MN","MS","MO","MP","MT","NE","NV","NH","NJ","NM",
+  "NY","NC","ND","OH","OK","OR","PW","PA","PR","RI","SC","SD","TN","TX","UT","VT","VI","VA",
+  "WA","WV","WI","WY","AS","AE","AA","AP"
+]);
+
+const STATE_TOKENS = `alabama AL alaska AK arizona AZ arkansas AR california CA colorado CO connecticut CT
+delaware DE district of columbia DC florida FL georgia GA hawaii HI idaho ID illinois IL indiana IN iowa IA
+kansas KS kentucky KY louisiana LA maine ME maryland MD massachusetts MA michigan MI minnesota MN
+mississippi MS missouri MO montana MT nebraska NE nevada NV new hampshire NH new jersey NJ new mexico NM
+new york NY north carolina NC north dakota ND ohio OH oklahoma OK oregon OR pennsylvania PA rhode island RI
+south carolina SC south dakota SD tennessee TN texas TX utah UT vermont VT virginia VA washington WA
+west virginia WV wisconsin WI wyoming WY`;
+
+const FULL_TO_ABB = (() => {
+  const pairs = STATE_TOKENS.trim().split(/\s+/);
+  const m = {};
+  for (let i = 0; i + 1 < pairs.length; i += 2) m[String(pairs[i]).toLowerCase()] = String(pairs[i + 1]).toUpperCase();
+  m["washington dc"] = "DC";
+  return m;
+})();
+
+const FULL_NAMES_LONGEST = Object.keys(FULL_TO_ABB).sort((a, b) => b.length - a.length);
+
+/** @typedef {{ streetAddress:string, secondaryAddress:string, city:string, state:string, ZIPCode:string, ZIPPlus4:string }} ParsedUspsPieces */
+
+function truthyEnv(v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes";
+}
+
+function hostBase() {
+  return String(process.env.USPS_HOST || "https://apis.usps.com").replace(/\/$/, "");
+}
+
+function timeoutBudget() {
+  const n = Number(process.env.USPS_VERIFY_TIMEOUT_MS);
+  if (Number.isFinite(n) && n >= 120 && n <= 20000) return Math.floor(n);
+  return 750;
+}
+
+function isConfigured() {
+  return truthyEnv(process.env.USPS_VERIFY_ENABLED) &&
+    !!String(process.env.USPS_CLIENT_ID || "").trim() &&
+    !!String(process.env.USPS_CLIENT_SECRET || "").trim();
+}
+
+function isBlockingVerify() {
+  return truthyEnv(process.env.USPS_VERIFY_BLOCKING);
+}
+
+let cachedBearer = "";
+let bearerExpiresMs = 0;
+
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function fetchJson(method, url, headers, body, signal) {
+  const opts = { method, headers, signal };
+  if (body != null && method !== "GET") opts.body = body;
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let parsed = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { rawSnippet: text.slice(0, 400) };
+  }
+  if (!res.ok) {
+    const err = new Error(`USPS HTTP ${res.status}`);
+    /** @type {any} */ (err).status = res.status;
+    /** @type {any} */ (err).body = parsed;
+    throw err;
+  }
+  return parsed;
+}
+
+async function getBearer(signal) {
+  const now = Date.now();
+  if (cachedBearer && bearerExpiresMs - 60000 > now) return cachedBearer;
+  const h = hostBase();
+  const payload = JSON.stringify({
+    grant_type: "client_credentials",
+    client_id: String(process.env.USPS_CLIENT_ID || "").trim(),
+    client_secret: String(process.env.USPS_CLIENT_SECRET || "").trim(),
+  });
+  const data = await fetchJson(
+    "POST",
+    `${h}/oauth2/v3/token`,
+    { "Content-Type": "application/json", Accept: "application/json" },
+    payload,
+    signal
+  );
+  const tok = String(data.access_token || "");
+  const secs = Number(data.expires_in) || 28800;
+  if (!tok) throw new Error("USPS OAuth: no access_token");
+  cachedBearer = tok;
+  bearerExpiresMs = now + Math.max(secs - 120, 60) * 1000;
+  return tok;
+}
+
+function finalizeParsed(streetAddress, secondaryAddress, city, state, zip5, zp4) {
+  const st = String(state || "").toUpperCase().slice(0, 2);
+  if (!String(streetAddress || "").trim()) return null;
+  if (!USPS_STATES.has(st)) return null;
+  const zc = /^(\d{5})$/.test(zip5) ? zip5 : "";
+  const cityTrim = String(city || "").trim();
+  if (!cityTrim && !zc) return null;
+  return {
+    streetAddress: String(streetAddress).trim().slice(0, 50),
+    secondaryAddress: String(secondaryAddress || "").trim().slice(0, 50),
+    city: cityTrim.slice(0, 28),
+    state: st,
+    ZIPCode: zc,
+    ZIPPlus4: /^(\d{4})$/.test(String(zp4 || "")) ? String(zp4) : "",
+  };
+}
+
+function aptish(seg) {
+  return /^(?:apt|apartment|suite|\bste\b|unit|#|lot)\b/i.test(String(seg || "").trim());
+}
+
+function pullAptFromStreet(streetRaw) {
+  let street = streetRaw.trim();
+  let sec = "";
+  const m =
+    /\b(apartment|apt|suite|\bste\b|unit)\s+[A-Za-z0-9#\-]*\s*$/i.exec(street);
+  if (m && m.index > 8) {
+    sec = street.slice(m.index).trim();
+    street = street.slice(0, m.index).replace(/[, ]+$/, "").trim();
+  }
+  return { street, sec };
+}
+
+/**
+ * Parses merged caller address into USPS query fields.
+ *
+ * @param {string} merged
+ * @returns {ParsedUspsPieces | null}
+ */
+function parseMergedAddressForUsps(merged) {
+  const raw = normalizeAddressInput(String(merged || ""));
+  if (!raw || raw.length < 8) return null;
+
+  const zipAll = [...raw.matchAll(/\b(\d{5})(?:-(\d{4}))?\b/g)];
+  const lastZ = zipAll.length ? zipAll[zipAll.length - 1] : null;
+  const ZIPCodeCatch = lastZ ? lastZ[1] : "";
+  const ZIPPlus4Catch = lastZ && lastZ[2] ? lastZ[2] : "";
+
+  function pack(street, sec, city, state, zp5, zp4) {
+    return finalizeParsed(
+      street,
+      sec,
+      city,
+      state,
+      zp5 || ZIPCodeCatch,
+      zp4 || ZIPPlus4Catch
+    );
+  }
+
+  const lines = /^(\d+[A-Za-z\-#]?\s+.+?\S)\s+([a-z\s'.-]+(?:\s+[a-z\s'.-]+){0,3})\s+([A-Z]{2})\s+(\d{5})(?:-(\d{4}))?\s*$/i.exec(
+    raw.trim()
+  );
+  if (lines && !raw.includes(",")) {
+    return pack(lines[1], "", lines[2], lines[3], lines[4], lines[5] || "");
+  }
+
+  const parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  if (parts.length === 2) {
+    const tail = /^(.+?)\s+([A-Z]{2})\s+(\d{5})(?:-(\d{4}))?\s*$/i.exec(parts[1]);
+    if (tail) {
+      const pu = pullAptFromStreet(parts[0]);
+      return pack(pu.street, pu.sec, tail[1].trim(), tail[2], tail[3], tail[4] || "");
+    }
+  }
+
+  if (parts.length >= 3) {
+    const middles = parts.slice(1, -1);
+    const lastChunk = parts[parts.length - 1];
+    const secChunks = middles.filter(aptish);
+    const cityChunks = middles.filter((s) => !aptish(s));
+    let secondary = secChunks.join(", ").trim();
+    let spelledHit = "";
+
+    /** @type {number|string} */
+    let z5 = "";
+    /** @type {string} */
+    let z4 = "";
+    /** @type {string} */
+    let stAbbrev = "";
+
+    /** @returns {ParsedUspsPieces | null} */
+    function spelledAtEnd(segment) {
+      for (const nm of FULL_NAMES_LONGEST) {
+        const re = new RegExp(`${escapeRe(nm)}\\s+(\\d{5})(?:-(\\d{4}))?$`, "i");
+        const wm = segment.match(re);
+        if (wm && wm.index != null) {
+          spelledHit = segment.slice(0, wm.index).trim();
+          stAbbrev = FULL_TO_ABB[nm] || "";
+          z5 = wm[1];
+          z4 = wm[2] || "";
+          return /** @type {any} */ (true);
+        }
+      }
+      return null;
+    }
+
+    let cityPrefixTail = "";
+
+    let ab = /\b([A-Z]{2})\s+(\d{5})(?:-(\d{4}))?\s*$/i.exec(lastChunk);
+
+    if (ab) {
+
+      cityPrefixTail = lastChunk.slice(0, ab.index).trim();
+      stAbbrev = ab[1];
+      z5 = ab[2];
+
+      z4 = ab[3] || "";
+
+    } else {
+
+      spelledAtEnd(lastChunk);
+      if (!stAbbrev) return null;
+    }
+
+
+    let cityMerged = [...cityChunks, cityPrefixTail, spelledHit].filter(Boolean).join(", ").trim();
+    cityMerged = cityMerged.replace(/^,+|,+$/g, "").replace(/\s+/g, " ").trim();
+
+
+    let puStreet = pullAptFromStreet(parts[0]);
+
+    secondary = secondary || puStreet.sec;
+
+    return pack(puStreet.street.trim(), secondary, cityMerged, stAbbrev, z5, z4);
+  }
+
+
+  const lastWordState = /\b(\d+[A-Za-z\-#]?\s+[^\n]+?\S)\s+([A-Za-z][A-Za-z\s'.-]+)\s+([A-Z]{2})\s+(\d{5})(?:-(\d{4}))?\s*$/i.exec(
+    raw.trim()
+  );
+  if (lastWordState && !raw.includes(",")) {
+    return pack(lastWordState[1].trim(), "", lastWordState[2].trim(), lastWordState[3], lastWordState[4], lastWordState[5] || "");
+  }
+
+  return null;
+}
+
+function standardizedLineFromResponse(data) {
+  const addr = data && typeof data.address === "object" ? data.address : {};
+  const p1 = [addr.streetAddress, addr.secondaryAddress].filter(Boolean).join(", ");
+  const city = addr.city ? String(addr.city).trim() : "";
+  const st = typeof addr.state === "string" ? addr.state.toUpperCase() : "";
+  const z5 =
+    typeof addr.ZIPCode === "string" ? String(addr.ZIPCode).replace(/\D/g, "").slice(0, 5) : "";
+  const z4 = addr.ZIPPlus4 != null ? String(addr.ZIPPlus4).replace(/\D/g, "").slice(0, 4) : "";
+  if (!p1 || !city || !st || !/^\d{5}$/.test(z5)) return "";
+  const tailZip = z4 ? `${z5}-${z4}` : z5;
+  return normalizeAddressInput(`${p1}, ${city}, ${st} ${tailZip}`.trim());
+}
+
+async function verifyAndPatchCallerBestEffort(caller) {
+  const at = () => new Date().toISOString();
+
+  if (!caller) return { status: "skipped", reason: "no_caller", at: at() };
+
+  if (!isConfigured()) {
+    return { status: "skipped", reason: "not_configured", at: at() };
+  }
+
+  const pieces = parseMergedAddressForUsps(caller.address || "");
+  if (!pieces) {
+    caller.uspsAddressVerification = { status: "skipped", reason: "parse", at: at() };
+    return caller.uspsAddressVerification;
+  }
+
+  const ms = timeoutBudget();
+  const ac = new AbortController();
+  const tid = setTimeout(() => {
+    try {
+      ac.abort();
+    } catch {
+      //
+    }
+  }, ms);
+
+  const prevNormStored = normalizeAddressInput(String(caller.address || ""));
+
+  try {
+    const bearer = await getBearer(ac.signal);
+    const q = new URLSearchParams();
+    q.set("streetAddress", pieces.streetAddress);
+    if (pieces.secondaryAddress) q.set("secondaryAddress", pieces.secondaryAddress);
+    if (pieces.city) q.set("city", pieces.city);
+    q.set("state", pieces.state);
+    if (pieces.ZIPCode) q.set("ZIPCode", pieces.ZIPCode);
+    if (pieces.ZIPPlus4) q.set("ZIPPlus4", pieces.ZIPPlus4);
+
+    const url = `${hostBase()}/addresses/v3/address?${q.toString()}`;
+    const data = await fetchJson(
+      "GET",
+      url,
+      { Accept: "application/json", Authorization: `Bearer ${bearer}` },
+      undefined,
+      ac.signal
+    );
+
+    const dpv =
+      data &&
+      data.additionalInfo &&
+      (data.additionalInfo.DPVConfirmation || data.additionalInfo.dPVConfirmation || "");
+
+    const nextLine = standardizedLineFromResponse(data);
+    caller.uspsAddressVerification = {
+      status: "ok",
+      at: at(),
+      dpvConfirmation: dpv ? String(dpv) : "",
+      standardizedChanged: Boolean(nextLine && normalizeAddressInput(nextLine) !== prevNormStored),
+      warnings: Array.isArray(data.warnings) ? data.warnings.slice() : [],
+    };
+
+    if (nextLine && nextLine.trim()) {
+      caller.address = normalizeAddressInput(nextLine);
+    }
+
+    return caller.uspsAddressVerification;
+  } catch (err) {
+    /** @type {any} */
+    const e = err || {};
+    const aborted =
+      String(e.message || "").toLowerCase().includes("abort") ||
+      e.code === "ABORT_ERR" ||
+      e.name === "AbortError";
+    caller.uspsAddressVerification = {
+      status: aborted ? "timeout" : "error",
+      at: at(),
+      httpStatus: typeof e.status === "number" ? e.status : 0,
+      message: String(e.message || String(err)),
+    };
+    return caller.uspsAddressVerification;
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
+module.exports = {
+  isConfigured,
+  isBlockingVerify,
+  parseMergedAddressForUsps,
+  verifyAndPatchCallerBestEffort,
+};
