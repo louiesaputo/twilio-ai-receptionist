@@ -64,6 +64,11 @@
  - CLOSE_SESSION_MIN_MS           (default 4500)
  - CLOSE_SESSION_MAX_MS           (default 12000)
  - RESPONSE_THINK_DELAY_MS       (default 140; raise if replies feel rushed)
+ - USPS_VERIFY_ENABLED          (optional: true|false — USPS address standardization after caller confirms complete address)
+ - USPS_CLIENT_ID / USPS_CLIENT_SECRET  (OAuth client_credentials from USPS developer portal)
+ - USPS_HOST                    (default https://apis.usps.com; test: https://apis-tem.usps.com)
+ - USPS_VERIFY_TIMEOUT_MS       (default 750 — abort token + GET if exceeded; non-blocking by default keeps voice snappy)
+ - USPS_VERIFY_BLOCKING         (optional: true waits for USPS before next prompt; increases perceived lag)
  - INTAKE_VERTICAL               (optional: general | appliance — appliance enables conversational appliance-detail intake + softer scheduling acknowledgements)
 *************************************************/
 
@@ -99,6 +104,12 @@ const {
   interpretAddressStep,
   interpretSchedulingStep
 } = require("./ai_extractor");
+const {
+  normalizeAddressInput,
+  analyzeUsServiceAddressCompleteness,
+  mergeIncrementalServiceAddress
+} = require("./address_validation");
+const uspsAddressVerify = require("./usps_address_verify");
 
 
 
@@ -1626,11 +1637,26 @@ function buildTechnicianNotesPrompt(caller) {
 }
 
 function buildMissingNameAfterIssuePrompt(caller) {
-  const issue = cleanForSpeech(caller.issueSummary || "");
-  if (issue) {
-    return `I'm sorry you're dealing with ${issue}. I didn't catch your name. Do you mind repeating your full name?`;
+  const speech = humanizeIssueSummaryForSpeech(caller.issueSummary || caller.issue || "").trim();
+
+  const withIssueVariants = [
+    (issue) => `I can help with ${issue}. Can I get your full name, please?`,
+    (issue) => `Got it—we'll get somebody lined up for ${issue}. Who should I list as the contact? I'll need your full first and last name.`,
+    (issue) => `Absolutely, I'll note ${issue} for the team. What's your complete first and last name?`
+  ];
+
+  const noIssueVariants = [
+    "Sure—I can help with that request. What's your full name?",
+    "I can definitely help with this today. Who should I list—full first and last name?",
+    "Sounds good—can we start with your full name?"
+  ];
+
+  const i = nextPromptIndex(caller, "missingNameAfterIssuePromptIndex");
+
+  if (speech && speech.length >= 6) {
+    return withIssueVariants[i % withIssueVariants.length](speech);
   }
-  return "I'm sorry, I didn't catch your name. Do you mind repeating your full name?";
+  return noIssueVariants[i % noIssueVariants.length];
 }
 
 
@@ -1640,20 +1666,88 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 
 
+/** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
+function isFinalQuestionWrapUpAnswer(text) {
+  if (isAffirmative(text) || isNegative(text) || isEndCallPhrase(text)) return true;
+  const finalText = normalizeIntentText(text || "");
+  return containsAny(finalText, [
+    "i think that s it", "i think thats it",
+    "that s all", "thats all", "that is all",
+    "bye", "goodbye", "good bye", "see ya", "cya", "catch you later"
+  ]);
+}
+
+/** After caller adds another detail at final_question—short acknowledgement (then a fresh anything-else pitch). */
+function buildAcknowledgeAdditionalFinalIssue(caller) {
+  const pools = [
+    "Got it—I have folded that into what we are passing to the team.",
+    "Thanks, I have slipped that in on the request.",
+    "Okay, I have tucked that detail in for whoever reaches out.",
+    "Perfect—that is noted alongside the rest.",
+    "Sure thing—I have queued that up with the other details."
+  ];
+  const i = nextPromptIndex(caller, "additionalFinalIssueAckIndex");
+  return pools[i % pools.length];
+}
+
 function buildFinalSubmissionPrompt(caller) {
   if (caller.emergencyAlert) {
-    return "If there's anything else I can do for you, please let me know. Otherwise, I'll go ahead and get this submitted as an emergency so one of our team members can reach out to you as soon as possible.";
+    const pools = [
+      "Need anything else from me before I flag this emergency for the crew?",
+      "Anything else you want captured while we are wrapping this urgency up?",
+      "Before I punch this through as an emergency—is there anything else I should pass along?",
+      "If there is nothing else, I will get this flagged so someone reaches out ASAP—sound good?"
+    ];
+    const ei = nextPromptIndex(caller, "finalSubmissionPitchEmergency");
+    return pools[ei % pools.length];
   }
+
   if (caller.leadType === "quote") {
-    return "Is there anything else I can do for you today? Otherwise, someone from our office will reach out to you about your quote request.";
+    const pools = [
+      "Anything else about the quote I should jot down?",
+      "Is there something else about the estimate or timeline you would like me to capture?",
+      "Need me to attach any other quote details before we wrap?",
+      "If you are all set otherwise, someone from our office will follow up on the quote—is there anything else today?"
+    ];
+    const qi = nextPromptIndex(caller, "finalSubmissionPitchQuote");
+    return pools[qi % pools.length];
   }
+
   if (caller.status === "scheduled" && caller.appointmentDate && caller.appointmentTime) {
-    return `Alright, I have you scheduled for a callback on ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. Is there anything else I can do for you today?`;
+    const d = caller.appointmentDate;
+    const tm = caller.appointmentTime;
+    const scheduledPools = [
+      `You are on the calendar for ${d} at ${tm}. Anything else I can line up before we sign off?`,
+      `I have you down for ${d} at ${tm}—anything else you would like me to add?`,
+      `Callback-wise you are set for ${d} at ${tm}. Anything else you would want noted?`,
+      `That ${d} at ${tm} slot is tracked. Need anything else from me today?`
+    ];
+    const si = nextPromptIndex(caller, "finalSubmissionPitchScheduled");
+    return scheduledPools[si % scheduledPools.length];
   }
+
   if (caller.status === "scheduled_pending_confirmation" && caller.appointmentDate && caller.appointmentTime) {
-    return `Alright, I have your requested callback time noted for ${caller.appointmentDate} at ${caller.appointmentTime}. Someone from our office will call you to confirm the details. Is there anything else I can do for you today?`;
+    const d = caller.appointmentDate;
+    const tm = caller.appointmentTime;
+    const pendPools = [
+      `I have got your preference at ${d} ${tm}; the office still confirms timing. Anything else to add meanwhile?`,
+      `${d} at ${tm} is what you asked for—we will confirm from the office. Anything else you would like captured?`,
+      `Noted for ${d} around ${tm} pending confirmation—anything else for the team?`,
+      `Anything else before we wrap, while we wait on confirming ${d} at ${tm}?`
+    ];
+    const pi = nextPromptIndex(caller, "finalSubmissionPitchPendingSched");
+    return pendPools[pi % pendPools.length];
   }
-  return "Is there anything else I can do for you today? Otherwise, someone from our office will reach out to you very soon.";
+
+  const defaultPools = [
+    "Anything else you want passed along before we wrap up?",
+    "Is there something else you would like noted while we have still got a moment?",
+    "Need me to squeeze in anything else—otherwise someone from the office follows up shortly.",
+    "Anything else on your mind today, or are we good to close this out?",
+    "If nothing else jumps out, we will hand this off—is there anything else I can grab for you?"
+  ];
+  const di = nextPromptIndex(caller, "finalSubmissionPitchDefault");
+  return defaultPools[di % defaultPools.length];
 }
 
 
@@ -1668,7 +1762,15 @@ function buildFinalSubmissionPrompt(caller) {
 
 
 function buildFinalSubmissionClose(caller) {
-  return "Great. Thank you for calling Blue Caller Automation. You will hear from one of our team members very soon. Enjoy the rest of your day. Goodbye.";
+  const pools = [
+    "Thanks again for calling Blue Caller Automation—we will pick it up from here. Have a great rest of your day. Goodbye.",
+    "Really appreciate you calling Blue Caller Automation. Enjoy the rest of your day—we will follow up shortly. Goodbye.",
+    "Thank you for calling Blue Caller Automation. That is all wrapped on my side; take care, and goodbye for now.",
+    "Perfect—you are all set here at Blue Caller Automation. Thanks again, and have a great day. Goodbye.",
+    "Thanks for reaching out to Blue Caller Automation today. Someone will be in touch—have a great rest of your day. Goodbye."
+  ];
+  const hi = nextPromptIndex(caller, "finalHangupFarewellIndex");
+  return pools[hi % pools.length];
 }
 
 
@@ -1710,27 +1812,6 @@ function collapseSpacedDigits(value) {
 
 
 
-function normalizeAddressInput(input) {
-  if (!input) return "";
-  let value = cleanForSpeech(input)
-    .replace(/\bcomma\b/gi, "")
-    .replace(/\bdot\b/gi, "")
-    .replace(/[.,]+$/g, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-
-
-
-
-
-
-
-
-  value = collapseSpacedDigits(value);
-  value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
-  value = value.replace(/\s{2,}/g, " ").trim();
-  return value;
-}
 
 
 
@@ -1944,6 +2025,36 @@ function tryExtractAddressAfterAtClause(head) {
   return normalizeAddressInput(addr);
 }
 
+function describeMissingAddressFacets(missingKeys) {
+  const labels = {
+    street: "the street address with house or building number (or PO box)",
+    city: "the city name",
+    state: "the state (either spelled out or the two-letter abbreviation)",
+    zip: "the ZIP code"
+  };
+  const keys = [...new Set(missingKeys || [])];
+  const parts = keys.map((k) => labels[k] || k).filter(Boolean);
+  if (parts.length === 0) return "something I could not recognize from that line";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+function buildIncompleteAddressPrompt(caller, missingKeys) {
+  const detail = describeMissingAddressFacets(missingKeys);
+  const ix = caller ? nextPromptIndex(caller, "incompleteAddressPromptIx") : 0;
+  const pools = [
+    `Before I repeat it back for confirmation I need ${detail}. The format is street number and name, city, state, and ZIP — whichever part you skipped, I'm ready for it.`,
+    `I almost have it—I still need ${detail}. You can spell it slowly or repeat the whole line with each piece.`,
+    `For scheduling I need a complete dispatch line. I'm missing ${detail}—what should I fill in there?`,
+  ];
+  return pools[ix % pools.length];
+}
+
+function callerHasCompleteUsServiceAddress(caller) {
+  return analyzeUsServiceAddressCompleteness(caller.address || "").ok;
+}
+
 function callerHasHarvestableServiceAddress(caller) {
   const a = cleanForSpeech(caller.address || "");
   return Boolean(a && a.length >= 10 && /\d/.test(a));
@@ -1986,39 +2097,146 @@ const SPOKEN_PHONE_DIGIT_MAP = {
 
 
 
-function extractPhoneDigits(text) {
-  const raw = cleanForSpeech(text || "");
-  if (!raw) return "";
+/**
+ * When the caller mistakenly starts with their address during phone capture and then clarifies ("sorry, I meant…"),
+ * keep the corrective tail only so numeric runs are not blindly concatenated across the whole utterance.
+ */
+function extractPhoneCorrectionFocusTail(raw) {
+  const s = cleanForSpeech(raw || "");
+  if (!s || s.length < 5) return "";
 
+  let bestStrong = -1;
+  function bumpStrong(re) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      const end = m.index + m[0].length;
+      if (end > bestStrong) bestStrong = end;
+    }
+  }
 
+  bumpStrong(/\bmeant\s+to\s+(?:say|give)\b/gi);
+  bumpStrong(/\bi\s+meant\b/gi);
+  bumpStrong(/\bsorry\b[\s\S]{0,160}?\bmeant\b/gi);
+  bumpStrong(/\bthat(?:'|\u2019)s\s+(?:my\s+|the\s+)?address\b/gi);
+  bumpStrong(/\bthat\s+s\s+(?:my\s+|the\s+)?address\b/gi);
+  bumpStrong(/\bthat\s+was\s+(?:my\s+|the\s+)?address\b/gi);
+  bumpStrong(/\bnot\s+(?:my\s+|the\s+)?address\b/gi);
+  bumpStrong(/\bcorrection\b/gi);
+  bumpStrong(/\bwrong\s+(?:number|phone|callback)\b/gi);
 
+  if (bestStrong >= 0) {
+    const t = s.slice(bestStrong).trim();
+    return t || s;
+  }
 
-  const numericDigits = raw.replace(/\D/g, "");
-  if (numericDigits.length >= 7) return numericDigits;
+  let bestWeakEnd = -1;
+  function tailLooksLikeDigitsOrSpelledNumber(tail) {
+    const x = tail.trim();
+    if (!x || x.length < 3) return false;
+    if (/^(yeah|yes|no|nah|yep|nope|okay|sure|correct|that\s+|thats\b)/i.test(x)) return false;
+    return /\d/.test(x) || /\b(zero|oh|one|two|three|four|five|six|seven|eight|nine)\b/i.test(x);
+  }
 
+  const weakRes = /\b(?:actually|instead)\b/gi;
+  weakRes.lastIndex = 0;
+  let wm;
+  while ((wm = weakRes.exec(s)) !== null) {
+    const tail = s.slice(wm.index + wm[0].length).trim();
+    if (!tailLooksLikeDigitsOrSpelledNumber(tail)) continue;
+    const end = wm.index + wm[0].length;
+    if (end > bestWeakEnd) bestWeakEnd = end;
+  }
 
+  if (bestWeakEnd >= 0) {
+    const t = s.slice(bestWeakEnd).trim();
+    if (t) return t;
+  }
+  return s;
+}
 
+/** True when substring has common street-ish tokens (paired with glued digit strings to skip naive merges). */
+function looksLexicallyLikeAddressFragmentNearDigits(raw) {
+  const it = normalizeIntentText(raw || "");
+  if (!it || !/\d/.test(raw || "")) return false;
+  return containsAny(it, [
+    "street",
+    "st",
+    "road",
+    "rd",
+    "avenue",
+    "ave",
+    "drive",
+    "dr",
+    "lane",
+    "ln",
+    "boulevard",
+    "blvd",
+    "court",
+    "circle",
+    "way",
+    "highway",
+    "hwy",
+    "suite",
+    "unit",
+    "apartment",
+    "apt",
+    "lake",
+    "address",
+    "po box",
+    "pobox"
+  ]);
+}
+
+function extractPhoneDigitsFromSpokenTokensOnly(raw) {
+  const rawClean = cleanForSpeech(raw || "");
+  if (!rawClean) return "";
 
   const fillerWords = new Set([
-    "my", "callback", "number", "is", "it", "s", "its", "the", "best", "good", "reach", "me",
-    "at", "can", "you", "use", "to", "call", "back", "phone", "cell", "home", "office", "area", "code"
+    "my",
+    "callback",
+    "number",
+    "is",
+    "it",
+    "s",
+    "its",
+    "the",
+    "best",
+    "good",
+    "reach",
+    "me",
+    "at",
+    "can",
+    "you",
+    "use",
+    "to",
+    "call",
+    "back",
+    "phone",
+    "cell",
+    "home",
+    "office",
+    "area",
+    "code",
+    "sorry",
+    "meant",
+    "actually",
+    "instead",
+    "wait",
+    "no",
+    "yes",
+    "yeah",
+    "correction",
+    "address",
+    "i"
   ]);
 
-
-
-
-  const tokens = normalizeIntentText(raw)
+  const tokens = normalizeIntentText(rawClean)
     .split(/\s+/)
     .filter(Boolean)
     .filter((token) => !fillerWords.has(token));
 
-
-
-
   if (!tokens.length) return "";
-
-
-
 
   let digits = "";
   let recognizedCount = 0;
@@ -2036,10 +2254,99 @@ function extractPhoneDigits(text) {
     return "";
   }
 
-
-
-
   return recognizedCount >= 7 ? digits : "";
+}
+
+/** Prefer separated digit groups (street number … phone) or NANP-ish tail of a glued run; no whole-utterance digit merge here. */
+function canonicalNanpDigitRunFromSegment(seg) {
+  const raw = cleanForSpeech(seg || "");
+  if (!raw) return "";
+
+  const runs = raw.split(/\D+/).filter((p) => /^\d+$/.test(p) && p.length > 0);
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const r = runs[i];
+    if (r.length === 11 && r.startsWith("1")) return r.slice(1);
+    if (r.length === 10) return r;
+  }
+
+  if (runs.length === 1) {
+    const r = runs[0];
+    if (r.length === 11 && r.startsWith("1")) return r.slice(1);
+    if (r.length === 10) return r;
+    if (r.length >= 12 && r.length <= 15) return r.slice(-10);
+  }
+
+  const spokenDigitBlock = extractPhoneDigitsFromSpokenTokensOnly(seg);
+  if (!spokenDigitBlock) return "";
+
+  let d = spokenDigitBlock.replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return d.slice(1);
+  if (d.length === 10) return d;
+  return "";
+}
+
+function extractPhoneDigits(text) {
+  const raw = cleanForSpeech(text || "");
+  if (!raw) return "";
+
+  const focused = extractPhoneCorrectionFocusTail(raw);
+  const segments = [];
+  const seen = new Set();
+  const pushSeg = (s) => {
+    const key = normalizedText(s);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    segments.push(s);
+  };
+
+  pushSeg(raw);
+  if (normalizedText(focused) !== normalizedText(raw)) {
+    segments.unshift(focused);
+  }
+
+  let canonicalTen = "";
+  for (const seg of segments) {
+    const c = canonicalNanpDigitRunFromSegment(seg);
+    if (c.length === 10) {
+      canonicalTen = c;
+      break;
+    }
+  }
+  if (canonicalTen.length === 10) return canonicalTen;
+
+  for (const seg of segments) {
+    const spoken = extractPhoneDigitsFromSpokenTokensOnly(seg);
+    if (!spoken || spoken.length < 7) continue;
+    let d = spoken.replace(/\D/g, "");
+    if (!d.length) continue;
+    if (d.length === 11 && d.startsWith("1")) d = d.slice(1);
+    if (d.length >= 7) return d;
+  }
+
+  const numericDigits = raw.replace(/\D/g, "");
+  const correctedFocusApplied = normalizedText(focused) !== normalizedText(raw);
+
+  if (numericDigits.length >= 7 && numericDigits.length <= 11) return numericDigits;
+
+  const tailCanon = canonicalNanpDigitRunFromSegment(focused);
+  if (tailCanon.length === 10) return tailCanon;
+
+  if (
+    numericDigits.length >= 12 &&
+    numericDigits.length <= 15 &&
+    (!looksLexicallyLikeAddressFragmentNearDigits(raw) || correctedFocusApplied)
+  ) {
+    return numericDigits.slice(-10);
+  }
+
+  const tailSpoken = extractPhoneDigitsFromSpokenTokensOnly(focused);
+  if (tailSpoken.length >= 7) {
+    let d = tailSpoken.replace(/\D/g, "");
+    if (d.length === 11 && d.startsWith("1")) d = d.slice(1);
+    return d;
+  }
+
+  return "";
 }
 
 
@@ -2101,7 +2408,8 @@ function isAffirmative(text) {
     "yes", "yeah", "yea", "yep", "yup", "sure", "for sure", "ok", "okay", "absolutely", "definitely", "correct",
     "fine", "works", "that works", "that will work", "thatll work", "that is okay", "thats okay",
     "that is fine", "thats fine", "all right", "alright", "it is", "it is correct", "its correct",
-    "that is correct", "thats correct", "that is right", "thats right"
+    "that is correct", "thats correct", "that is right", "thats right",
+    "yes sir", "yes ma am", "yessir", "you bet", "indeed", "affirmative", "correct that"
   ]);
   if (directYes.has(t)) return true;
 
@@ -2163,16 +2471,36 @@ function isAffirmative(text) {
 function isNegative(text) {
   const t = normalizeIntentText(text);
   if (!t) return false;
-  if (["no", "nope", "nah", "skip", "pass"].includes(t)) return true;
-  if (/^(no|nope|nah)\b/.test(t)) return true;
+
+  const loneWordNegatives = new Set([
+    "no", "nope", "nah", "naw", "nay", "nyet",
+    "negative", "negatory",
+    "skip", "pass", "nada",
+    "uhuh", "uh uh", "nuhuh", "nuh uh", "unuh", "un uh"
+  ]);
+  if (loneWordNegatives.has(t)) return true;
+  if (/^(no|nope|nah|naw|negative)\b/.test(t)) return true;
+
   return containsAny(t, [
-    "no thanks", "no thank you", "not now", "not really", "dont", "do not",
+    "no thanks", "no thank you", "thanks no",
+    "not now", "not really", "dont", "do not",
+    "not at all",
+    "nah im good", "nah i m good", "nah were good", "nah we re good",
+    "nope were good", "nope we re good", "nope i m good", "nah we re all good", "nope we re all good",
     "not an emergency", "not emergency", "non emergency", "nonemergency", "not urgent",
     "standard service", "normal service", "regular service", "something else", "another time", "different time",
     "that s not necessary", "thats not necessary", "that is not necessary",
     "that s not needed", "thats not needed", "that is not needed",
     "that won t be necessary", "that wont be necessary", "that will not be necessary",
-    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that"
+    "never mind", "nevermind", "never mind thanks",
+    "forget it",
+    "i don t think so", "i dont think so", "i do not think so", "i don t need that", "i dont need that", "i do not need that",
+    "rather not",
+    "no way",
+    "absolutely not",
+    "definitely not",
+    "i ll pass", "ill pass",
+    "not interested"
   ]);
 }
 
@@ -2687,7 +3015,7 @@ function buildResumePromptForCurrentStep(caller) {
     case "refrigerator_emergency_choice":
       return "Do you want me to mark this as an emergency?";
     case "appliance_priority_choice":
-      return "Would you like me to flag it as urgent, or mark it as an emergency?";
+      return "Would you like me to mark this as an emergency?";
     case "confirm_phone":
       return `Is ${formatPhoneNumberForSpeech(caller.callbackNumber || caller.phone)} a good number to reach you?`;
     case "get_new_phone":
@@ -2831,7 +3159,7 @@ function isCookingAppliancePriorityCandidate(issue) {
   const cookingAppliance = containsAny(t, ["oven", "cooktop", "cook top", "range", "stove"]);
   const timingProblem = containsAny(t, [
     "not heating", "isn't heating", "isnt heating", "not turning on", "won't turn on", "wont turn on",
-    "not igniting", "won't ignite", "wont ignite", "burner", "burners"
+    "not igniting", "won't ignite", "wont ignite"
   ]);
   return cookingAppliance && timingProblem;
 }
@@ -2841,7 +3169,7 @@ function buildRefrigeratorEmergencyPrompt(caller) {
 }
 
 function buildCookingPriorityPrompt(caller) {
-  return `${buildIssueAcknowledgement(caller)} If you're needing to use it soon, I can go ahead and flag this as urgent. If it needs attention right away, I can mark it as an emergency. Would you like me to flag it as urgent, or mark it as an emergency?`;
+  return `${buildIssueAcknowledgement(caller)} Would you like me to mark this as an emergency?`;
 }
 
 function markUrgent(caller) {
@@ -3008,15 +3336,24 @@ function isDecliningTechnicianNotes(text) {
   const it = normalizeIntentText(text);
   if (!it) return false;
   if (isEndCallPhrase(text)) return true;
+
+  const substantive = looksLikeSubstantiveTechNoteIntent(text);
+  if (!substantive && isNegative(text)) return true;
+
   if (containsAny(it, [
-    "i dont think so", "i do not think so", "dont think so", "don t think so",
-    "not really", "nothing really", "probably not", "i guess not",
-    "no notes", "no note", "nothing for the tech", "nothing for the technician",
+    "no notes", "nonotes", "no note", "zero notes",
+    "nothing for the tech", "nothing for the technician",
     "nothing else", "nothing to add", "nothing more", "no nothing",
+    "nothing really", "nothing more to say", "no nothing thanks",
     "no special instructions", "no instructions", "no thats okay", "no that s okay",
     "were good", "we re good", "were all set", "we re all set", "all set",
     "thats fine", "that s fine", "im good", "i m good", "nah im good",
-    "no thanks", "no thank you", "not now", "skip that", "rather not"
+    "nah i m good",
+    "i dont think so", "i do not think so", "dont think so", "don t think so",
+    "not really",
+    "probably not", "i guess not",
+    "no thanks", "no thank you", "thanks but no thanks",
+    "not now", "skip that", "rather not"
   ])) return true;
   return false;
 }
@@ -3650,8 +3987,16 @@ function combineItemAndDetail(item, detail) {
 function buildApplianceIssueSummary(issue, item) {
   const t = normalizedText(issue);
   if (!item || item.category !== "appliance") return "";
-  if ((item.label === "stove" || item.label === "range" || item.label === "cooktop") && containsAny(t, ["burner", "burners", "not turning on", "won't turn on", "wont turn on", "not igniting", "won't ignite", "wont ignite"])) {
-    return `a ${item.label} burner that is not turning on`;
+  if (
+    (item.label === "stove" || item.label === "range" || item.label === "cooktop") &&
+    containsAny(t, ["burner", "burners"])
+  ) {
+    if (containsAny(t, ["not igniting", "won't ignite", "wont ignite"])) {
+      return `a ${item.label} burner that won't ignite`;
+    }
+    if (containsAny(t, ["not turning on", "won't turn on", "wont turn on"])) {
+      return `a ${item.label} burner that isn't turning on`;
+    }
   }
   if (item.label === "oven" && containsAny(t, ["not heating", "isn't heating", "isnt heating"])) return "an oven that is not heating properly";
   if (item.label === "refrigerator" && normalizedIssueHasFridgeCoolingProblem(t)) return "a refrigerator that is not cooling";
@@ -5267,6 +5612,7 @@ function buildMakePayload(caller) {
     callbackNumber: caller.callbackNumber || caller.phone || "",
     callbackConfirmed: caller.callbackConfirmed === true,
     address: caller.address || "",
+    uspsAddressVerification: caller.uspsAddressVerification || null,
     issue: caller.issue || caller.projectType || "",
     issueSummary: caller.issueSummary || caller.projectType || "",
     urgency: caller.urgency || "normal",
@@ -6136,19 +6482,30 @@ function applyExtractedName(caller, fullName, firstName = "") {
 
 
 function normalizePhoneForStorage(value) {
-  const digits = extractPhoneDigits(value || "");
-  if (digits) return digits;
+  const raw = cleanForSpeech(value || "");
+  let d = extractPhoneDigits(raw || "");
+  const brute = raw.replace(/\D/g, "");
 
+  const correctedTail = normalizedText(extractPhoneCorrectionFocusTail(raw || "")) !== normalizedText(raw || "");
 
+  if (!d && brute.length >= 7 && brute.length <= 11) {
+    if (!(brute.length > 10 && looksLexicallyLikeAddressFragmentNearDigits(raw))) {
+      d = brute;
+    }
+  }
 
+  if (!d && brute.length >= 12 && brute.length <= 15) {
+    if (!looksLexicallyLikeAddressFragmentNearDigits(raw) || correctedTail) {
+      d = brute.slice(-10);
+    }
+  }
 
-  const numericDigits = String(value || "").replace(/\D/g, "");
-  if (numericDigits.length >= 7) return numericDigits;
+  if (!d) return cleanForSpeech(raw);
 
+  if (d.length === 11 && d.startsWith("1")) return d.slice(1);
+  if (d.length > 10) return d.slice(-10);
 
-
-
-  return cleanForSpeech(value || "");
+  return d;
 }
 
 
@@ -6157,6 +6514,23 @@ function normalizePhoneForStorage(value) {
 
 
 
+
+function sendAddressReadBackOrIncomplete(ws, caller, options = {}) {
+  const preambleRaw = typeof options.preamble === "string" ? options.preamble.trim() : "";
+  const trailingSpace = preambleRaw && !/[.!?;:,\-—]$/.test(preambleRaw) ? " " : "";
+  const chk = analyzeUsServiceAddressCompleteness(caller.address || "");
+  if (!chk.ok) {
+    caller.lastStep = "ask_address";
+    const incomplete = buildIncompleteAddressPrompt(caller, chk.missing);
+    const summarized = formatAddressForConfirmation(caller.address || "");
+    const refChunk =
+      summarized.length >= 6 ? ` For reference here's what I've noted — ${summarized}.` : "";
+    sendText(ws, `${preambleRaw ? `${preambleRaw}${trailingSpace}` : ""}${incomplete}${refChunk}`);
+    return;
+  }
+  caller.lastStep = "confirm_address";
+  sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
+}
 
 function sendAfterAddressConfirmed(ws, caller) {
   if (caller.leadType === "quote") {
@@ -6178,6 +6552,23 @@ function sendAfterAddressConfirmed(ws, caller) {
   sendText(ws, buildSchedulingChoicePrompt(caller));
 }
 
+async function finalizeAddressConfirmationAndAdvance(ws, caller) {
+  const enabled = typeof uspsAddressVerify.isConfigured === "function" && uspsAddressVerify.isConfigured();
+  const block =
+    typeof uspsAddressVerify.isBlockingVerify === "function" && uspsAddressVerify.isBlockingVerify();
+  const runPatch = async () => {
+    if (!enabled || typeof uspsAddressVerify.verifyAndPatchCallerBestEffort !== "function") return;
+    try {
+      await uspsAddressVerify.verifyAndPatchCallerBestEffort(caller);
+    } catch (e) {
+      console.error("[USPS address verify]", e && e.message);
+    }
+  };
+  if (enabled && block) await runPatch();
+  sendAfterAddressConfirmed(ws, caller);
+  if (enabled && !block) void runPatch();
+}
+
 
 
 
@@ -6187,13 +6578,12 @@ function sendAfterAddressConfirmed(ws, caller) {
 
 function confirmAndAdvancePhone(ws, caller) {
   caller.callbackConfirmed = true;
-  if (callerHasHarvestableServiceAddress(caller)) {
-    caller.lastStep = "confirm_address";
-    sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
+  if (!callerHasHarvestableServiceAddress(caller)) {
+    caller.lastStep = "ask_address";
+    sendText(ws, buildAddressRequestPrompt(caller));
     return;
   }
-  caller.lastStep = "ask_address";
-  sendText(ws, buildAddressRequestPrompt(caller));
+  sendAddressReadBackOrIncomplete(ws, caller);
 }
 
 const FLEX_CONTACT_INTAKE_STEPS = new Set([
@@ -7064,7 +7454,9 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "appliance_priority_choice": {
-      if (containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
+      const ntCook = normalizeIntentText(text);
+
+      if (containsAny(ntCook, ["emergency", "mark it as an emergency", "mark this as an emergency"])) {
         markEmergency(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
@@ -7074,6 +7466,19 @@ async function handlePrompt(ws, caller, speech) {
         }
         caller.lastStep = nextStep;
         sendText(ws, buildEmergencyIntakePromptAfterPriorAck(caller));
+        return;
+      }
+
+      if (isNegative(text) || containsAny(ntCook, ["normal", "standard", "regular service"])) {
+        markStandardService(caller);
+        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
+        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
+        if (spellingPrompt) {
+          sendText(ws, spellingPrompt);
+          return;
+        }
+        caller.lastStep = nextStep;
+        sendText(ws, buildStandardIntakePromptAfterCookingPriorityAck(caller));
         return;
       }
 
@@ -7090,11 +7495,8 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-      if (
-        isAffirmative(text) &&
-        !containsAny(normalizeIntentText(text), ["emergency", "mark it as an emergency", "mark this as an emergency"])
-      ) {
-        markUrgent(caller);
+      if (isAffirmative(text)) {
+        markEmergency(caller);
         const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
         const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
         if (spellingPrompt) {
@@ -7102,20 +7504,7 @@ async function handlePrompt(ws, caller, speech) {
           return;
         }
         caller.lastStep = nextStep;
-        sendText(ws, buildUrgentIntakePromptAfterPriorAck(caller));
-        return;
-      }
-
-      if (isNegative(text) || containsAny(normalizeIntentText(text), ["normal", "standard", "regular service"])) {
-        markStandardService(caller);
-        const nextStep = caller.fullName ? (hasFullName(caller.fullName) ? resolvePhoneIntakeStep(caller) : "ask_last_name") : "ask_name";
-        const spellingPrompt = caller.fullName ? maybeQueueFirstNameSpelling(caller, nextStep) : "";
-        if (spellingPrompt) {
-          sendText(ws, spellingPrompt);
-          return;
-        }
-        caller.lastStep = nextStep;
-        sendText(ws, buildStandardIntakePromptAfterCookingPriorityAck(caller));
+        sendText(ws, buildEmergencyIntakePromptAfterPriorAck(caller));
         return;
       }
 
@@ -7147,7 +7536,19 @@ async function handlePrompt(ws, caller, speech) {
     case "ask_name": {
       const parsedName = parseFullNameFromSpeech(text);
       if (!parsedName) {
-        sendText(ws, "I'm sorry, I didn't quite catch the name. Could you please say your full name?");
+        const speech = humanizeIssueSummaryForSpeech(caller.issueSummary || "").trim();
+        const hasIssueContext = speech && speech.length >= 6;
+        if (hasIssueContext && !caller.fullName) {
+          const variants = [
+            `Sorry, I missed the name part—could you tell me your full first and last name? I've already noted ${speech}.`,
+            `I caught the detail on ${speech}, but I still need who I'm reaching. What's your full name—first and last?`,
+            `Thanks for that—we still need contact info. What's your complete first and last name? I'll match it up with ${speech}.`
+          ];
+          const j = nextPromptIndex(caller, "askNameParseRetryIndex");
+          sendText(ws, variants[j % variants.length]);
+          return;
+        }
+        sendText(ws, "I'm sorry, I didn't quite catch that. What's your full name—first and last?");
         return;
       }
       caller.fullName = parsedName;
@@ -7548,9 +7949,8 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_address": {
-      caller.address = normalizeAddressInput(text);
-      caller.lastStep = "confirm_address";
-      sendText(ws, `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
+      caller.address = mergeIncrementalServiceAddress(caller.address || "", text);
+      sendAddressReadBackOrIncomplete(ws, caller);
       return;
     }
 
@@ -7563,7 +7963,16 @@ async function handlePrompt(ws, caller, speech) {
 
     case "confirm_address": {
       if (isAffirmative(text) || isAddressConfirmation(text)) {
-        sendAfterAddressConfirmed(ws, caller);
+        if (!callerHasCompleteUsServiceAddress(caller)) {
+          const chk = analyzeUsServiceAddressCompleteness(caller.address || "");
+          caller.lastStep = "ask_address";
+          sendText(
+            ws,
+            `${buildIncompleteAddressPrompt(caller, chk.missing)} You can restate the full dispatch line whenever you're ready — street number and name, city, state, then ZIP.`
+          );
+          return;
+        }
+        await finalizeAddressConfirmationAndAdvance(ws, caller);
         return;
       }
       if (isNegative(text)) {
@@ -7573,8 +7982,8 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       if (looksLikeAddressCorrection(text)) {
-        caller.address = normalizeAddressInput(text);
-        sendText(ws, `Got it. Let me read that back — ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
+        caller.address = mergeIncrementalServiceAddress(caller.address || "", text);
+        sendAddressReadBackOrIncomplete(ws, caller);
         return;
       }
 
@@ -7585,7 +7994,16 @@ async function handlePrompt(ws, caller, speech) {
         const addressDecision = await safeAIInterpret("AI ADDRESS", interpretAddressStep, text, buildAIContext(caller));
         if (addressDecision && addressDecision.intent && addressDecision.intent !== "unclear") {
           if (addressDecision.intent === "confirm_address") {
-            sendAfterAddressConfirmed(ws, caller);
+            if (!callerHasCompleteUsServiceAddress(caller)) {
+              const chk = analyzeUsServiceAddressCompleteness(caller.address || "");
+              caller.lastStep = "ask_address";
+              sendText(
+                ws,
+                `${buildIncompleteAddressPrompt(caller, chk.missing)} Once I have street, city, state, and ZIP on one line we'll lock it in.`
+              );
+              return;
+            }
+            await finalizeAddressConfirmationAndAdvance(ws, caller);
             return;
           }
           if (addressDecision.intent === "reject_address") {
@@ -7595,8 +8013,11 @@ async function handlePrompt(ws, caller, speech) {
             return;
           }
           if (addressDecision.intent === "correct_address" && addressDecision.corrected_address) {
-            caller.address = normalizeAddressInput(addressDecision.corrected_address);
-            sendText(ws, `Got it. Let me read that back — ${formatAddressForConfirmation(caller.address)}. Is that correct?`);
+            caller.address = mergeIncrementalServiceAddress(
+              caller.address || "",
+              normalizeAddressInput(addressDecision.corrected_address)
+            );
+            sendAddressReadBackOrIncomplete(ws, caller);
             return;
           }
         }
@@ -8301,13 +8722,7 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
-      const finalText = normalizeIntentText(text);
-      if (
-        isAffirmative(text) ||
-        isNegative(text) ||
-        isEndCallPhrase(text) ||
-        containsAny(finalText, ["i think that s it", "i think thats it", "that s all", "thats all", "that is all", "bye", "goodbye"])
-      ) {
+      if (isFinalQuestionWrapUpAnswer(text)) {
         queuePrimaryLeadAndBooking(caller);
         closeSession(ws, buildFinalSubmissionClose(caller));
         return;
@@ -8323,7 +8738,7 @@ async function handlePrompt(ws, caller, speech) {
       appendAdditionalIssue(caller, text);
       caller.makeSent = false;
       queuePrimaryLeadAndBooking(caller, { forceLead: true });
-      sendText(ws, `Got it — I'll add that as well. ${buildFinalSubmissionPrompt(caller)}`);
+      sendText(ws, `${buildAcknowledgeAdditionalFinalIssue(caller)} ${buildFinalSubmissionPrompt(caller)}`);
       return;
     }
 
