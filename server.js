@@ -1658,13 +1658,30 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 
 
-/** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
+/** True when caller is done with the anything-else pass. */
 function isFinalQuestionWrapUpAnswer(text) {
-  if (isAffirmative(text) || isNegative(text) || isEndCallPhrase(text)) return true;
   const finalText = normalizeIntentText(text || "");
+  if (!finalText) return false;
+
+  const directWrapUps = new Set([
+    "no", "nope", "nah", "naw", "negative",
+    "no thanks", "no thank you", "not really",
+    "nothing", "nothing else", "nothing more", "nothing to add",
+    "i think that s it", "i think thats it",
+    "that s all", "thats all", "that is all",
+    "that s it", "thats it", "that is it",
+    "that ll do it", "thatll do it", "that will do it",
+    "all set", "i m good", "im good", "we re good", "were good",
+    "bye", "goodbye", "good bye", "see ya", "cya", "catch you later"
+  ]);
+  if (directWrapUps.has(finalText)) return true;
+
   return containsAny(finalText, [
     "i think that s it", "i think thats it",
     "that s all", "thats all", "that is all",
+    "nothing else", "nothing more", "nothing to add",
+    "no other notes", "no other details", "no additional notes", "no additional details",
+    "we re all good", "were all good", "we are all good",
     "bye", "goodbye", "good bye", "see ya", "cya", "catch you later"
   ]);
 }
@@ -9294,6 +9311,14 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
-});
+if (require.main === module) {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
+  });
+}
+
+module.exports = {
+  __test: {
+    isFinalQuestionWrapUpAnswer,
+  },
+};
