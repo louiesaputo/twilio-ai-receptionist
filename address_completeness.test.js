@@ -101,9 +101,11 @@ assertComplete("123 Main Street Springfield Illinois 62704");
 assertComplete("123 Main Street New York New York 10001");
 assertComplete("123 Main Street Los Angeles California 90001");
 assertComplete("123 Main Street Springfield IL 62704");
+assertComplete("123 Main Street New York NY 10001");
 assertComplete("123 Main Street, Springfield Illinois 62704");
 
 assertMissingCity("123 Main Street Illinois 62704");
+assertMissingCity("123 Main Street NY 10001");
 assertMissingCity("123 Main Street, Illinois 62704");
 
 console.log("address completeness tests passed");
