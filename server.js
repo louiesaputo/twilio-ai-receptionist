@@ -1834,6 +1834,46 @@ const US_STATE_FULL_SNIPPETS_FOR_DISPATCH = [
   "washington dc","washington d c","west virginia","wisconsin","wyoming",
 ];
 
+const US_STATE_FULL_SNIPPETS_SORTED_FOR_DISPATCH = [...US_STATE_FULL_SNIPPETS_FOR_DISPATCH]
+  .sort((a, b) => b.length - a.length);
+
+function escapeDispatchRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const US_STATE_FULL_PATTERN_FOR_DISPATCH = US_STATE_FULL_SNIPPETS_SORTED_FOR_DISPATCH
+  .map((snip) => escapeDispatchRegex(snip).replace(/\s+/g, "\\s+"))
+  .join("|");
+
+const DISPATCH_STREET_SUFFIX_TOKENS = new Set([
+  "st", "street", "rd", "road", "ave", "avenue", "blvd", "boulevard", "dr", "drive",
+  "ln", "lane", "ct", "court", "pl", "place", "way", "cir", "circle", "hwy", "highway",
+  "pkwy", "parkway", "terrace", "ter", "trail", "trl"
+]);
+
+function streetSuffixTokenForDispatch(token) {
+  return cleanForSpeech(token || "").replace(/\./g, "").toLowerCase();
+}
+
+function trailingCityAfterStreetSuffixForDispatch(prefixBeforeState) {
+  const tokens = cleanForSpeech(prefixBeforeState || "").split(/\s+/).filter(Boolean);
+  if (tokens.length < 4) return "";
+  let lastSuffixIx = -1;
+  for (let i = 1; i < tokens.length; i += 1) {
+    if (DISPATCH_STREET_SUFFIX_TOKENS.has(streetSuffixTokenForDispatch(tokens[i]))) {
+      lastSuffixIx = i;
+    }
+  }
+  if (lastSuffixIx < 1 || lastSuffixIx >= tokens.length - 1) return "";
+  return tokens.slice(lastSuffixIx + 1).join(" ");
+}
+
+function endsWithStreetSuffixForDispatch(prefixBeforeState) {
+  const tokens = cleanForSpeech(prefixBeforeState || "").split(/\s+/).filter(Boolean);
+  if (!tokens.length) return false;
+  return DISPATCH_STREET_SUFFIX_TOKENS.has(streetSuffixTokenForDispatch(tokens[tokens.length - 1]));
+}
+
 function abbreviationIsStreetSuffixForDispatch(abbrUpper) {
   return ["ST","DR","RD","LN","AVE","BLVD","CT","PL","HWY","PKWY"].includes(abbrUpper);
 }
@@ -1884,20 +1924,33 @@ function analyzeUsServiceAddressCompleteness(raw) {
       if (!(cityCand.length === 2 && US_STATE_ABBREV_FOR_DISPATCH.has(cityCand.toUpperCase())))
         hasCity = cityCand.length >= 2;
     } else if (/\b\d{5}\b/.test(tail) && containsAny(normalizedText(tail), US_STATE_FULL_SNIPPETS_FOR_DISPATCH)) {
-      const withoutZipState = tail.replace(/\b\d{5}(?:-\d{4})?\b\s*$/i, "").trim();
-      hasCity = withoutZipState.replace(/\s+/g, "").length >= 2;
+      const fullStateTail = new RegExp(
+        `^(.+?)\\s+(?:${US_STATE_FULL_PATTERN_FOR_DISPATCH})\\s+\\d{5}(?:-\\d{4})?\\s*$`,
+        "i"
+      ).exec(tail);
+      const cityCand = fullStateTail ? cleanForSpeech(fullStateTail[1]) : "";
+      hasCity = cityCand.length >= 2;
     } else {
       const stripped = tail.replace(/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b\s*$/i, "").trim();
       hasCity = stripped.length >= 3;
     }
   } else if (commaParts.length === 1) {
-    const oneLine =
+    const oneLineWithAbbrev =
       /^(.+?\d.+?)\s+([a-z\s'.-]+(?:\s+[a-z\s'.-]+){0,3})\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\s*$/i.exec(safe.trim());
-    if (oneLine) {
-      const cityChunk = cleanForSpeech(oneLine[2]);
-      hasCity =
-        cityChunk.length >= 2 &&
-        !US_STATE_FULL_SNIPPETS_FOR_DISPATCH.some((snip) => snip.replace(/\s+/g, "") === cityChunk.replace(/\s+/g, ""));
+    const abbrevPrefix = /^(.+?\d.*?)\s+([A-Z]{2})\s+\d{5}(?:-\d{4})?\s*$/i.exec(safe.trim());
+    const fullStatePrefix = new RegExp(
+      `^(.+?\\d.*?)\\s+(?:${US_STATE_FULL_PATTERN_FOR_DISPATCH})\\s+\\d{5}(?:-\\d{4})?\\s*$`,
+      "i"
+    ).exec(safe.trim());
+    if (abbrevPrefix) {
+      let cityChunk = cleanForSpeech(trailingCityAfterStreetSuffixForDispatch(abbrevPrefix[1]));
+      if (!cityChunk && !endsWithStreetSuffixForDispatch(abbrevPrefix[1]) && oneLineWithAbbrev) {
+        cityChunk = cleanForSpeech(oneLineWithAbbrev[2]);
+      }
+      hasCity = cityChunk.length >= 2;
+    } else if (fullStatePrefix) {
+      const cityChunk = cleanForSpeech(trailingCityAfterStreetSuffixForDispatch(fullStatePrefix[1]));
+      hasCity = cityChunk.length >= 2;
     }
   }
 
