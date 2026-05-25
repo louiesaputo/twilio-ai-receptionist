@@ -1834,6 +1834,22 @@ const US_STATE_FULL_SNIPPETS_FOR_DISPATCH = [
   "washington dc","washington d c","west virginia","wisconsin","wyoming",
 ];
 
+const US_STATE_FULL_SNIPPETS_SORTED_FOR_DISPATCH = [...US_STATE_FULL_SNIPPETS_FOR_DISPATCH]
+  .sort((a, b) => b.length - a.length);
+
+function escapeDispatchRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const US_STATE_FULL_PATTERN_FOR_DISPATCH = US_STATE_FULL_SNIPPETS_SORTED_FOR_DISPATCH
+  .map((snip) => escapeDispatchRegex(snip).replace(/\s+/g, "\\s+"))
+  .join("|");
+
+function cityChunkIsStateOnlyForDispatch(cityChunk) {
+  const compact = cleanForSpeech(cityChunk || "").replace(/\s+/g, "").toLowerCase();
+  return US_STATE_FULL_SNIPPETS_FOR_DISPATCH.some((snip) => snip.replace(/\s+/g, "") === compact);
+}
+
 function abbreviationIsStreetSuffixForDispatch(abbrUpper) {
   return ["ST","DR","RD","LN","AVE","BLVD","CT","PL","HWY","PKWY"].includes(abbrUpper);
 }
@@ -1884,20 +1900,29 @@ function analyzeUsServiceAddressCompleteness(raw) {
       if (!(cityCand.length === 2 && US_STATE_ABBREV_FOR_DISPATCH.has(cityCand.toUpperCase())))
         hasCity = cityCand.length >= 2;
     } else if (/\b\d{5}\b/.test(tail) && containsAny(normalizedText(tail), US_STATE_FULL_SNIPPETS_FOR_DISPATCH)) {
-      const withoutZipState = tail.replace(/\b\d{5}(?:-\d{4})?\b\s*$/i, "").trim();
-      hasCity = withoutZipState.replace(/\s+/g, "").length >= 2;
+      const fullStateTail = new RegExp(
+        `^(.+?)\\s+(?:${US_STATE_FULL_PATTERN_FOR_DISPATCH})\\s+\\d{5}(?:-\\d{4})?\\s*$`,
+        "i"
+      ).exec(tail);
+      const cityCand = fullStateTail ? cleanForSpeech(fullStateTail[1]) : "";
+      hasCity = cityCand.length >= 2 && !cityChunkIsStateOnlyForDispatch(cityCand);
     } else {
       const stripped = tail.replace(/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b\s*$/i, "").trim();
       hasCity = stripped.length >= 3;
     }
   } else if (commaParts.length === 1) {
-    const oneLine =
+    const oneLineWithAbbrev =
       /^(.+?\d.+?)\s+([a-z\s'.-]+(?:\s+[a-z\s'.-]+){0,3})\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\s*$/i.exec(safe.trim());
+    const oneLineWithFullState = new RegExp(
+      `^(.+?\\d.+?)\\s+([a-z\\s'.-]+(?:\\s+[a-z\\s'.-]+){0,3})\\s+(?:${US_STATE_FULL_PATTERN_FOR_DISPATCH})\\s+\\d{5}(?:-\\d{4})?\\s*$`,
+      "i"
+    ).exec(safe.trim());
+    const oneLine = oneLineWithAbbrev || oneLineWithFullState;
     if (oneLine) {
       const cityChunk = cleanForSpeech(oneLine[2]);
       hasCity =
         cityChunk.length >= 2 &&
-        !US_STATE_FULL_SNIPPETS_FOR_DISPATCH.some((snip) => snip.replace(/\s+/g, "") === cityChunk.replace(/\s+/g, ""));
+        !cityChunkIsStateOnlyForDispatch(cityChunk);
     }
   }
 
