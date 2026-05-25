@@ -94,7 +94,7 @@ function assertComplete(address) {
 function assertMissingCity(address) {
   const result = analyzeUsServiceAddressCompleteness(address);
   assert.strictEqual(result.ok, false, `${address} should be incomplete`);
-  assert.deepStrictEqual(result.missing, ["city"]);
+  assert.deepStrictEqual(Array.from(result.missing), ["city"]);
 }
 
 assertComplete("123 Main Street Springfield Illinois 62704");
