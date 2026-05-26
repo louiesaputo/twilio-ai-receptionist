@@ -1,7 +1,21 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const Module = require("node:module");
 
+const originalLoad = Module._load;
+Module._load = function loadWithServerTestStubs(request, parent, isMain) {
+  if (request === "ws") {
+    return {
+      WebSocketServer: class WebSocketServer {
+        on() {}
+        handleUpgrade() {}
+      },
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
 const { __test } = require("./server");
+Module._load = originalLoad;
 
 test("complete Connecticut service addresses accept CT before ZIP", () => {
   const result = __test.analyzeUsServiceAddressCompleteness("123 Main St, Hartford, CT 06103");
