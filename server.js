@@ -1660,13 +1660,23 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 /** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
 function isFinalQuestionWrapUpAnswer(text) {
-  if (isAffirmative(text) || isNegative(text) || isEndCallPhrase(text)) return true;
   const finalText = normalizeIntentText(text || "");
+  if (!finalText) return false;
+  if (isEndCallPhrase(text)) return true;
+  if (isFinalQuestionSubstantiveContinuation(text)) return false;
+  if (isAffirmative(text) || isNegative(text)) return true;
   return containsAny(finalText, [
     "i think that s it", "i think thats it",
     "that s all", "thats all", "that is all",
     "bye", "goodbye", "good bye", "see ya", "cya", "catch you later"
   ]);
+}
+
+function isFinalQuestionSubstantiveContinuation(text) {
+  const finalText = normalizeIntentText(text || "");
+  if (!/^(no|nope|nah|naw|negative)\b/.test(finalText)) return false;
+  if (looksLikeSubstantiveTechNoteIntent(text)) return true;
+  return /^(no|nope|nah|naw|negative)\s+(?:but|and|also|actually|please|can|could|make|note|the|there|it|one|another)\b/.test(finalText);
 }
 
 /** After caller adds another detail at final_question—short acknowledgement (then a fresh anything-else pitch). */
@@ -1855,8 +1865,10 @@ function analyzeUsServiceAddressCompleteness(raw) {
   let hasStateAbbrev = false;
   const anchored = safe.trim();
   for (const abbr of US_STATE_ABBREV_FOR_DISPATCH) {
-    if (abbreviationIsStreetSuffixForDispatch(abbr)) continue;
-    const re = new RegExp(`(?:^|[,\\s])${abbr}(?:\\s|,|$|\\s{1,12}\\d{5})`, "i");
+    const ambiguousStreetSuffix = abbreviationIsStreetSuffixForDispatch(abbr);
+    const re = ambiguousStreetSuffix
+      ? new RegExp(`(?:^|[,\\s])${abbr}\\s+\\d{5}(?:-\\d{4})?(?:\\s|,|$)`, "i")
+      : new RegExp(`(?:^|[,\\s])${abbr}(?:\\s|,|$|\\s{1,12}\\d{5})`, "i");
     if (re.test(anchored)) {
       hasStateAbbrev = true;
       break;
@@ -9294,6 +9306,17 @@ wss.on("connection", (ws, request) => {
 
 
 
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
-});
+if (require.main === module) {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
+  });
+}
+
+module.exports = {
+  app,
+  server,
+  __test: {
+    analyzeUsServiceAddressCompleteness,
+    isFinalQuestionWrapUpAnswer,
+  },
+};
