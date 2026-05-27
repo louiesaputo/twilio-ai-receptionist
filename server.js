@@ -1838,6 +1838,71 @@ function abbreviationIsStreetSuffixForDispatch(abbrUpper) {
   return ["ST","DR","RD","LN","AVE","BLVD","CT","PL","HWY","PKWY"].includes(abbrUpper);
 }
 
+const STREET_SUFFIX_TOKENS_FOR_DISPATCH = [
+  "street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr",
+  "boulevard", "blvd", "court", "ct", "circle", "cir", "way", "highway", "hwy",
+  "parkway", "pkwy", "route", "place", "pl", "terrace", "ter"
+];
+
+const US_STATE_FULL_SNIPPETS_LONGEST_FOR_DISPATCH = [...US_STATE_FULL_SNIPPETS_FOR_DISPATCH]
+  .sort((a, b) => b.length - a.length);
+
+function hasCityEvidenceBeforeFinalState(rawBeforeState) {
+  const before = cleanForSpeech(rawBeforeState || "").replace(/[,\s]+$/g, "").trim();
+  if (!before) return false;
+
+  const commaParts = before.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
+  if (commaParts.length >= 2) {
+    const cityPart = commaParts[commaParts.length - 1]
+      .replace(/^(?:apt|apartment|unit|suite|ste|#)\b\.?\s*/i, "")
+      .trim();
+    return cityPart.length >= 2 && !/^\d+$/.test(cityPart);
+  }
+
+  const suffixAlternation = STREET_SUFFIX_TOKENS_FOR_DISPATCH
+    .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const suffixThenCity = new RegExp(`\\b(?:${suffixAlternation})\\b\\s+(.+)$`, "i").exec(before);
+  if (!suffixThenCity) return false;
+
+  const cityPart = cleanForSpeech(suffixThenCity[1] || "")
+    .replace(/\b\d{5}(?:-\d{4})?\b/g, "")
+    .trim();
+  return cityPart.length >= 2 && !/^\d+$/.test(cityPart);
+}
+
+function findFinalDispatchState(safe) {
+  const anchored = cleanForSpeech(safe || "").trim();
+  if (!anchored) return null;
+
+  for (const abbr of US_STATE_ABBREV_FOR_DISPATCH) {
+    const re = new RegExp(`(^|[,\\s])(${abbr})\\s*(?:\\d{5}(?:-\\d{4})?)?\\s*$`, "i");
+    const m = re.exec(anchored);
+    if (!m) continue;
+
+    const beforeState = anchored.slice(0, m.index).trim();
+    if (abbreviationIsStreetSuffixForDispatch(abbr) && !hasCityEvidenceBeforeFinalState(beforeState)) {
+      continue;
+    }
+
+    return { kind: "abbr", value: abbr, beforeState };
+  }
+
+  for (const stateName of US_STATE_FULL_SNIPPETS_LONGEST_FOR_DISPATCH) {
+    const statePattern = stateName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    const re = new RegExp(`(^|[,\\s])(${statePattern})\\s*(?:\\d{5}(?:-\\d{4})?)?\\s*$`, "i");
+    const m = re.exec(anchored);
+    if (!m) continue;
+
+    const beforeState = anchored.slice(0, m.index).trim();
+    if (!hasCityEvidenceBeforeFinalState(beforeState)) continue;
+
+    return { kind: "full", value: stateName, beforeState };
+  }
+
+  return null;
+}
+
 function analyzeUsServiceAddressCompleteness(raw) {
   const working = normalizeAddressInput(raw || "");
   const missing = [];
@@ -1847,24 +1912,12 @@ function analyzeUsServiceAddressCompleteness(raw) {
   }
 
   const hasZip = /\b\d{5}(?:-\d{4})?\b/.test(safe);
-  const nt = normalizedText(safe);
 
   let hasStreet = /^\s*\d{1,6}[A-Za-z\-#]?\s+\S/.test(safe.trim());
   if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(safe)) hasStreet = true;
 
-  let hasStateAbbrev = false;
-  const anchored = safe.trim();
-  for (const abbr of US_STATE_ABBREV_FOR_DISPATCH) {
-    if (abbreviationIsStreetSuffixForDispatch(abbr)) continue;
-    const re = new RegExp(`(?:^|[,\\s])${abbr}(?:\\s|,|$|\\s{1,12}\\d{5})`, "i");
-    if (re.test(anchored)) {
-      hasStateAbbrev = true;
-      break;
-    }
-  }
-
-  const hasFullState = containsAny(nt, US_STATE_FULL_SNIPPETS_FOR_DISPATCH);
-  const hasState = hasStateAbbrev || hasFullState;
+  const stateInfo = findFinalDispatchState(safe);
+  const hasState = Boolean(stateInfo);
 
   const commaParts = safe.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
 
