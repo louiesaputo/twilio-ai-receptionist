@@ -17,8 +17,21 @@ function loadServerHelpers() {
 `
   );
 
+  function sandboxRequire(request) {
+    if (request === "ws") {
+      return {
+        WebSocketServer: class {
+          constructor() {}
+          on() {}
+          handleUpgrade() {}
+        }
+      };
+    }
+    return require(request);
+  }
+
   const sandbox = {
-    require,
+    require: sandboxRequire,
     module: { exports: {} },
     exports: null,
     console: { log() {}, error() {}, warn() {} },
