@@ -1658,8 +1658,17 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 
 
+function isFinalQuestionAdditionalDetail(text) {
+  const it = normalizeIntentText(text || "");
+  if (!it) return false;
+  if (looksLikeSubstantiveTechNoteIntent(text)) return true;
+  if (isEndCallPhrase(text)) return false;
+  return /^(?:no|nope|nah|naw|negative|yes|yeah|yep|yup)\b.*\b(?:one more|another thing|also|actually|wait|hold on|forgot|add|mention|note|tell|make sure)\b/.test(it);
+}
+
 /** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
 function isFinalQuestionWrapUpAnswer(text) {
+  if (isFinalQuestionAdditionalDetail(text)) return false;
   if (isAffirmative(text) || isNegative(text) || isEndCallPhrase(text)) return true;
   const finalText = normalizeIntentText(text || "");
   return containsAny(finalText, [
@@ -1834,8 +1843,24 @@ const US_STATE_FULL_SNIPPETS_FOR_DISPATCH = [
   "washington dc","washington d c","west virginia","wisconsin","wyoming",
 ];
 
-function abbreviationIsStreetSuffixForDispatch(abbrUpper) {
-  return ["ST","DR","RD","LN","AVE","BLVD","CT","PL","HWY","PKWY"].includes(abbrUpper);
+function dispatchStateAbbrevSearchSegments(safe) {
+  const commaParts = String(safe || "")
+    .split(",")
+    .map((p) => cleanForSpeech(p))
+    .filter(Boolean);
+  if (commaParts.length >= 2) return commaParts.slice(1);
+  return [cleanForSpeech(safe || "")].filter(Boolean);
+}
+
+function hasStateAbbrevForDispatch(safe) {
+  const segments = dispatchStateAbbrevSearchSegments(safe);
+  for (const segment of segments) {
+    for (const abbr of US_STATE_ABBREV_FOR_DISPATCH) {
+      const re = new RegExp(`(?:^|\\s)${abbr}(?:\\s+\\d{5}(?:-\\d{4})?|\\s*$)`, "i");
+      if (re.test(segment)) return true;
+    }
+  }
+  return false;
 }
 
 function analyzeUsServiceAddressCompleteness(raw) {
@@ -1852,17 +1877,7 @@ function analyzeUsServiceAddressCompleteness(raw) {
   let hasStreet = /^\s*\d{1,6}[A-Za-z\-#]?\s+\S/.test(safe.trim());
   if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(safe)) hasStreet = true;
 
-  let hasStateAbbrev = false;
-  const anchored = safe.trim();
-  for (const abbr of US_STATE_ABBREV_FOR_DISPATCH) {
-    if (abbreviationIsStreetSuffixForDispatch(abbr)) continue;
-    const re = new RegExp(`(?:^|[,\\s])${abbr}(?:\\s|,|$|\\s{1,12}\\d{5})`, "i");
-    if (re.test(anchored)) {
-      hasStateAbbrev = true;
-      break;
-    }
-  }
-
+  const hasStateAbbrev = hasStateAbbrevForDispatch(safe);
   const hasFullState = containsAny(nt, US_STATE_FULL_SNIPPETS_FOR_DISPATCH);
   const hasState = hasStateAbbrev || hasFullState;
 
