@@ -1658,13 +1658,34 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 
 
-/** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
+function hasSubstantiveFinalQuestionContent(text) {
+  const t = normalizeIntentText(text || "");
+  if (!t) return false;
+  const stripped = t
+    .replace(/^(yes|yeah|yep|yup|sure|ok|okay|no|nope|nah|naw|negative)\b\s*/i, "")
+    .replace(/^(but|actually|wait|also|and)\b\s*/i, "")
+    .trim();
+  if (!stripped) return false;
+  if (containsAny(stripped, [
+    "that s all", "thats all", "that is all",
+    "nothing else", "nothing more", "no thanks", "no thank you",
+    "we re good", "were good", "we are good", "i m good", "im good", "i am good",
+    "all set", "that is it", "that s it", "thats it"
+  ])) return false;
+  return stripped.split(/\s+/).filter(Boolean).length >= 2;
+}
+
+/** True when caller is done with the anything-else pass (no, nope, explicit goodbye, etc.). */
 function isFinalQuestionWrapUpAnswer(text) {
-  if (isAffirmative(text) || isNegative(text) || isEndCallPhrase(text)) return true;
+  if (hasSubstantiveFinalQuestionContent(text)) return false;
   const finalText = normalizeIntentText(text || "");
+  if (!finalText) return false;
+  if (isEndCallPhrase(text) || isNegative(text)) return true;
+  if (/^(yes|yeah|yep|yup|sure|ok|okay)\b\s*(we re|were|we are|i m|im|i am)?\s*(good|all good|all set|done|finished)\b/.test(finalText)) return true;
   return containsAny(finalText, [
     "i think that s it", "i think thats it",
     "that s all", "thats all", "that is all",
+    "nothing else", "nothing more", "no thanks", "no thank you",
     "bye", "goodbye", "good bye", "see ya", "cya", "catch you later"
   ]);
 }
@@ -2762,9 +2783,13 @@ function isPostIntakeContactUpdateIntent(text) {
     "update my contact information", "update the contact information", "update contact information",
     "i want to change my contact", "i need to change my contact",
     "i want to update my contact", "i need to update my contact",
-    "wrong contact info", "wrong contact information", "incorrect contact info"
+    "wrong contact info", "wrong contact information", "incorrect contact info",
+    "my phone number is wrong", "the phone number is wrong",
+    "my callback number is wrong", "the callback number is wrong",
+    "wrong phone number", "wrong callback number"
   ])) return true;
-  return isChangeContactPersonIntent(text);
+  const contactPersonSignal = /\b(contact|name|person|spouse|wife|husband)\b/.test(t);
+  return contactPersonSignal && isChangeContactPersonIntent(text);
 }
 
 
@@ -2881,6 +2906,11 @@ function afterCallbackDetailsUpdated(ws, caller, { nameAlsoUpdated = false } = {
   const updateLine = nameAlsoUpdated
     ? "Got it. I've updated the callback number and contact name."
     : "Got it. I've updated the callback number.";
+
+  if (caller.makeSent || caller.makeSending) {
+    caller.makeSent = false;
+    queuePrimaryLeadAndBooking(caller, { forceLead: true });
+  }
 
   if (resume && resume !== "ask_notes") {
     caller.lastStep = resume;
@@ -5340,6 +5370,7 @@ function getOrCreateCaller(key) {
       calendarSlotConfirmed: false,
       bookingSent: false,
       bookingSending: false,
+      pendingBookingResubmission: false,
       makeSent: false,
       makeSending: false,
       demoFollowupRequested: false,
@@ -5948,7 +5979,11 @@ function buildBookingPayload(caller) {
 
 
 async function sendBookingToMake(caller) {
-  if (caller.bookingSent || caller.bookingSending) return;
+  if (caller.bookingSent) return;
+  if (caller.bookingSending) {
+    caller.pendingBookingResubmission = true;
+    return;
+  }
   const payload = buildBookingPayload(caller);
   if (!payload) {
     console.warn("[BOOKING SKIPPED]", JSON.stringify({
@@ -5968,6 +6003,14 @@ async function sendBookingToMake(caller) {
     caller.bookingSent = true;
   } else {
     console.error("[BOOKING FAILED]", result ? result.statusCode : "no response");
+  }
+  if (caller.pendingBookingResubmission) {
+    caller.pendingBookingResubmission = false;
+    if (!caller.bookingSent) {
+      queueBackgroundTask("BOOKING RESUBMIT", async () => {
+        await sendBookingToMake(caller);
+      });
+    }
   }
 }
 
