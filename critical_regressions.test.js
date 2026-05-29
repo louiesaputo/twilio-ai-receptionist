@@ -32,6 +32,8 @@ module.exports = {
     return app;
   };
   express.static = () => () => {};
+  express.urlencoded = () => () => {};
+  express.json = () => () => {};
 
   const context = {
     __dirname,
