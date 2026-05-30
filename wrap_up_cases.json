@@ -1,0 +1,16 @@
+[
+  { "name": "nope_thats_it", "text": "nope, that's it", "expect_wrap_up": true },
+  { "name": "nothing_else", "text": "nothing else", "expect_wrap_up": true },
+  { "name": "thatll_do", "text": "that'll do", "expect_wrap_up": true },
+  { "name": "thatll_do_it", "text": "that'll do it", "expect_wrap_up": true },
+  { "name": "uh_nope_filler", "text": "uh, nope", "expect_wrap_up": true },
+  { "name": "yeah_no", "text": "yeah, no", "expect_wrap_up": true },
+  { "name": "uh_no_were_good", "text": "uh, no we're good", "expect_wrap_up": true },
+  { "name": "all_set", "text": "we're all set", "expect_wrap_up": true },
+  { "name": "nope_alone", "text": "nope", "expect_wrap_up": true },
+  { "name": "no_thanks_closing", "text": "no thanks that's all", "expect_wrap_up": true },
+  { "name": "goodbye", "text": "goodbye", "expect_wrap_up": true },
+  { "name": "nothing_else_thanks", "text": "nothing else thanks", "expect_wrap_up": true },
+  { "name": "actually_one_more_thing", "text": "actually I need to change my address", "expect_wrap_up": false },
+  { "name": "gate_code_addition", "text": "yes can you add that the gate code is 1234", "expect_wrap_up": false }
+]

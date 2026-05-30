@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run test:local",
+    "test:address": "node run_address_validation_cases.js",
+    "test:wrapup": "node run_wrap_up_cases.js",
+    "test:local": "node run_address_validation_cases.js && node run_wrap_up_cases.js",
+    "test:extractors": "node run_regression_cases.js"
   },
   "keywords": [],
   "author": "",

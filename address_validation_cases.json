@@ -1,0 +1,80 @@
+[
+  {
+    "name": "analyze_full_three_part_with_commas",
+    "description": "Standard street, city, state + ZIP (comma-separated).",
+    "address": "248 Lake Street, Columbus, OH 43215",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "analyze_full_zip_plus_four",
+    "address": "10 Main Rd, Akron, OH 44308-1201",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "analyze_full_single_line_spaces",
+    "address": "123 Main St Springfield OH 43201",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "analyze_po_box_line",
+    "address": "P.O. Box 501, Akron, OH 44308",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "analyze_spelled_out_state_and_zip",
+    "address": "125 Oak Avenue, Bowling Green Kentucky 42101",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "analyze_street_only_rejected",
+    "address": "123 Main Street",
+    "expect": { "ok": false, "missing_includes": ["zip"] }
+  },
+  {
+    "name": "analyze_city_state_but_no_zip",
+    "address": "88 River Road, Portland, OR",
+    "expect": { "ok": false, "missing_includes": ["zip"] }
+  },
+  {
+    "name": "analyze_city_zip_without_usable_street_signal",
+    "address": "Milwaukee WI 53202",
+    "expect": { "ok": false, "missing_includes": ["street"] }
+  },
+  {
+    "name": "analyze_missing_state_ambiguous_middle",
+    "address": "200 First Ave, Louisville 40202",
+    "expect": { "ok": false, "missing_includes": ["state"] }
+  },
+  {
+    "name": "merge_street_fragment_then_standard_tail",
+    "merge": true,
+    "previous": "123 Maple Avenue",
+    "utterance": "Columbus, OH 43215",
+    "expect": { "ok": true },
+    "merged_must_include": ["43215", "Columbus"]
+  },
+  {
+    "name": "merge_street_city_state_then_zip_only",
+    "merge": true,
+    "previous": "456 Oak Street, Toledo OH",
+    "utterance": "43604",
+    "expect": { "ok": true },
+    "merged_must_include": ["43604"]
+  },
+  {
+    "name": "merge_inline_street_city_state_zip_order_b",
+    "merge": true,
+    "previous": "789 Birch Lane Dayton",
+    "utterance": "OH 45402",
+    "expect": { "ok": true },
+    "merged_must_include": ["45402"]
+  },
+  {
+    "name": "merge_second_turn_adds_city_state_zip_only",
+    "merge": true,
+    "previous": "55 Cedar Court",
+    "utterance": "Ann Arbor MI 48104",
+    "expect": { "ok": true },
+    "merged_must_include": ["48104", "Ann Arbor"]
+  }
+]

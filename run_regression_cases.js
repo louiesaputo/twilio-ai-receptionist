@@ -4,6 +4,7 @@
  - Runs the structured AI extraction cases against ai_extractor.js
  - Verifies the extractor returns the expected intent and key fields
  - Intended to reduce live-call testing during development
+ - npm run test:address — deterministic server address completeness checks (address_validation_cases.json)
 
  IMPORTANT:
  - Save ai_extractor_structured_phase1_20260409.txt as ai_extractor.js

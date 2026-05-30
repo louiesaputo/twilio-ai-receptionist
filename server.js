@@ -397,6 +397,22 @@ function containsAny(text, phrases) {
   return phrases.some((p) => text.includes(p));
 }
 
+/** Helps final "anything else?" turns: strips ASR chatter so "^nope|^no\b" matchers still fire. */
+function stripLeadingBriefFillerForFinalWrapUp(it) {
+  let s = String(it || "").trim();
+  for (let guard = 0; guard < 8; guard++) {
+    const next = s
+      .replace(/^(uh+|um+|umm+|hmm+|mhm+|mm+|well+|oh+|so+|like+|hey+|right+|alright+)\s+/i, "")
+      .replace(/^(okay|ok)\s*,\s*/i, "")
+      .replace(/^(yeah|yep|yup|yes)\s*,\s*/i, "")
+      .replace(/^(yeah|yep|yup)\s+(no|nope|nah|naw)\b\s*/i, "$2 ")
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
 const SOCIAL_OPENER_PHRASES = [
   "how are you", "how are doing", "how re you", "how are ya",
   "how ya doing", "how ya doin", "how you doing", "how you doin",
@@ -1660,13 +1676,77 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 /** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
 function isFinalQuestionWrapUpAnswer(text) {
-  if (isAffirmative(text) || isNegative(text) || isEndCallPhrase(text)) return true;
-  const finalText = normalizeIntentText(text || "");
-  return containsAny(finalText, [
-    "i think that s it", "i think thats it",
-    "that s all", "thats all", "that is all",
-    "bye", "goodbye", "good bye", "see ya", "cya", "catch you later"
-  ]);
+  const it = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(text || ""));
+  if (!it) return false;
+
+  if (isAffirmative(it) || isNegative(it) || isEndCallPhrase(it)) return true;
+
+  const tLo = normalizedText(it);
+
+  if (
+    containsAny(it, [
+      "i think that s it",
+      "i think thats it",
+      "that s all",
+      "thats all",
+      "that is all",
+      "nope that s it",
+      "nope thats it",
+      "nah that s it",
+      "nah thats it",
+      "no that s it",
+      "no thats it",
+      "no nothing",
+      "no nothing else",
+      "nothing else",
+      "nothing more",
+      "nothing to add",
+      "nothing more to add",
+      "that s everything",
+      "thats everything",
+      "that ll do it",
+      "thatll do it",
+      "that will do it",
+      "that ll do",
+      "thatll do",
+      "all set",
+      "we re all set",
+      "were all set",
+      "i m all set",
+      "im all set",
+      "we re good",
+      "were good",
+      "i m good",
+      "im good"
+    ]) ||
+    containsAny(tLo, [
+      "bye",
+      "goodbye",
+      "good bye",
+      "see ya",
+      "cya",
+      "catch you later",
+      "that's all",
+      "that's it",
+      "that'll do",
+      "that'll do it"
+    ])
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(no|nope|nah|naw)\s+(that s it|thats it|that s all|thats all|nothing else|nothing more)\b/.test(it) ||
+    /\b(that s it|thats it|that s all|thats all|nothing else|that ll do|thatll do|that will do)\s*(thanks|thank you|thx)\b/.test(it)
+  ) {
+    return true;
+  }
+
+  if (it.length <= 42 && /\b(that s it|thats it|that s all|thats all|nothing else|all set)\b$/i.test(it)) {
+    return true;
+  }
+
+  return false;
 }
 
 /** After caller adds another detail at final_question—short acknowledgement (then a fresh anything-else pitch). */
@@ -9293,6 +9373,33 @@ wss.on("connection", (ws, request) => {
 
 
 
+
+if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
+  const casesPath = path.join(__dirname, "wrap_up_cases.json");
+  let cases;
+  try {
+    cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  } catch (err) {
+    console.error("Could not load wrap_up_cases.json:", err.message);
+    process.exit(1);
+  }
+
+  let passed = 0;
+  for (const tc of cases) {
+    const got = isFinalQuestionWrapUpAnswer(tc.text);
+    const expect = Boolean(tc.expect_wrap_up);
+    if (got === expect) {
+      passed += 1;
+      console.log(`PASS  ${tc.name}`);
+    } else {
+      console.log(`FAIL  ${tc.name}`);
+      console.log(`  - expected wrap_up=${expect} but got ${got} for text: ${JSON.stringify(tc.text)}`);
+    }
+  }
+
+  console.log(`\nPassed ${passed} of ${cases.length} wrap-up cases.`);
+  process.exit(passed === cases.length ? 0 : 1);
+}
 
 server.listen(PORT, BIND_HOST, () => {
   console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);

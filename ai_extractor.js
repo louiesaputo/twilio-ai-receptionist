@@ -193,6 +193,7 @@ async function extractOpeningTurn(text, callerContext = {}) {
       "Rules:",
       "- Populate full_name and first_name only if the caller actually gave a name.",
       "- Populate issue_text only if the caller actually gave a real issue/request.",
+      "- issue_text must be a short paraphrase of the problem (not the full transcript, not the caller's name line).",
       "- Do not copy greeting words into issue_text.",
       "- lead_type_guess should be service, emergency, quote, demo, or unknown.",
       "- emergency_candidate should only be true when the caller appears to describe an urgent/emergency situation."
