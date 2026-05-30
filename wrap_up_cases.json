@@ -11,6 +11,10 @@
   { "name": "no_thanks_closing", "text": "no thanks that's all", "expect_wrap_up": true },
   { "name": "goodbye", "text": "goodbye", "expect_wrap_up": true },
   { "name": "nothing_else_thanks", "text": "nothing else thanks", "expect_wrap_up": true },
+  { "name": "bare_yes_means_more_detail", "text": "yes", "expect_wrap_up": false },
+  { "name": "bare_yeah_means_more_detail", "text": "yeah", "expect_wrap_up": false },
+  { "name": "yes_please_means_more_detail", "text": "yes please", "expect_wrap_up": false },
+  { "name": "go_ahead_does_not_close", "text": "go ahead", "expect_wrap_up": false },
   { "name": "actually_one_more_thing", "text": "actually I need to change my address", "expect_wrap_up": false },
   { "name": "gate_code_addition", "text": "yes can you add that the gate code is 1234", "expect_wrap_up": false }
 ]
