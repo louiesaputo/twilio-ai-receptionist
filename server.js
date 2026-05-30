@@ -1674,12 +1674,23 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 
 
-/** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
+function isBriefFinalQuestionAffirmative(text) {
+  const it = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(text || ""));
+  if (!it || isNegative(it) || isEndCallPhrase(it)) return false;
+
+  return new Set([
+    "yes", "yeah", "yea", "yep", "yup", "sure", "sure thing", "yes please", "yeah please",
+    "ok", "okay", "for sure", "absolutely", "definitely", "correct", "fine", "you bet",
+    "indeed", "affirmative", "go ahead"
+  ]).has(it);
+}
+
+/** True when caller is done with the anything-else pass (no, nope, explicit closing, etc.). */
 function isFinalQuestionWrapUpAnswer(text) {
   const it = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(text || ""));
   if (!it) return false;
 
-  if (isAffirmative(it) || isNegative(it) || isEndCallPhrase(it)) return true;
+  if (isNegative(it) || isEndCallPhrase(it)) return true;
 
   const tLo = normalizedText(it);
 
@@ -8900,6 +8911,10 @@ async function handlePrompt(ws, caller, speech) {
     case "final_question": {
       if (isPricingQuestion(text)) {
         sendText(ws, `${pricingResponse()} ${buildFinalSubmissionPrompt(caller)}`);
+        return;
+      }
+      if (isBriefFinalQuestionAffirmative(text)) {
+        sendText(ws, "Sure—what else would you like me to add?");
         return;
       }
 
