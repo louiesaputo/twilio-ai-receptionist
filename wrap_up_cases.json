@@ -12,5 +12,8 @@
   { "name": "goodbye", "text": "goodbye", "expect_wrap_up": true },
   { "name": "nothing_else_thanks", "text": "nothing else thanks", "expect_wrap_up": true },
   { "name": "actually_one_more_thing", "text": "actually I need to change my address", "expect_wrap_up": false },
-  { "name": "gate_code_addition", "text": "yes can you add that the gate code is 1234", "expect_wrap_up": false }
+  { "name": "gate_code_addition", "text": "yes can you add that the gate code is 1234", "expect_wrap_up": false },
+  { "name": "no_gate_code_addition", "text": "no, the gate code is 1234", "expect_wrap_up": false },
+  { "name": "nothing_else_broken_except_sink", "text": "nothing else is broken except the kitchen sink", "expect_wrap_up": false },
+  { "name": "all_set_on_address_addition", "text": "we're all set on the address, it's 456 Oak Street", "expect_wrap_up": false }
 ]

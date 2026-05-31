@@ -26,6 +26,11 @@
     "expect": { "ok": true }
   },
   {
+    "name": "analyze_state_name_street_without_state_rejected",
+    "address": "500 Washington Avenue, Portland, 04101",
+    "expect": { "ok": false, "missing_includes": ["state"] }
+  },
+  {
     "name": "analyze_street_only_rejected",
     "address": "123 Main Street",
     "expect": { "ok": false, "missing_includes": ["zip"] }

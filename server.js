@@ -1679,6 +1679,8 @@ function isFinalQuestionWrapUpAnswer(text) {
   const it = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(text || ""));
   if (!it) return false;
 
+  if (looksLikeSubstantiveFinalQuestionAddition(text)) return false;
+
   if (isAffirmative(it) || isNegative(it) || isEndCallPhrase(it)) return true;
 
   const tLo = normalizedText(it);
@@ -1914,8 +1916,28 @@ const US_STATE_FULL_SNIPPETS_FOR_DISPATCH = [
   "washington dc","washington d c","west virginia","wisconsin","wyoming",
 ];
 
+const US_STATE_FULL_SNIPPETS_LONGEST_FOR_DISPATCH = [...US_STATE_FULL_SNIPPETS_FOR_DISPATCH]
+  .sort((a, b) => b.length - a.length);
+
 function abbreviationIsStreetSuffixForDispatch(abbrUpper) {
   return ["ST","DR","RD","LN","AVE","BLVD","CT","PL","HWY","PKWY"].includes(abbrUpper);
+}
+
+function escapeRegexLiteral(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasFullStateNearDispatchTail(safe) {
+  const text = cleanForSpeech(safe || "").toLowerCase();
+  if (!text) return false;
+  return US_STATE_FULL_SNIPPETS_LONGEST_FOR_DISPATCH.some((stateName) => {
+    const statePattern = escapeRegexLiteral(stateName).replace(/\s+/g, "\\s+");
+    const re = new RegExp(
+      `(?:^|[,\\s])${statePattern}(?:\\s*,?\\s*\\d{5}(?:-\\d{4})?|\\s*,?\\s*$)`,
+      "i"
+    );
+    return re.test(text);
+  });
 }
 
 function analyzeUsServiceAddressCompleteness(raw) {
@@ -1927,7 +1949,6 @@ function analyzeUsServiceAddressCompleteness(raw) {
   }
 
   const hasZip = /\b\d{5}(?:-\d{4})?\b/.test(safe);
-  const nt = normalizedText(safe);
 
   let hasStreet = /^\s*\d{1,6}[A-Za-z\-#]?\s+\S/.test(safe.trim());
   if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(safe)) hasStreet = true;
@@ -1943,7 +1964,7 @@ function analyzeUsServiceAddressCompleteness(raw) {
     }
   }
 
-  const hasFullState = containsAny(nt, US_STATE_FULL_SNIPPETS_FOR_DISPATCH);
+  const hasFullState = hasFullStateNearDispatchTail(safe);
   const hasState = hasStateAbbrev || hasFullState;
 
   const commaParts = safe.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
@@ -3530,6 +3551,20 @@ function looksLikeSubstantiveTechNoteIntent(text) {
     "call me", "text me", "reach me", "extension", "cell", "mobile",
     "broken", "step", "stairs", "wet floor", "construction", "hoa",
     "vacant", "rental", "tenant", "lockbox", "combo"
+  ]);
+}
+
+function looksLikeSubstantiveFinalQuestionAddition(text) {
+  const it = normalizeIntentText(text);
+  if (!it) return false;
+  if (looksLikeSubstantiveTechNoteIntent(text)) return true;
+  return containsAny(it, [
+    "also", "one more thing", "another thing", "can you add", "could you add", "please add",
+    "add that", "add this", "include that", "include this", "put it in the notes",
+    "put in the notes", "make a note", "note that", "notes that",
+    "address", "phone", "email", "text me", "call me",
+    "broken", "cracked", "leaking", "leak", "is out", "not working", "stopped working",
+    "renting", "renter", "tenant"
   ]);
 }
 

@@ -68,8 +68,27 @@ const US_STATE_FULL_SNIPPETS = [
   "washington dc","washington d c","west virginia","wisconsin","wyoming",
 ];
 
+const US_STATE_FULL_SNIPPETS_LONGEST = [...US_STATE_FULL_SNIPPETS].sort((a, b) => b.length - a.length);
+
 function abbreviationIsStreetSuffix(abbrUpper) {
   return ["ST","DR","RD","LN","AVE","BLVD","CT","PL","HWY","PKWY"].includes(abbrUpper);
+}
+
+function escapeRegexLiteral(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasFullStateNearDispatchTail(safe) {
+  const text = cleanForSpeech(safe || "").toLowerCase();
+  if (!text) return false;
+  return US_STATE_FULL_SNIPPETS_LONGEST.some((stateName) => {
+    const statePattern = escapeRegexLiteral(stateName).replace(/\s+/g, "\\s+");
+    const re = new RegExp(
+      `(?:^|[,\\s])${statePattern}(?:\\s*,?\\s*\\d{5}(?:-\\d{4})?|\\s*,?\\s*$)`,
+      "i"
+    );
+    return re.test(text);
+  });
 }
 
 function analyzeUsServiceAddressCompleteness(raw) {
@@ -81,7 +100,6 @@ function analyzeUsServiceAddressCompleteness(raw) {
   }
 
   const hasZip = /\b\d{5}(?:-\d{4})?\b/.test(safe);
-  const nt = normalizedText(safe);
 
   let hasStreet = /^\s*\d{1,6}[A-Za-z\-#]?\s+\S/.test(safe.trim());
   if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(safe)) hasStreet = true;
@@ -97,7 +115,7 @@ function analyzeUsServiceAddressCompleteness(raw) {
     }
   }
 
-  const hasFullState = containsAny(nt, US_STATE_FULL_SNIPPETS);
+  const hasFullState = hasFullStateNearDispatchTail(safe);
   const hasState = hasStateAbbrev || hasFullState;
 
   const commaParts = safe.split(",").map((p) => cleanForSpeech(p)).filter(Boolean);
