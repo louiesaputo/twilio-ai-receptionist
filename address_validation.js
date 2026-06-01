@@ -51,6 +51,21 @@ function normalizeAddressInput(input) {
   return value;
 }
 
+function stripLeadingAddressContinuationMarker(input) {
+  let value = normalizeAddressInput(input || "");
+  if (!value) return "";
+  for (let guard = 0; guard < 3; guard++) {
+    const next = value
+      .replace(/^(uh+|um+|well|okay|ok)\b[\s,]*/i, "")
+      .replace(/^(no|nope|nah|naw)\b[\s,]*(actually|wait|sorry)?\s*/i, "")
+      .replace(/^(actually|wait|sorry)\b[\s,]*/i, "")
+      .trim();
+    if (next === value) break;
+    value = next;
+  }
+  return value;
+}
+
 const US_STATE_ABBREV = new Set([
   "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA",
   "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM",
@@ -146,9 +161,11 @@ function analyzeUsServiceAddressCompleteness(raw) {
 
 function mergeIncrementalServiceAddress(previousRaw, utteranceRaw) {
   const a = normalizeAddressInput(previousRaw || "");
-  const b = normalizeAddressInput(utteranceRaw || "");
+  let b = normalizeAddressInput(utteranceRaw || "");
   if (!b) return a;
   if (!a) return b;
+  b = stripLeadingAddressContinuationMarker(b);
+  if (!b) return a;
   if (normalizedText(a) === normalizedText(b)) return a;
   const combos = [
     normalizeAddressInput(`${a}, ${b}`),
