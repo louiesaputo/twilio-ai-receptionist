@@ -54,6 +54,14 @@
     "merged_must_include": ["43215", "Columbus"]
   },
   {
+    "name": "merge_strips_negative_prefix_from_continuation",
+    "merge": true,
+    "previous": "123 Main St",
+    "utterance": "no Columbus OH 43215",
+    "expect": { "ok": true },
+    "merged_must_include": ["123 Main St, Columbus OH 43215"]
+  },
+  {
     "name": "merge_street_city_state_then_zip_only",
     "merge": true,
     "previous": "456 Oak Street, Toledo OH",

@@ -11,6 +11,9 @@
   { "name": "no_thanks_closing", "text": "no thanks that's all", "expect_wrap_up": true },
   { "name": "goodbye", "text": "goodbye", "expect_wrap_up": true },
   { "name": "nothing_else_thanks", "text": "nothing else thanks", "expect_wrap_up": true },
+  { "name": "nope_gate_code_addition", "text": "nope, the gate code is 1234", "expect_wrap_up": false },
+  { "name": "no_address_change_request", "text": "no, I need to change my address", "expect_wrap_up": false },
+  { "name": "yes_add_parking_note", "text": "yes, please add that parking is around back", "expect_wrap_up": false },
   { "name": "actually_one_more_thing", "text": "actually I need to change my address", "expect_wrap_up": false },
   { "name": "gate_code_addition", "text": "yes can you add that the gate code is 1234", "expect_wrap_up": false }
 ]

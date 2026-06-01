@@ -413,6 +413,73 @@ function stripLeadingBriefFillerForFinalWrapUp(it) {
   return s;
 }
 
+function stripLeadingFinalAnswerMarker(it) {
+  let s = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(it || ""));
+  for (let guard = 0; guard < 4; guard++) {
+    const next = s
+      .replace(/^(yes|yeah|yep|yup|sure|ok|okay|no|nope|nah|naw)\b\s*/i, "")
+      .replace(/^(but|actually|wait|also|please)\b\s*/i, "")
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+function isFinalQuestionCloseTail(it) {
+  const t = normalizeIntentText(it || "");
+  if (!t) return true;
+  if (isNegative(t) || isEndCallPhrase(t)) return true;
+  return containsAny(t, [
+    "thanks that s it",
+    "thanks thats it",
+    "thanks that s all",
+    "thanks thats all",
+    "thank you that s it",
+    "thank you thats it",
+    "thank you that s all",
+    "thank you thats all",
+    "that s it",
+    "thats it",
+    "that s all",
+    "thats all",
+    "nothing else",
+    "nothing more",
+    "all set",
+    "we re good",
+    "were good",
+    "i m good",
+    "im good"
+  ]);
+}
+
+function looksLikeFinalQuestionAdditionalDetail(text) {
+  const tail = stripLeadingFinalAnswerMarker(text || "");
+  if (!tail || isFinalQuestionCloseTail(tail)) return false;
+  if (looksLikeSubstantiveTechNoteIntent(tail) || looksLikeAddressCorrection(tail)) return true;
+  return containsAny(tail, [
+    "can you add",
+    "could you add",
+    "please add",
+    "add that",
+    "include",
+    "note that",
+    "tell them",
+    "let them know",
+    "make sure",
+    "one more thing",
+    "another thing",
+    "i forgot",
+    "forgot to mention",
+    "i need to change",
+    "need to change",
+    "change my address",
+    "change the address",
+    "update my address",
+    "update the address"
+  ]);
+}
+
 const SOCIAL_OPENER_PHRASES = [
   "how are you", "how are doing", "how re you", "how are ya",
   "how ya doing", "how ya doin", "how you doing", "how you doin",
@@ -1679,6 +1746,8 @@ function isFinalQuestionWrapUpAnswer(text) {
   const it = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(text || ""));
   if (!it) return false;
 
+  if (looksLikeFinalQuestionAdditionalDetail(text)) return false;
+
   if (isAffirmative(it) || isNegative(it) || isEndCallPhrase(it)) return true;
 
   const tLo = normalizedText(it);
@@ -1897,6 +1966,21 @@ function normalizeAddressInput(input) {
   return value;
 }
 
+function stripLeadingAddressContinuationMarker(input) {
+  let value = normalizeAddressInput(input || "");
+  if (!value) return "";
+  for (let guard = 0; guard < 3; guard++) {
+    const next = value
+      .replace(/^(uh+|um+|well|okay|ok)\b[\s,]*/i, "")
+      .replace(/^(no|nope|nah|naw)\b[\s,]*(actually|wait|sorry)?\s*/i, "")
+      .replace(/^(actually|wait|sorry)\b[\s,]*/i, "")
+      .trim();
+    if (next === value) break;
+    value = next;
+  }
+  return value;
+}
+
 const US_STATE_ABBREV_FOR_DISPATCH = new Set([
   "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA",
   "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM",
@@ -1992,9 +2076,11 @@ function analyzeUsServiceAddressCompleteness(raw) {
 
 function mergeIncrementalServiceAddress(previousRaw, utteranceRaw) {
   const a = normalizeAddressInput(previousRaw || "");
-  const b = normalizeAddressInput(utteranceRaw || "");
+  let b = normalizeAddressInput(utteranceRaw || "");
   if (!b) return a;
   if (!a) return b;
+  b = stripLeadingAddressContinuationMarker(b);
+  if (!b) return a;
   if (normalizedText(a) === normalizedText(b)) return a;
   const combos = [
     normalizeAddressInput(`${a}, ${b}`),
