@@ -2296,14 +2296,14 @@ function tryExtractAddressAfterAtClause(head) {
 
 function describeMissingAddressFacets(missingKeys) {
   const labels = {
-    street: "the street address with house or building number (or PO box)",
-    city: "the city name",
-    state: "the state (either spelled out or the two-letter abbreviation)",
+    street: "the street number and name",
+    city: "the city",
+    state: "the state",
     zip: "the ZIP code"
   };
   const keys = [...new Set(missingKeys || [])];
   const parts = keys.map((k) => labels[k] || k).filter(Boolean);
-  if (parts.length === 0) return "something I could not recognize from that line";
+  if (parts.length === 0) return "a bit more of the address";
   if (parts.length === 1) return parts[0];
   if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
   return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
@@ -2313,9 +2313,9 @@ function buildIncompleteAddressPrompt(caller, missingKeys) {
   const detail = describeMissingAddressFacets(missingKeys);
   const ix = caller ? nextPromptIndex(caller, "incompleteAddressPromptIx") : 0;
   const pools = [
-    `Before I repeat it back for confirmation I need ${detail}. The format is street number and name, city, state, and ZIP — whichever part you skipped, I'm ready for it.`,
-    `I almost have it—I still need ${detail}. You can spell it slowly or repeat the whole line with each piece.`,
-    `For scheduling I need a complete dispatch line. I'm missing ${detail}—what should I fill in there?`,
+    `I still need ${detail}.`,
+    `Could you give me ${detail}?`,
+    `I'm missing ${detail}—what should I put there?`,
   ];
   return pools[ix % pools.length];
 }
@@ -3303,8 +3303,13 @@ function buildResumePromptForCurrentStep(caller) {
     }
     case "capture_updated_contact_last_name":
       return caller.pendingUpdatedContactFirstName ? `What is ${caller.pendingUpdatedContactFirstName}'s last name?` : "What is the last name?";
-    case "ask_address":
+    case "ask_address": {
+      const chk = analyzeUsServiceAddressCompleteness(caller.address || "");
+      if (!chk.ok && callerHasHarvestableServiceAddress(caller)) {
+        return buildIncompleteAddressPrompt(caller, chk.missing);
+      }
       return buildAddressRequestPrompt(caller);
+    }
     case "confirm_address":
       return `Great, let me make sure I have this right. You said ${formatAddressForConfirmation(caller.address)}. Is that correct?`;
     case "schedule_or_callback":
@@ -3652,6 +3657,53 @@ function isPricingQuestion(text) {
 
 function pricingResponse() {
   return "That is a great question. Pricing can vary depending on the job, so someone from the office will go over that with you when they call.";
+}
+
+function isHumanAgentRequest(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (containsAny(t, [
+    "real person", "live person", "actual person", "human being",
+    "speak to a person", "speak to someone", "speak to a human", "speak to somebody",
+    "talk to a person", "talk to someone", "talk to a human", "talk to somebody",
+    "speak with a person", "speak with someone", "speak with a human",
+    "talk with a person", "talk with someone", "talk with a human",
+    "live agent", "live representative", "customer service rep", "customer service",
+    "transfer me", "connect me to someone", "connect me to a person",
+    "get me a person", "get me someone", "put me through to someone",
+    "speak to a rep", "talk to a rep", "real agent", "real representative"
+  ])) return true;
+  return /\b(can|could|may|want to|wanna|need to)\b.*\b(speak|talk)\b.*\b(person|someone|somebody|human|agent|representative|rep)\b/.test(t);
+}
+
+function isAiIdentityQuestion(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (containsAny(t, [
+    "are you ai", "are you a i", "is this ai", "is this a i",
+    "are you artificial", "artificial intelligence",
+    "are you a robot", "are you automated", "is this automated",
+    "is this a bot", "are you a bot", "talking to a bot",
+    "talking to ai", "talking to a computer", "speaking to ai",
+    "am i talking to ai", "am i speaking to ai",
+    "is this a computer", "virtual assistant", "automated system"
+  ])) return true;
+  return /\b(is this|are you|am i talking to|am i speaking to)\b.*\b(ai|bot|robot|computer|automated|virtual)\b/.test(t);
+}
+
+function buildAutomatedServiceAcknowledgement(caller, text) {
+  if (isHumanAgentRequest(text)) {
+    const pools = [
+      "There isn't a live person on this line—this is the automated Blue Caller demo. I can still take your details, or you can reach the team at bluecallerautomation.com.",
+      "I can't transfer you to a live agent on this demo line. I'm happy to keep going and capture your info, or you can contact Blue Caller Automation directly.",
+    ];
+    return pools[nextPromptIndex(caller, "humanAgentAckIx") % pools.length];
+  }
+  const pools = [
+    "Yes—I'm the automated assistant on the Blue Caller demo line. I can still help finish your request.",
+    "That's right—this is an AI demo line. I can keep going whenever you're ready.",
+  ];
+  return pools[nextPromptIndex(caller, "aiIdentityAckIx") % pools.length];
 }
 
 
@@ -6792,7 +6844,7 @@ function sendAddressReadBackOrIncomplete(ws, caller, options = {}) {
     const incomplete = buildIncompleteAddressPrompt(caller, chk.missing);
     const summarized = formatAddressForConfirmation(caller.address || "");
     const refChunk =
-      summarized.length >= 6 ? ` For reference here's what I've noted — ${summarized}.` : "";
+      summarized.length >= 6 ? ` So far I have ${summarized}.` : "";
     sendText(ws, `${preambleRaw ? `${preambleRaw}${trailingSpace}` : ""}${incomplete}${refChunk}`);
     return;
   }
@@ -7028,6 +7080,13 @@ async function handlePrompt(ws, caller, speech) {
 
   if (isPricingQuestion(text)) {
     sendText(ws, pricingResponse());
+    return;
+  }
+
+  if (isHumanAgentRequest(text) || isAiIdentityQuestion(text)) {
+    const ack = buildAutomatedServiceAcknowledgement(caller, text);
+    const resume = buildResumePromptForCurrentStep(caller);
+    sendText(ws, resume ? `${ack} ${resume}` : ack);
     return;
   }
 
@@ -8223,10 +8282,7 @@ async function handlePrompt(ws, caller, speech) {
         if (!callerHasCompleteUsServiceAddress(caller)) {
           const chk = analyzeUsServiceAddressCompleteness(caller.address || "");
           caller.lastStep = "ask_address";
-          sendText(
-            ws,
-            `${buildIncompleteAddressPrompt(caller, chk.missing)} You can restate the full dispatch line whenever you're ready — street number and name, city, state, then ZIP.`
-          );
+          sendText(ws, buildIncompleteAddressPrompt(caller, chk.missing));
           return;
         }
         await finalizeAddressConfirmationAndAdvance(ws, caller);
@@ -8256,10 +8312,7 @@ async function handlePrompt(ws, caller, speech) {
             if (!callerHasCompleteUsServiceAddress(caller)) {
               const chk = analyzeUsServiceAddressCompleteness(caller.address || "");
               caller.lastStep = "ask_address";
-              sendText(
-                ws,
-                `${buildIncompleteAddressPrompt(caller, chk.missing)} Once I have street, city, state, and ZIP on one line we'll lock it in.`
-              );
+              sendText(ws, buildIncompleteAddressPrompt(caller, chk.missing));
               return;
             }
             await finalizeAddressConfirmationAndAdvance(ws, caller);
