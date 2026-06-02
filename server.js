@@ -1877,6 +1877,44 @@ function collapseSpacedDigits(value) {
   return output;
 }
 
+function stripThousandsCommasInNumbers(value) {
+  let output = String(value || "");
+  let previous = "";
+  while (output !== previous) {
+    previous = output;
+    output = output.replace(/(\d),(?=\d{3}(?!\d))/g, "$1");
+  }
+  return output;
+}
+
+function stripDispatchConversationalLead(text) {
+  let s = cleanForSpeech(text || "");
+  for (let guard = 0; guard < 8; guard++) {
+    const next = s
+      .replace(/^(?:yes|yeah|yep|yup|sure|okay|ok|no|nope|nah)\b[,\s-]*/i, "")
+      .replace(/^(?:and|so|well|uh|um|umm|like|right|alright)\b[,\s-]*/i, "")
+      .replace(/^(?:i live at|i'?m at|im at|we'?re at|were at|i am at|we are at)\b[,\s]*/i, "")
+      .replace(/^(?:my (?:service )?address is|(?:the )?(?:service )?address is|(?:the )?address is|address is)\b[,\s]*/i, "")
+      .replace(/^(?:it'?s|it is|its|located at|living at|live at)\b[,\s]*/i, "")
+      .replace(/^(?:for reference|what i'?ve noted|what i have noted|service address is|noted)\b[,\s:-]*/i, "")
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+function dispatchLineHasStreetNumber(safe) {
+  const trimmed = String(safe || "").trim();
+  if (!trimmed) return false;
+  if (/^\s*\d{1,6}[A-Za-z\-#]?\s+\S/.test(trimmed)) return true;
+  if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(trimmed)) return true;
+  const firstComma = trimmed.split(",")[0].trim();
+  if (/^\d{1,6}[A-Za-z\-#]?\s+\S/.test(firstComma)) return true;
+  if (/\b\d{1,6}[A-Za-z\-#]?\s+[A-Za-z]/.test(trimmed)) return true;
+  return false;
+}
+
 /**
  * Dispatch-line normalization + completeness (inline so `node server.js` never depends on a sibling file —
  * avoids MODULE_NOT_FOUND on hosts that copy only server.js).
@@ -1891,10 +1929,30 @@ function normalizeAddressInput(input) {
     .replace(/\s{2,}/g, " ")
     .trim();
 
+  value = stripThousandsCommasInNumbers(value);
   value = collapseSpacedDigits(value);
   value = value.replace(/^(\d{1,6})\s+\1(\b.*)$/i, "$1$2");
   value = value.replace(/\s{2,}/g, " ").trim();
   return value;
+}
+
+function extractBestDispatchAddressCandidate(raw) {
+  const normalized = normalizeAddressInput(raw || "");
+  let candidate = stripDispatchConversationalLead(normalized);
+  if (!candidate) return normalized;
+
+  let chk = analyzeUsServiceAddressCompleteness(candidate);
+  if (chk.ok) return chk.working;
+
+  for (const m of candidate.matchAll(/\b(\d{1,6}\s+[A-Za-z][A-Za-z0-9'\-\s]*)/g)) {
+    const tail = candidate.slice(m.index).trim();
+    const zipCut = tail.match(/^(.+?\b\d{5}(?:-\d{4})?)\b/);
+    const tryLine = zipCut ? zipCut[1].trim() : tail;
+    chk = analyzeUsServiceAddressCompleteness(tryLine);
+    if (chk.ok) return chk.working;
+  }
+
+  return candidate;
 }
 
 const US_STATE_ABBREV_FOR_DISPATCH = new Set([
@@ -1929,8 +1987,7 @@ function analyzeUsServiceAddressCompleteness(raw) {
   const hasZip = /\b\d{5}(?:-\d{4})?\b/.test(safe);
   const nt = normalizedText(safe);
 
-  let hasStreet = /^\s*\d{1,6}[A-Za-z\-#]?\s+\S/.test(safe.trim());
-  if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(safe)) hasStreet = true;
+  let hasStreet = dispatchLineHasStreetNumber(safe.trim());
 
   let hasStateAbbrev = false;
   const anchored = safe.trim();
@@ -1991,11 +2048,18 @@ function analyzeUsServiceAddressCompleteness(raw) {
 }
 
 function mergeIncrementalServiceAddress(previousRaw, utteranceRaw) {
-  const a = normalizeAddressInput(previousRaw || "");
-  const b = normalizeAddressInput(utteranceRaw || "");
+  const a = extractBestDispatchAddressCandidate(previousRaw || "");
+  const b = extractBestDispatchAddressCandidate(utteranceRaw || "");
   if (!b) return a;
   if (!a) return b;
   if (normalizedText(a) === normalizedText(b)) return a;
+
+  const bAlone = analyzeUsServiceAddressCompleteness(b);
+  if (bAlone.ok) return bAlone.working;
+
+  const aAlone = analyzeUsServiceAddressCompleteness(a);
+  if (aAlone.ok) return aAlone.working;
+
   const combos = [
     normalizeAddressInput(`${a}, ${b}`),
     normalizeAddressInput(`${b}, ${a}`),
@@ -2003,10 +2067,11 @@ function mergeIncrementalServiceAddress(previousRaw, utteranceRaw) {
     normalizeAddressInput(`${b} ${a}`),
   ];
   for (const c of combos) {
-    const chk = analyzeUsServiceAddressCompleteness(c);
+    const extracted = extractBestDispatchAddressCandidate(c);
+    const chk = analyzeUsServiceAddressCompleteness(extracted);
     if (chk.ok) return chk.working;
   }
-  return normalizeAddressInput(`${a}, ${b}`);
+  return extractBestDispatchAddressCandidate(normalizeAddressInput(`${a}, ${b}`));
 }
 
 
@@ -2051,8 +2116,10 @@ function numberUnder100ToWords(num) {
 function streetNumberToSpeech(numText) {
   const digits = String(numText || "").replace(/\D/g, "");
   if (!digits) return String(numText || "");
-  if (digits.length === 3) return `${numberUnder100ToWords(Number(digits.slice(0, 1)))} ${numberUnder100ToWords(Number(digits.slice(1)))}`;
-  if (digits.length === 4) return `${numberUnder100ToWords(Number(digits.slice(0, 2)))} ${numberUnder100ToWords(Number(digits.slice(2)))}`;
+  if (digits.length === 3) {
+    return `${numberUnder100ToWords(Number(digits.slice(0, 1)))} ${numberUnder100ToWords(Number(digits.slice(1)))}`;
+  }
+  // 4+ digits: digit-by-digit so 5402 is not heard as "542" (fifty-four two).
   return digits.split("").map((d) => SMALL_NUMBER_WORDS[Number(d)]).join(" ");
 }
 
@@ -2090,7 +2157,7 @@ function formatAddressForSpeech(address) {
 
 
 
-  const streetSpeech = streetLine.replace(/^(\d{1,5})(\s+.+)$/, (m, num, rest) => `${streetNumberToSpeech(num)}${rest}`);
+  const streetSpeech = streetLine.replace(/^(\d{1,6})(\s+.+)$/, (m, num, rest) => `${streetNumberToSpeech(num)} ${rest}`);
   return city ? `${streetSpeech} in ${city}` : streetSpeech;
 }
 
@@ -8137,7 +8204,9 @@ async function handlePrompt(ws, caller, speech) {
 
 
     case "ask_address": {
-      caller.address = mergeIncrementalServiceAddress(caller.address || "", text);
+      caller.address = extractBestDispatchAddressCandidate(
+        mergeIncrementalServiceAddress(caller.address || "", text)
+      );
       sendAddressReadBackOrIncomplete(ws, caller);
       return;
     }
@@ -8170,7 +8239,9 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
       if (looksLikeAddressCorrection(text)) {
-        caller.address = mergeIncrementalServiceAddress(caller.address || "", text);
+        caller.address = extractBestDispatchAddressCandidate(
+          mergeIncrementalServiceAddress(caller.address || "", text)
+        );
         sendAddressReadBackOrIncomplete(ws, caller);
         return;
       }
@@ -8201,9 +8272,11 @@ async function handlePrompt(ws, caller, speech) {
             return;
           }
           if (addressDecision.intent === "correct_address" && addressDecision.corrected_address) {
-            caller.address = mergeIncrementalServiceAddress(
-              caller.address || "",
-              normalizeAddressInput(addressDecision.corrected_address)
+            caller.address = extractBestDispatchAddressCandidate(
+              mergeIncrementalServiceAddress(
+                caller.address || "",
+                normalizeAddressInput(addressDecision.corrected_address)
+              )
             );
             sendAddressReadBackOrIncomplete(ws, caller);
             return;

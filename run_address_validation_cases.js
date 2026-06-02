@@ -8,6 +8,7 @@ const path = require("path");
 const {
   analyzeUsServiceAddressCompleteness,
   mergeIncrementalServiceAddress,
+  extractBestDispatchAddressCandidate,
 } = require("./address_validation");
 
 const casesPath = path.join(__dirname, "address_validation_cases.json");
@@ -34,6 +35,24 @@ function checkExpect(result, expect) {
 function runAnalyzeCase(tc) {
   const result = analyzeUsServiceAddressCompleteness(tc.address);
   return checkExpect(result, tc.expect || {});
+}
+
+function runExtractCase(tc) {
+  const extracted = extractBestDispatchAddressCandidate(tc.address || "");
+  const chk = analyzeUsServiceAddressCompleteness(extracted);
+
+  let failures = checkExpect(chk, tc.expect || {});
+
+  if (tc.merged_must_include && Array.isArray(tc.merged_must_include)) {
+    const lower = extracted.toLowerCase();
+    for (const frag of tc.merged_must_include) {
+      if (!lower.includes(String(frag).toLowerCase())) {
+        failures.push(`extracted string should include "${frag}" but extracted=${JSON.stringify(extracted)}`);
+      }
+    }
+  }
+
+  return { failures, extracted, chk };
 }
 
 function runMergeCase(tc) {
@@ -72,6 +91,9 @@ function main() {
 
     if (tc.merge) {
       const out = runMergeCase(tc);
+      failures = out.failures;
+    } else if (tc.extract) {
+      const out = runExtractCase(tc);
       failures = out.failures;
     } else {
       failures = runAnalyzeCase(tc);

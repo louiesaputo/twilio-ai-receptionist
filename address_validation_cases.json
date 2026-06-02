@@ -76,5 +76,30 @@
     "utterance": "Ann Arbor MI 48104",
     "expect": { "ok": true },
     "merged_must_include": ["48104", "Ann Arbor"]
+  },
+  {
+    "name": "analyze_thousands_comma_street_number",
+    "address": "5,402 Messner Reeves, Las Vegas, Nevada, 89152",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "analyze_conversational_lead_in",
+    "address": "yes I live at 5402 mesner Reeves, Las Vegas, Nevada, 89152",
+    "expect": { "ok": true }
+  },
+  {
+    "name": "merge_accumulated_garbage_then_full_line",
+    "merge": true,
+    "previous": "Service address is 5,402 Messner Reeves",
+    "utterance": "yes I live at 5402 Mesnar Reeves, Las Vegas, Nevada, 89152",
+    "expect": { "ok": true },
+    "merged_must_include": ["89152", "Las Vegas"]
+  },
+  {
+    "name": "extract_from_accumulated_notes",
+    "extract": true,
+    "address": "Service address is 5,402 Messner Reeves, yes I live at 5402 Mesnar Reeves, Las Vegas, Nevada, 89152",
+    "expect": { "ok": true },
+    "merged_must_include": ["89152", "5402"]
   }
 ]
