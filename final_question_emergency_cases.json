@@ -1,0 +1,58 @@
+[
+  {
+    "name": "plain_nope_still_wraps",
+    "text": "nope",
+    "expect_emergency": false,
+    "expect_wrap_up": true,
+    "expect_lead_type": "service"
+  },
+  {
+    "name": "plain_nothing_else_still_wraps",
+    "text": "nothing else",
+    "expect_emergency": false,
+    "expect_wrap_up": true,
+    "expect_lead_type": "service"
+  },
+  {
+    "name": "gate_code_addition_not_emergency",
+    "text": "yes can you add that the gate code is 1234",
+    "expect_emergency": false,
+    "expect_wrap_up": false,
+    "expect_lead_type": "service"
+  },
+  {
+    "name": "this_is_an_emergency_pipe_burst",
+    "text": "This is an emergency, the pipe burst",
+    "expect_emergency": true,
+    "expect_wrap_up": false,
+    "expect_lead_type": "emergency"
+  },
+  {
+    "name": "no_wait_gas_leak",
+    "text": "No wait, we have a gas leak",
+    "expect_emergency": true,
+    "expect_wrap_up": false,
+    "expect_lead_type": "emergency"
+  },
+  {
+    "name": "yes_thats_right_gushing_ceiling",
+    "text": "Yes that's right, water is gushing through the ceiling now",
+    "expect_emergency": true,
+    "expect_wrap_up": false,
+    "expect_lead_type": "emergency"
+  },
+  {
+    "name": "gushing_ceiling_without_yes_no",
+    "text": "Water is gushing through the ceiling now",
+    "expect_emergency": true,
+    "expect_wrap_up": false,
+    "expect_lead_type": "emergency"
+  },
+  {
+    "name": "explicit_this_is_an_emergency_only",
+    "text": "this is an emergency",
+    "expect_emergency": true,
+    "expect_wrap_up": false,
+    "expect_lead_type": "emergency"
+  }
+]

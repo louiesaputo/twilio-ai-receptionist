@@ -4712,6 +4712,41 @@ function isHardEmergency(text) {
   ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t);
 }
 
+/** Caller is explicitly asking to treat the job as an emergency (not a severity-choice "yes"). */
+function isExplicitEmergencyRequest(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (containsAny(t, [
+    "not an emergency", "not emergency", "non emergency", "nonemergency"
+  ])) return false;
+  return containsAny(t, [
+    "this is an emergency", "it is an emergency", "its an emergency",
+    "mark this as an emergency", "mark it as an emergency",
+    "make this an emergency", "make it an emergency",
+    "emergency help", "need emergency"
+  ]);
+}
+
+/**
+ * Final "anything else?" can match wrap-up via isAffirmative ("this is an emergency")
+ * or isNegative ("no wait, we have a gas leak") and hang up without escalating.
+ * Even non-wrap-up hard emergencies were only appended as notes.
+ */
+function captureEmergencyDisclosedDuringFinalQuestion(caller, text) {
+  if (!caller) return false;
+  const raw = cleanForSpeech(text || "");
+  if (!raw) return false;
+  if (!(isHardEmergency(raw) || isExplicitEmergencyRequest(raw))) return false;
+
+  appendAdditionalIssue(caller, raw);
+  if (!cleanForSpeech(caller.issueSummary || "")) {
+    const classified = classifyIssue(caller.issue || raw);
+    caller.issueSummary = (classified && classified.summary) || caller.issue || raw;
+  }
+  markEmergency(caller);
+  return true;
+}
+
 
 
 
@@ -9029,12 +9064,12 @@ async function handlePrompt(ws, caller, speech) {
         return;
       }
 
-
-
-
-
-
-
+      if (captureEmergencyDisclosedDuringFinalQuestion(caller, text)) {
+        caller.makeSent = false;
+        queuePrimaryLeadAndBooking(caller, { forceLead: true });
+        sendText(ws, `I've marked this as an emergency so the team can review it right away. ${buildFinalSubmissionPrompt(caller)}`);
+        return;
+      }
 
       if (isFinalQuestionWrapUpAnswer(text)) {
         queuePrimaryLeadAndBooking(caller);
@@ -9500,7 +9535,70 @@ wss.on("connection", (ws, request) => {
 
 
 
-if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
+if (process.env.BLUE_CALLER_TEST_FINAL_QUESTION_EMERGENCY === "1") {
+  const casesPath = path.join(__dirname, "final_question_emergency_cases.json");
+  let cases;
+  try {
+    cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  } catch (err) {
+    console.error("Could not load final_question_emergency_cases.json:", err.message);
+    process.exit(1);
+  }
+
+  let passed = 0;
+  for (const tc of cases) {
+    const caller = {
+      fullName: "Pat Rivera",
+      firstName: "Pat",
+      callbackNumber: "5551234567",
+      phone: "5551234567",
+      issue: "a leaky kitchen faucet",
+      issueSummary: "a leaky kitchen faucet",
+      address: "123 Main Street, Springfield, IL 62701",
+      emergencyAlert: false,
+      urgency: "normal",
+      leadType: "service",
+      status: "scheduled",
+      appointmentDate: "Tuesday, July 28",
+      appointmentTime: "2:00 PM",
+      calendarSlotConfirmed: true,
+      additionalIssues: [],
+      notes: "",
+      lastStep: "final_question",
+      makeSent: true,
+      alexEmotionalTone: "neutral",
+      promptIndexes: Object.create(null)
+    };
+
+    const captured = captureEmergencyDisclosedDuringFinalQuestion(caller, tc.text);
+    const wouldWrapUp = !captured && isFinalQuestionWrapUpAnswer(tc.text);
+    const expectEmergency = Boolean(tc.expect_emergency);
+    const gotEmergency = caller.emergencyAlert === true && caller.leadType === "emergency";
+    const expectWrapUp = Boolean(tc.expect_wrap_up);
+    const expectLeadType = tc.expect_lead_type || (expectEmergency ? "emergency" : "service");
+
+    const ok =
+      captured === expectEmergency &&
+      gotEmergency === expectEmergency &&
+      wouldWrapUp === expectWrapUp &&
+      caller.leadType === expectLeadType &&
+      (!expectEmergency || (Array.isArray(caller.additionalIssues) && caller.additionalIssues.length > 0));
+
+    if (ok) {
+      passed += 1;
+      console.log(`PASS  ${tc.name}`);
+    } else {
+      console.log(`FAIL  ${tc.name}`);
+      console.log(
+        `  - captured=${captured}/${expectEmergency} emergency=${gotEmergency}/${expectEmergency} wrapUp=${wouldWrapUp}/${expectWrapUp} leadType=${caller.leadType}/${expectLeadType}`
+      );
+      console.log(`  - additionalIssues=${JSON.stringify(caller.additionalIssues)}`);
+    }
+  }
+
+  console.log(`\nPassed ${passed} of ${cases.length} final-question emergency cases.`);
+  process.exit(passed === cases.length ? 0 : 1);
+} else if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   const casesPath = path.join(__dirname, "wrap_up_cases.json");
   let cases;
   try {
