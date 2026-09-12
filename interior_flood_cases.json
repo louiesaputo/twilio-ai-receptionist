@@ -1,0 +1,93 @@
+[
+  {
+    "name": "basement_filling_is_hard_emergency",
+    "kind": "matcher",
+    "text": "My basement is filling up with water",
+    "expect_hard_emergency": true,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "emergency_basement_filling_is_not_wiped",
+    "kind": "matcher",
+    "text": "This is an emergency, the basement is filling up",
+    "expect_hard_emergency": true,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "water_in_my_basement_is_hard_emergency",
+    "kind": "matcher",
+    "text": "There's water in my basement",
+    "expect_hard_emergency": true,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "emergency_water_in_basement_is_not_wiped",
+    "kind": "matcher",
+    "text": "It's an emergency, there's water in the basement",
+    "expect_hard_emergency": true,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "house_filling_with_water_is_hard_emergency",
+    "kind": "matcher",
+    "text": "The house is filling with water",
+    "expect_hard_emergency": true,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "ice_maker_basement_filling_is_not_hard_emergency",
+    "kind": "matcher",
+    "text": "The ice maker in the basement isn't filling up",
+    "expect_hard_emergency": false,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "basement_faucet_leak_is_not_hard_emergency",
+    "kind": "matcher",
+    "text": "I have a leaking faucet in the basement bathroom",
+    "expect_hard_emergency": false,
+    "expect_generic_emergency": false
+  },
+  {
+    "name": "bare_emergency_still_generic",
+    "kind": "matcher",
+    "text": "This is an emergency",
+    "expect_hard_emergency": false,
+    "expect_generic_emergency": true
+  },
+  {
+    "name": "ask_issue_keeps_emergency_basement_filling",
+    "kind": "ask_issue",
+    "text": "It's an emergency, my basement is filling up with water",
+    "full_name": "Jamie Rivera",
+    "first_name": "Jamie",
+    "callback_number": "5551234567",
+    "expect_issue_includes": "basement",
+    "expect_emergency": true,
+    "expect_lead_type": "emergency",
+    "expect_summary_substring": "basement",
+    "expect_can_submit": true,
+    "expect_last_step_not": "ask_issue_again"
+  },
+  {
+    "name": "ask_issue_again_keeps_water_in_basement",
+    "kind": "ask_issue_again",
+    "text": "This is an emergency, there's water in my basement",
+    "full_name": "Jamie Rivera",
+    "first_name": "Jamie",
+    "callback_number": "5551234567",
+    "expect_issue_includes": "basement",
+    "expect_emergency": true,
+    "expect_lead_type": "emergency",
+    "expect_summary_substring": "basement",
+    "expect_can_submit": true,
+    "expect_last_step_not": "ask_issue_again"
+  },
+  {
+    "name": "ask_issue_again_bare_emergency_still_reasks",
+    "kind": "ask_issue_again",
+    "text": "This is an emergency",
+    "expect_issue_empty": true,
+    "expect_last_step": "ask_issue_again"
+  }
+]
