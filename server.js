@@ -1065,11 +1065,14 @@ function isGenericEmergencyIssue(text) {
   const t = normalizedText(text || "");
   if (!t) return false;
   if (!containsAny(t, ["emergency", "urgent", "right away", "as soon as possible", "immediately"])) return false;
+  // Already-named hard emergencies (including basement filling) must not be wiped.
+  if (isHardEmergency(text)) return false;
   return !containsAny(t, [
     "leak", "burst", "pipe", "faucet", "sink", "toilet", "roof", "ceiling", "water heater",
     "refrigerator", "fridge", "freezer", "dishwasher", "washer", "dryer", "oven", "stove",
     "range", "cooktop", "water main", "yard", "sewer", "sewage", "gas leak", "flood", "drain",
-    "clog", "clogged", "spigot", "remodel", "quote", "estimate", "installation"
+    "clog", "clogged", "spigot", "remodel", "quote", "estimate", "installation",
+    "basement", "cellar", "standing water", "filling up", "sump"
   ]);
 }
 
@@ -4704,12 +4707,23 @@ function isOutsideWaterLossEmergency(text) {
 
 
 
+function isInteriorFloodEmergency(text) {
+  const t = normalizedText(text || "");
+  if (!t) return false;
+  // Require "is/'s filling" so "ice maker in the basement isn't filling" does not match.
+  if (/\b(basement|cellar|crawl ?space|house|home|apartment)\s+is\s+fill(?:ing)?\b/.test(t)) return true;
+  if (/\b(basement|cellar|crawl ?space|house|home|apartment)'s\s+fill(?:ing)?\b/.test(t)) return true;
+  if (/\bfill(?:ing)?\s+(?:up\s+)?(?:the\s+)?(basement|cellar|house|home|apartment|crawl ?space)\b/.test(t)) return true;
+  if (/\b(?:water|standing water|inches of water|inch of water)\s+(?:in|in the|in my|in our)\s+(basement|cellar|crawl ?space)\b/.test(t)) return true;
+  return false;
+}
+
 function isHardEmergency(text) {
   const t = normalizedText(text);
   return containsAny(t, [
     "burst", "burst pipe", "flooding", "flooded", "sewer", "sewage", "gas leak", "no water",
     "gushing", "pouring", "water everywhere", "water coming through the ceiling", "ceiling pouring", "water is pouring"
-  ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t);
+  ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t) || isInteriorFloodEmergency(t);
 }
 
 
@@ -4776,6 +4790,10 @@ function classifyIssue(issue) {
   }
   if (containsAny(text, ["clog", "clogged", "drain"])) return { summary: "a clogged drain" };
   if (containsAny(text, ["flood", "flooding", "flooded"])) return { summary: "flooding" };
+  if (isInteriorFloodEmergency(text)) {
+    if (containsAny(text, ["basement", "cellar"])) return { summary: "water in the basement" };
+    return { summary: "interior flooding" };
+  }
   if (containsAny(text, ["burst pipe"])) return { summary: "a burst pipe" };
   if (containsAny(text, ["sewer", "sewage"])) return { summary: "a sewer backup" };
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
@@ -6631,6 +6649,7 @@ function afterIssueCaptured(caller) {
   }
 
   if (isHardEmergency(caller.issue)) {
+    caller.issueSummary = classifyIssue(caller.issue).summary;
     markEmergency(caller);
     return;
   }
@@ -9500,7 +9519,108 @@ wss.on("connection", (ws, request) => {
 
 
 
-if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
+if (process.env.BLUE_CALLER_TEST_INTERIOR_FLOOD === "1") {
+  const casesPath = path.join(__dirname, "interior_flood_cases.json");
+  let cases;
+  try {
+    cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  } catch (err) {
+    console.error("Could not load interior_flood_cases.json:", err.message);
+    process.exit(1);
+  }
+
+  function makeTestWs(sessionKey) {
+    return {
+      readyState: 1,
+      sessionKey,
+      send() {}
+    };
+  }
+
+  Promise.resolve().then(async () => {
+    let passed = 0;
+    const failures = [];
+
+    for (let i = 0; i < cases.length; i++) {
+      const tc = cases[i];
+      const name = tc.name || `case_${i + 1}`;
+      const caseFailures = [];
+      const kind = tc.kind || "matcher";
+
+      if (kind === "ask_issue" || kind === "ask_issue_again") {
+        const sessionKey = `interior-flood-${i + 1}`;
+        const ws = makeTestWs(sessionKey);
+        const caller = getOrCreateCaller(sessionKey);
+        caller.lastStep = kind;
+        caller.issue = "";
+        caller.issueSummary = "";
+        caller.fullName = tc.full_name || "";
+        caller.firstName = tc.first_name || getFirstName(caller.fullName);
+        caller.callbackNumber = tc.callback_number || "";
+        caller.phone = tc.phone || caller.callbackNumber || "";
+        await handlePrompt(ws, caller, tc.text || "");
+        if (tc.expect_issue_includes) {
+          const issueText = String(caller.issue || "").toLowerCase();
+          if (!issueText.includes(String(tc.expect_issue_includes).toLowerCase())) {
+            caseFailures.push(`expected issue to include ${JSON.stringify(tc.expect_issue_includes)} but got ${JSON.stringify(caller.issue)}`);
+          }
+        }
+        if (tc.expect_issue_empty) {
+          if (String(caller.issue || "").trim()) {
+            caseFailures.push(`expected issue to stay empty but got ${JSON.stringify(caller.issue)}`);
+          }
+        }
+        if (tc.expect_emergency !== undefined && Boolean(caller.emergencyAlert) !== Boolean(tc.expect_emergency)) {
+          caseFailures.push(`expected emergencyAlert=${Boolean(tc.expect_emergency)} but got ${Boolean(caller.emergencyAlert)}`);
+        }
+        if (tc.expect_lead_type && caller.leadType !== tc.expect_lead_type) {
+          caseFailures.push(`expected leadType=${tc.expect_lead_type} but got ${caller.leadType}`);
+        }
+        if (tc.expect_summary_substring) {
+          const summaryText = String(caller.issueSummary || "").toLowerCase();
+          if (!summaryText.includes(String(tc.expect_summary_substring).toLowerCase())) {
+            caseFailures.push(`expected issueSummary containing ${JSON.stringify(tc.expect_summary_substring)} but got ${JSON.stringify(caller.issueSummary)}`);
+          }
+        }
+        if (tc.expect_can_submit && !shouldSendToMake(caller)) {
+          caseFailures.push("expected shouldSendToMake=true after interior flood capture");
+        }
+        if (tc.expect_last_step && caller.lastStep !== tc.expect_last_step) {
+          caseFailures.push(`expected lastStep=${tc.expect_last_step} but got ${caller.lastStep}`);
+        }
+        if (tc.expect_last_step_not && caller.lastStep === tc.expect_last_step_not) {
+          caseFailures.push(`expected lastStep not to be ${tc.expect_last_step_not}`);
+        }
+      } else {
+        const gotHard = isHardEmergency(tc.text);
+        if (gotHard !== Boolean(tc.expect_hard_emergency)) {
+          caseFailures.push(`expected isHardEmergency=${Boolean(tc.expect_hard_emergency)} but got ${gotHard}`);
+        }
+        if (tc.expect_generic_emergency !== undefined) {
+          const gotGeneric = isGenericEmergencyIssue(tc.text);
+          if (gotGeneric !== Boolean(tc.expect_generic_emergency)) {
+            caseFailures.push(`expected isGenericEmergencyIssue=${Boolean(tc.expect_generic_emergency)} but got ${gotGeneric}`);
+          }
+        }
+      }
+
+      if (caseFailures.length) {
+        failures.push({ name, caseFailures });
+        console.log(`FAIL  ${name}`);
+        for (const msg of caseFailures) console.log(`  - ${msg}`);
+      } else {
+        passed += 1;
+        console.log(`PASS  ${name}`);
+      }
+    }
+
+    console.log(`\nPassed ${passed} of ${cases.length} interior-flood cases.`);
+    process.exit(failures.length === 0 ? 0 : 1);
+  }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+} else if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   const casesPath = path.join(__dirname, "wrap_up_cases.json");
   let cases;
   try {
@@ -9527,6 +9647,8 @@ if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   process.exit(passed === cases.length ? 0 : 1);
 }
 
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
-});
+if (process.env.BLUE_CALLER_TEST_INTERIOR_FLOOD !== "1" && process.env.BLUE_CALLER_TEST_WRAP_UP !== "1") {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
+  });
+}
