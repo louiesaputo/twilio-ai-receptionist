@@ -4704,12 +4704,23 @@ function isOutsideWaterLossEmergency(text) {
 
 
 
+/** Whole-house outage — not “no water heater/tank/softener/filter”. */
+function isNoWaterServiceOutage(text) {
+  const t = normalizedText(text);
+  if (!t || !/\bno\s+water\b/.test(t)) return false;
+  // Missing equipment is an install/service request, not a water-service outage.
+  if (/\bno\s+water[-\s]?(heater|heaters|tank|tanks|softener|softeners|filter|filters|filtration)\b/.test(t)) {
+    return false;
+  }
+  return true;
+}
+
 function isHardEmergency(text) {
   const t = normalizedText(text);
   return containsAny(t, [
-    "burst", "burst pipe", "flooding", "flooded", "sewer", "sewage", "gas leak", "no water",
+    "burst", "burst pipe", "flooding", "flooded", "sewer", "sewage", "gas leak",
     "gushing", "pouring", "water everywhere", "water coming through the ceiling", "ceiling pouring", "water is pouring"
-  ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t);
+  ]) || isNoWaterServiceOutage(t) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t);
 }
 
 
@@ -4779,7 +4790,7 @@ function classifyIssue(issue) {
   if (containsAny(text, ["burst pipe"])) return { summary: "a burst pipe" };
   if (containsAny(text, ["sewer", "sewage"])) return { summary: "a sewer backup" };
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
-  if (containsAny(text, ["no water"])) return { summary: "no water service" };
+  if (isNoWaterServiceOutage(text)) return { summary: "no water service" };
   if (containsAny(text, ["leak", "leaking", "drip", "dripping"])) return { summary: "a water leak" };
   return { summary: buildUnknownIssueSummary(issue) };
 }
@@ -9500,6 +9511,45 @@ wss.on("connection", (ws, request) => {
 
 
 
+if (process.env.BLUE_CALLER_TEST_NO_WATER_HEATER === "1") {
+  const casesPath = path.join(__dirname, "no_water_heater_cases.json");
+  let cases;
+  try {
+    cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  } catch (err) {
+    console.error("Could not load no_water_heater_cases.json:", err.message);
+    process.exit(1);
+  }
+
+  let passed = 0;
+  for (const tc of cases) {
+    const caller = { issue: tc.text };
+    afterIssueCaptured(caller);
+    const gotHard = isHardEmergency(tc.text);
+    const failures = [];
+    if (gotHard !== Boolean(tc.expect_hard_emergency)) {
+      failures.push(`expected isHardEmergency=${Boolean(tc.expect_hard_emergency)} but got ${gotHard}`);
+    }
+    if (tc.expect_lead_type && caller.leadType !== tc.expect_lead_type) {
+      failures.push(`expected leadType=${tc.expect_lead_type} but got ${caller.leadType}`);
+    }
+    if (typeof tc.expect_emergency === "boolean" && Boolean(caller.emergencyAlert) !== tc.expect_emergency) {
+      failures.push(`expected emergencyAlert=${tc.expect_emergency} but got ${Boolean(caller.emergencyAlert)}`);
+    }
+    if (failures.length === 0) {
+      passed += 1;
+      console.log(`PASS  ${tc.name}`);
+    } else {
+      console.log(`FAIL  ${tc.name}`);
+      for (const failure of failures) console.log(`  - ${failure}`);
+      console.log(`  - text: ${JSON.stringify(tc.text)}`);
+    }
+  }
+
+  console.log(`\nPassed ${passed} of ${cases.length} no-water-heater cases.`);
+  process.exit(passed === cases.length ? 0 : 1);
+}
+
 if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   const casesPath = path.join(__dirname, "wrap_up_cases.json");
   let cases;
@@ -9527,6 +9577,8 @@ if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   process.exit(passed === cases.length ? 0 : 1);
 }
 
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
-});
+if (process.env.BLUE_CALLER_TEST_NO_WATER_HEATER !== "1" && process.env.BLUE_CALLER_TEST_WRAP_UP !== "1") {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
+  });
+}
