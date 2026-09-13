@@ -1,0 +1,72 @@
+[
+  {
+    "name": "no_water_heater_is_service",
+    "text": "We have no water heater",
+    "expect_hard_emergency": false,
+    "expect_lead_type": "service",
+    "expect_emergency": false
+  },
+  {
+    "name": "no_water_heater_in_the_house_is_service",
+    "text": "There's no water heater in the house",
+    "expect_hard_emergency": false,
+    "expect_lead_type": "service",
+    "expect_emergency": false
+  },
+  {
+    "name": "rental_has_no_water_heater_is_service",
+    "text": "The rental has no water heater",
+    "expect_hard_emergency": false,
+    "expect_lead_type": "service",
+    "expect_emergency": false
+  },
+  {
+    "name": "no_water_tank_is_service",
+    "text": "We have no water tank",
+    "expect_hard_emergency": false,
+    "expect_lead_type": "service",
+    "expect_emergency": false
+  },
+  {
+    "name": "no_water_softener_is_service",
+    "text": "There's no water softener",
+    "expect_hard_emergency": false,
+    "expect_lead_type": "service",
+    "expect_emergency": false
+  },
+  {
+    "name": "hyphenated_no_water_heater_is_service",
+    "text": "I have no water-heater",
+    "expect_hard_emergency": false,
+    "expect_lead_type": "service",
+    "expect_emergency": false
+  },
+  {
+    "name": "bare_no_water_is_emergency",
+    "text": "I have no water",
+    "expect_hard_emergency": true,
+    "expect_lead_type": "emergency",
+    "expect_emergency": true
+  },
+  {
+    "name": "house_has_no_water_is_emergency",
+    "text": "we have no water in the house",
+    "expect_hard_emergency": true,
+    "expect_lead_type": "emergency",
+    "expect_emergency": true
+  },
+  {
+    "name": "no_water_anywhere_is_emergency",
+    "text": "There's no water anywhere",
+    "expect_hard_emergency": true,
+    "expect_lead_type": "emergency",
+    "expect_emergency": true
+  },
+  {
+    "name": "burst_pipe_with_no_water_heater_still_emergency",
+    "text": "We have a burst pipe and no water heater",
+    "expect_hard_emergency": true,
+    "expect_lead_type": "emergency",
+    "expect_emergency": true
+  }
+]
