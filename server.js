@@ -1674,10 +1674,39 @@ function buildMissingNameAfterIssuePrompt(caller) {
 
 
 
+/** Remainder after a leading no/nope that still means "I'm done" (thanks / that's it / we're good). */
+function isFinalQuestionWrapUpRemainder(rest) {
+  const it = String(rest || "").trim();
+  if (!it) return true;
+  if (/^(thanks|thank you|thx)$/i.test(it)) return true;
+  const core = it
+    .replace(/^(thanks|thank you|thx)\s+/i, "")
+    .replace(/\s+(thanks|thank you|thx)$/i, "")
+    .trim();
+  if (!core) return true;
+  return /^(that s it|thats it|that is it|that s all|thats all|that is all|nothing else|nothing more|nothing to add|nothing|that s everything|thats everything|that ll do(?: it)?|thatll do(?: it)?|that will do(?: it)?|all set|we re all set|were all set|i m all set|im all set|we re good|were good|i m good|im good|all good|we re all good|that s fine|thats fine|that is fine|that s okay|thats okay|that is okay|that s ok|thats ok|i think that s it|i think thats it|i think that is it)$/i.test(core);
+}
+
+/**
+ * `isNegative` treats any utterance starting with "no" as a decline.
+ * At final "anything else?", callers often say "No, the gate code is 1234" —
+ * that must be captured, not treated as a hang-up.
+ */
+function leadingNoHasNonWrapUpAddition(it) {
+  if (!/^(nope|nah|naw|negative|no)\b/.test(it)) return false;
+  const afterNo = it.replace(/^(nope|nah|naw|negative|no)\b\s*/, "").trim();
+  if (!afterNo) return false;
+  const afterWait = afterNo.replace(/^(wait|hold on|hold on a second|actually|but)\s+/, "").trim();
+  if (!afterWait) return true;
+  return !isFinalQuestionWrapUpRemainder(afterWait);
+}
+
 /** True when caller is done with the anything-else pass (affirmative goodbye, no, nope, etc.). */
 function isFinalQuestionWrapUpAnswer(text) {
   const it = stripLeadingBriefFillerForFinalWrapUp(normalizeIntentText(text || ""));
   if (!it) return false;
+
+  if (leadingNoHasNonWrapUpAddition(it)) return false;
 
   if (isAffirmative(it) || isNegative(it) || isEndCallPhrase(it)) return true;
 
