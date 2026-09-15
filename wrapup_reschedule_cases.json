@@ -1,0 +1,82 @@
+[
+  {
+    "name": "change_it_to_friday_is_reschedule",
+    "text": "Change it to Friday at 9",
+    "expect_reschedule": true
+  },
+  {
+    "name": "reschedule_to_thursday",
+    "text": "I need to reschedule to Thursday",
+    "expect_reschedule": true
+  },
+  {
+    "name": "change_the_appointment_to_friday",
+    "text": "Can we change the appointment to Friday at 10?",
+    "expect_reschedule": true
+  },
+  {
+    "name": "id_like_to_change_appointment",
+    "text": "I'd like to change my appointment to Friday at 9 AM",
+    "expect_reschedule": true
+  },
+  {
+    "name": "different_time_is_reschedule",
+    "text": "Can we do a different time?",
+    "expect_reschedule": true
+  },
+  {
+    "name": "gate_code_is_not_reschedule",
+    "text": "The gate code is 1234",
+    "expect_reschedule": false
+  },
+  {
+    "name": "extra_leak_is_not_reschedule",
+    "text": "I also have a leaking toilet",
+    "expect_reschedule": false
+  },
+  {
+    "name": "dont_change_the_time",
+    "text": "Don't change the time",
+    "expect_reschedule": false
+  },
+  {
+    "name": "phone_number_change_is_not_reschedule",
+    "text": "I need to change my callback number",
+    "expect_reschedule": false
+  },
+  {
+    "name": "wrapup_change_it_to_not_phone_hijack",
+    "kind": "final_question",
+    "text": "Change it to Friday at 9",
+    "expect_last_step": "ask_appointment_day",
+    "expect_last_step_not": "capture_updated_callback_number",
+    "expect_calendar_slot_confirmed": false,
+    "expect_booking_sent": false,
+    "expect_make_sent": false,
+    "expect_appointment_cleared": true
+  },
+  {
+    "name": "wrapup_reschedule_does_not_keep_old_slot",
+    "kind": "final_question",
+    "text": "Can we change the appointment to Friday at 10?",
+    "expect_last_step": "ask_appointment_day",
+    "expect_calendar_slot_confirmed": false,
+    "expect_booking_sent": false,
+    "expect_appointment_cleared": true
+  },
+  {
+    "name": "wrapup_gate_code_stays_on_final_question",
+    "kind": "final_question",
+    "text": "Yes can you add that the gate code is 1234",
+    "expect_last_step": "final_question",
+    "expect_calendar_slot_confirmed": true,
+    "expect_additional_issue_includes": "gate code is 1234"
+  },
+  {
+    "name": "wrapup_nope_still_closes",
+    "kind": "final_question",
+    "text": "nope, that's it",
+    "expect_last_step": "final_question",
+    "expect_calendar_slot_confirmed": true
+  }
+]
