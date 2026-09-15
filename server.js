@@ -5231,6 +5231,54 @@ function hasExplicitSchedulingRequest(text) {
   return Boolean(extractDatePart(text) || extractSpecificTimeText(text) || detectTimePreference(text));
 }
 
+function hasCallbackSlotSignal(text) {
+  return Boolean(
+    extractDatePart(text) ||
+    extractSpecificTimeText(text) ||
+    isSpecificTime(text) ||
+    isFirstAvailableRequest(text)
+  );
+}
+
+/** True when the caller is asking to move an already-accepted callback, not leave a tech note. */
+function looksLikeCallbackRescheduleIntent(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (/\b(don t|dont|do not)\s+(change|reschedule|move|switch|update)\b/.test(t)) return false;
+  if (isCallbackNumberChangeIntent(text)) return false;
+
+  const slotSignal = hasCallbackSlotSignal(text);
+  if (
+    containsAny(t, [
+      "reschedule", "re schedule",
+      "change the appointment", "change my appointment", "change that appointment",
+      "change the callback", "change my callback",
+      "change the time", "change my time", "change the day", "change my day",
+      "change the date", "change my date",
+      "different day", "different date", "different time",
+      "another day", "another date", "another time"
+    ])
+  ) {
+    return true;
+  }
+
+  if (/\b(change|switch|move|update)\s+(it|that|this)\s+to\b/.test(t) && slotSignal) return true;
+  if (/\b(can we|could we|can i|could i)\s+(do|make it|come|schedule|book)\b/.test(t) && slotSignal) return true;
+  if (containsAny(t, ["instead", "works better", "better for me", "better for us"]) && slotSignal) return true;
+  return false;
+}
+
+function clearConfirmedCallbackBooking(caller) {
+  if (!caller) return;
+  caller.calendarSlotConfirmed = false;
+  caller.bookingSent = false;
+  caller.bookingSending = false;
+  caller.makeSent = false;
+  caller.appointmentDate = "";
+  caller.appointmentTime = "";
+  if (caller.status === "scheduled") caller.status = "new_lead";
+}
+
 
 
 
@@ -7109,6 +7157,13 @@ async function handlePrompt(ws, caller, speech) {
 
 
 
+
+  if (caller.lastStep === "final_question" && looksLikeCallbackRescheduleIntent(text)) {
+    clearConfirmedCallbackBooking(caller);
+    caller.lastStep = "ask_appointment_day";
+    sendText(ws, "No problem. What day works better for a callback?");
+    return;
+  }
 
   const postIntakeSteps = new Set([
     "ask_notes",
@@ -9500,7 +9555,117 @@ wss.on("connection", (ws, request) => {
 
 
 
-if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
+if (process.env.BLUE_CALLER_TEST_WRAPUP_RESCHEDULE === "1") {
+  const casesPath = path.join(__dirname, "wrapup_reschedule_cases.json");
+  let cases;
+  try {
+    cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  } catch (err) {
+    console.error("Could not load wrapup_reschedule_cases.json:", err.message);
+    process.exit(1);
+  }
+
+  function makeTestWs(sessionKey) {
+    return {
+      readyState: 1,
+      sessionKey,
+      send() {},
+      close() {}
+    };
+  }
+
+  function seedScheduledWrapUpCaller(sessionKey) {
+    const caller = getOrCreateCaller(sessionKey);
+    caller.lastStep = "final_question";
+    caller.leadType = "service";
+    caller.fullName = "Jamie Rivera";
+    caller.firstName = "Jamie";
+    caller.callbackNumber = "8605550100";
+    caller.issue = "leaking sink";
+    caller.issueSummary = "a leaking sink";
+    caller.appointmentDate = "Thursday, May 14";
+    caller.appointmentTime = "2:00 PM";
+    caller.status = "scheduled";
+    caller.calendarSlotConfirmed = true;
+    caller.bookingSent = true;
+    caller.makeSent = true;
+    caller.notes = "";
+    caller.additionalIssues = [];
+    return caller;
+  }
+
+  Promise.resolve().then(async () => {
+    let passed = 0;
+    const failures = [];
+
+    for (let i = 0; i < cases.length; i++) {
+      const tc = cases[i];
+      const name = tc.name || `case_${i + 1}`;
+      const caseFailures = [];
+      const kind = tc.kind || "matcher";
+
+      if (kind === "final_question") {
+        const sessionKey = `wrapup-reschedule-${i + 1}`;
+        const ws = makeTestWs(sessionKey);
+        const caller = seedScheduledWrapUpCaller(sessionKey);
+        await handlePrompt(ws, caller, tc.text || "");
+        if (tc.expect_last_step && caller.lastStep !== tc.expect_last_step) {
+          caseFailures.push(`expected lastStep=${tc.expect_last_step} but got ${caller.lastStep}`);
+        }
+        if (tc.expect_last_step_not && caller.lastStep === tc.expect_last_step_not) {
+          caseFailures.push(`expected lastStep not to be ${tc.expect_last_step_not}`);
+        }
+        if (Object.prototype.hasOwnProperty.call(tc, "expect_calendar_slot_confirmed") &&
+            Boolean(caller.calendarSlotConfirmed) !== Boolean(tc.expect_calendar_slot_confirmed)) {
+          caseFailures.push(`expected calendarSlotConfirmed=${tc.expect_calendar_slot_confirmed} but got ${caller.calendarSlotConfirmed}`);
+        }
+        if (Object.prototype.hasOwnProperty.call(tc, "expect_booking_sent") &&
+            Boolean(caller.bookingSent) !== Boolean(tc.expect_booking_sent)) {
+          caseFailures.push(`expected bookingSent=${tc.expect_booking_sent} but got ${caller.bookingSent}`);
+        }
+        if (Object.prototype.hasOwnProperty.call(tc, "expect_make_sent") &&
+            Boolean(caller.makeSent) !== Boolean(tc.expect_make_sent)) {
+          caseFailures.push(`expected makeSent=${tc.expect_make_sent} but got ${caller.makeSent}`);
+        }
+        if (tc.expect_appointment_cleared && (caller.appointmentDate || caller.appointmentTime)) {
+          caseFailures.push(`expected appointment slot to be cleared but got ${JSON.stringify({
+            appointmentDate: caller.appointmentDate,
+            appointmentTime: caller.appointmentTime
+          })}`);
+        }
+        if (tc.expect_additional_issue_includes) {
+          const joined = Array.isArray(caller.additionalIssues)
+            ? caller.additionalIssues.join(" | ").toLowerCase()
+            : "";
+          if (!joined.includes(String(tc.expect_additional_issue_includes).toLowerCase())) {
+            caseFailures.push(`expected additionalIssues to include ${JSON.stringify(tc.expect_additional_issue_includes)} but got ${JSON.stringify(caller.additionalIssues)}`);
+          }
+        }
+        delete callerStore[sessionKey];
+      } else {
+        const got = looksLikeCallbackRescheduleIntent(tc.text);
+        if (got !== Boolean(tc.expect_reschedule)) {
+          caseFailures.push(`expected reschedule=${Boolean(tc.expect_reschedule)} but got ${got}`);
+        }
+      }
+
+      if (caseFailures.length) {
+        failures.push(`${name}: ${caseFailures.join("; ")}`);
+        console.log(`FAIL  ${name}`);
+        for (const f of caseFailures) console.log(`  - ${f}`);
+      } else {
+        passed += 1;
+        console.log(`PASS  ${name}`);
+      }
+    }
+
+    console.log(`\nPassed ${passed} of ${cases.length} wrap-up reschedule cases.`);
+    process.exit(failures.length ? 1 : 0);
+  }).catch((err) => {
+    console.error("wrap-up reschedule tests failed:", err);
+    process.exit(1);
+  });
+} else if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   const casesPath = path.join(__dirname, "wrap_up_cases.json");
   let cases;
   try {
@@ -9525,8 +9690,8 @@ if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
 
   console.log(`\nPassed ${passed} of ${cases.length} wrap-up cases.`);
   process.exit(passed === cases.length ? 0 : 1);
+} else {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
+  });
 }
-
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`Server listening on ${BIND_HOST}:${PORT} (${APP_VERSION})`);
-});
