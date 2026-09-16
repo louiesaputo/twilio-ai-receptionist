@@ -1,0 +1,108 @@
+[
+  {
+    "name": "dont_have_any_water",
+    "text": "We don't have any water at the house",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "dont_have_any_water_asr",
+    "text": "we dont have any water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "dont_have_water",
+    "text": "We don't have water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "lost_water",
+    "text": "We've lost water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "lost_our_water",
+    "text": "we have lost our water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "out_of_water",
+    "text": "We're out of water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "without_water",
+    "text": "We're without water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "no_running_water",
+    "text": "We have no running water",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "water_is_out",
+    "text": "The water is out",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "water_is_gone",
+    "text": "Our water is gone",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "existing_no_water_still_emergency",
+    "text": "we have no water in the house",
+    "expect_hard_emergency": true,
+    "expect_summary_substring": "no water"
+  },
+  {
+    "name": "dont_have_a_water_heater",
+    "text": "We don't have a water heater",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "dont_have_any_water_heater",
+    "text": "We don't have any water heater",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "lost_water_heater",
+    "text": "We've lost the water heater",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "out_of_water_softener_salt",
+    "text": "We're out of water softener salt",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "no_hot_water",
+    "text": "We have no hot water",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "dont_have_any_hot_water",
+    "text": "We don't have any hot water",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "lost_water_pressure",
+    "text": "We've lost water pressure",
+    "expect_hard_emergency": false
+  },
+  {
+    "name": "standard_drip_not_outage",
+    "text": "My kitchen faucet is dripping",
+    "expect_hard_emergency": false
+  }
+]
