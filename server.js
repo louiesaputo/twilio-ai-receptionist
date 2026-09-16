@@ -4704,12 +4704,39 @@ function isOutsideWaterLossEmergency(text) {
 
 
 
+/** Equipment-absence / hot-water / pressure phrasing is not a whole-house outage. */
+function isNonOutageWaterEquipmentPhrase(text) {
+  const t = normalizedText(text);
+  if (!t) return false;
+  return (
+    /\bwater[-\s]?(heater|heaters|tank|tanks|softener|softeners|filter|filters|filtration|pressure)\b/.test(t) ||
+    /\bhot\s+water\b/.test(t)
+  );
+}
+
+/**
+ * Whole-house outage phrasing that does not contain the substring "no water"
+ * ("we don't have any water", "we've lost water", "no running water").
+ */
+function isWholeHouseWaterOutage(text) {
+  const t = normalizedText(text);
+  if (!t) return false;
+  if (isNonOutageWaterEquipmentPhrase(t)) return false;
+  return (
+    /\bno\s+running\s+water\b/.test(t) ||
+    /\b(don'?t|dont|do not)\s+have\s+(any\s+)?(running\s+)?water\b/.test(t) ||
+    /\b(we'?ve|weve|i'?ve|ive|we have|i have|we|i)\s+lost\s+(our\s+|the\s+|all\s+(of\s+|the\s+|our\s+)?)?(running\s+)?water\b/.test(t) ||
+    /\b(out of|without)\s+(any\s+)?(running\s+)?water\b/.test(t) ||
+    /\b(the\s+|our\s+)?water\s+is\s+(out|off|gone)\b/.test(t)
+  );
+}
+
 function isHardEmergency(text) {
   const t = normalizedText(text);
   return containsAny(t, [
     "burst", "burst pipe", "flooding", "flooded", "sewer", "sewage", "gas leak", "no water",
     "gushing", "pouring", "water everywhere", "water coming through the ceiling", "ceiling pouring", "water is pouring"
-  ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t);
+  ]) || isMainLineEmergencyCandidate(t) || isOutsideWaterLossEmergency(t) || isWholeHouseWaterOutage(t);
 }
 
 
@@ -4779,7 +4806,7 @@ function classifyIssue(issue) {
   if (containsAny(text, ["burst pipe"])) return { summary: "a burst pipe" };
   if (containsAny(text, ["sewer", "sewage"])) return { summary: "a sewer backup" };
   if (containsAny(text, ["gas leak"])) return { summary: "a gas leak" };
-  if (containsAny(text, ["no water"])) return { summary: "no water service" };
+  if (containsAny(text, ["no water"]) || isWholeHouseWaterOutage(text)) return { summary: "no water service" };
   if (containsAny(text, ["leak", "leaking", "drip", "dripping"])) return { summary: "a water leak" };
   return { summary: buildUnknownIssueSummary(issue) };
 }
@@ -6631,6 +6658,7 @@ function afterIssueCaptured(caller) {
   }
 
   if (isHardEmergency(caller.issue)) {
+    caller.issueSummary = classifyIssue(caller.issue).summary;
     markEmergency(caller);
     return;
   }
@@ -9524,6 +9552,76 @@ if (process.env.BLUE_CALLER_TEST_WRAP_UP === "1") {
   }
 
   console.log(`\nPassed ${passed} of ${cases.length} wrap-up cases.`);
+  process.exit(passed === cases.length ? 0 : 1);
+}
+
+if (process.env.BLUE_CALLER_TEST_WATER_OUTAGE === "1") {
+  const casesPath = path.join(__dirname, "water_outage_cases.json");
+  let cases;
+  try {
+    cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  } catch (err) {
+    console.error("Could not load water_outage_cases.json:", err.message);
+    process.exit(1);
+  }
+
+  let passed = 0;
+  for (const tc of cases) {
+    const expectHard = Boolean(tc.expect_hard_emergency);
+    const gotHard = isHardEmergency(tc.text);
+    const summary = String(classifyIssue(tc.text).summary || "").toLowerCase();
+    const expectSummaryNeedle = String(tc.expect_summary_substring || "").toLowerCase();
+    const summaryOk = expectHard
+      ? summary.includes(expectSummaryNeedle || "no water")
+      : !expectSummaryNeedle || !summary.includes(expectSummaryNeedle);
+
+    const caller = {
+      issue: tc.text,
+      leadType: "service",
+      emergencyAlert: false,
+      urgency: "normal",
+      status: "new_lead",
+      issueSummary: "",
+      projectType: "",
+      issueIsCapabilityQuestion: false,
+      fullName: "Jamie Rivera",
+      firstName: "Jamie",
+      callbackNumber: "2035550100",
+      phone: "2035550100"
+    };
+    afterIssueCaptured(caller);
+    const leadOk = expectHard
+      ? caller.leadType === "emergency" && caller.emergencyAlert === true
+      : caller.leadType !== "emergency" && caller.emergencyAlert !== true;
+    const submitOk = expectHard ? shouldSendToMake(caller) === true : true;
+    const routingSummaryOk = expectHard
+      ? String(caller.issueSummary || "").toLowerCase().includes(expectSummaryNeedle || "no water")
+      : true;
+
+    if (gotHard === expectHard && summaryOk && leadOk && submitOk && routingSummaryOk) {
+      passed += 1;
+      console.log(`PASS  ${tc.name}`);
+    } else {
+      console.log(`FAIL  ${tc.name}`);
+      if (gotHard !== expectHard) {
+        console.log(`  - expected isHardEmergency=${expectHard} but got ${gotHard} for text: ${JSON.stringify(tc.text)}`);
+      }
+      if (!summaryOk) {
+        console.log(`  - expected classifyIssue summary ${expectHard ? "containing" : "not containing"} ${JSON.stringify(expectSummaryNeedle || "no water")} but got ${JSON.stringify(classifyIssue(tc.text).summary)}`);
+      }
+      if (!leadOk) {
+        console.log(`  - expected leadType/emergencyAlert for hard=${expectHard} but got leadType=${caller.leadType} emergencyAlert=${caller.emergencyAlert}`);
+      }
+      if (!routingSummaryOk) {
+        console.log(`  - expected afterIssueCaptured issueSummary containing ${JSON.stringify(expectSummaryNeedle || "no water")} but got ${JSON.stringify(caller.issueSummary)}`);
+      }
+      if (!submitOk) {
+        console.log("  - expected shouldSendToMake=true after name and callback were captured");
+      }
+    }
+  }
+
+  console.log(`\nPassed ${passed} of ${cases.length} water-outage cases.`);
   process.exit(passed === cases.length ? 0 : 1);
 }
 
